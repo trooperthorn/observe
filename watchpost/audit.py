@@ -23,6 +23,7 @@ partway or was refused after it started.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from .store import Store
@@ -34,9 +35,21 @@ _SECRET_WORDS = ("password", "passwd", "secret", "token", "csrf", "cookie", "aut
                  "bearer", "api_key", "apikey", "ingest_key", "hash")
 
 
+# An ingest key ("wpi_<prefix>_<secret>", even a truncated one) or any long run of URL-safe
+# characters, which is what a session token or a key secret looks like.
+_SECRET_SHAPES = re.compile(r"wpi_[A-Za-z0-9_-]*|[A-Za-z0-9_-]{40,}")
+
+
+def redact_secrets(text: str) -> str:
+    """Replace anything that looks like an ingest key or session token with REDACTED."""
+    return _SECRET_SHAPES.sub(REDACTED, text)
+
+
 def sanitize_audit_path(path: str) -> str:
-    """Control characters become "?" and the result is capped at AUDIT_PATH_MAX."""
-    cleaned = "".join("?" if (ord(c) < 32 or 0x7F <= ord(c) <= 0x9F) else c for c in str(path))
+    """Secret-shaped text is redacted, control characters become "?", and the result is capped
+    at AUDIT_PATH_MAX. Redaction runs before the cap so a secret cannot survive by being cut."""
+    cleaned = "".join("?" if (ord(c) < 32 or 0x7F <= ord(c) <= 0x9F)
+                      else c for c in redact_secrets(str(path)))
     return cleaned[:AUDIT_PATH_MAX]
 
 
@@ -44,7 +57,10 @@ def _redact(detail: dict[str, Any] | None) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in (detail or {}).items():
         name = str(key).lower()
-        out[str(key)] = REDACTED if any(w in name for w in _SECRET_WORDS) else value
+        if any(w in name for w in _SECRET_WORDS):
+            out[str(key)] = REDACTED
+        else:
+            out[str(key)] = redact_secrets(value) if isinstance(value, str) else value
     return out
 
 

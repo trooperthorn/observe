@@ -175,7 +175,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             return JSONResponse({"detail": "body too large"}, status_code=413)
         try:
             body = await request.json()
-        except ValueError:
+        except (ValueError, RecursionError):
             body = None
         name = body.get("username") if isinstance(body, dict) else None
         pw = body.get("password") if isinstance(body, dict) else None
@@ -418,7 +418,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                 out.append(hostview.summarize(view))
         return {"hosts": out}
 
-    @app.get("/api/hosts/{host}", include_in_schema=False)
+    @app.get("/api/hosts/{host:path}", include_in_schema=False)
     async def host_detail(host: str,
                           _: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
         rows = {r["host"]: r for r in await store.host_rows()}

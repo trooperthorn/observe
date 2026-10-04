@@ -348,8 +348,8 @@ updated as each phase lands.
 The SQLite store is now versioned. On startup watchpost applies any missing
 additive migrations, keeps all existing history, and refuses to open a
 database written by a newer version. `server.retention_days` governs poll
-results and host samples, and the new `server.audit_retention_days` (default
-365) governs the audit log independently. The tables for hosts, keys,
+results and host samples (minimum 1), and the new `server.audit_retention_days` (default
+365, minimum 1) governs the audit log independently. The tables for hosts, keys,
 users, sessions and audit are filled by the ingest and login routes.
 
 The hostwatch wire schema models exist in `watchpost/ingest/schema.py`, with
@@ -361,7 +361,8 @@ It takes `Authorization: Bearer <ingest key>`, rejects a body over 1 MiB, and
 stores samples, source status and events only when the key is valid and bound
 to the host named in the body. The answers are 401 for a missing, wrong or
 revoked key, 403 for a valid key bound to another host, 413 for an oversized
-body, 422 for a body that fails the schema, and 429 over the per-peer rate
+body, 400 for a body nested deeper than 32 levels (checked before parsing, and
+recorded as a denial), 422 for a body that fails the schema, and 429 over the per-peer rate
 limit (`server.ingest_rate_per_minute`, default 120). A batch that repeats a
 `batch_id` is acknowledged with `"duplicate": true` and stored once, so an
 agent can replay its outbox safely. Denials are written to the audit table at
@@ -401,7 +402,7 @@ state and group lines.
 
 Each pushed host also has a hardware page at `/host?name=HOST`, linked from its
 row on the dashboard. `GET /api/hosts` lists every host that has pushed (and
-every listed `pushed_host` monitor that never has), and `GET /api/hosts/HOST`
+every listed `pushed_host` monitor that never has), and `GET /api/hosts/HOST` (a host name may contain slashes; the route takes the rest of the path)
 returns its CPU, memory, power, temperatures, fans with the fan controller
 state, RAID, ZFS pools, disks, UPS, recent alerts and events, boot state and
 sources. Every section and every reading is Good, Warning or Critical. The

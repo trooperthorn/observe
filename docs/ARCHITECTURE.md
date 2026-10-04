@@ -40,7 +40,7 @@ endpoint.
 The endpoint is `POST /internal/v1/ingest`, the path unmodified hostwatch agents
 use, with `POST /api/ingest` kept as an alias, in `watchpost/ingest/api.py`. It checks, in
 this order: a per-peer rate limit (429), a valid unrevoked bearer key (401,
-before the body is read), the body size cap (413), the key's bound host against
+before the body is read), the body size cap (413), a JSON nesting limit of 32 checked before parsing (400), the key's bound host against
 the host in the body (403), and the schema (422). hostwatch agents dead-letter
 400 and 422 and keep retrying every other failure, so 422 is reserved for a
 batch that is malformed or missing required fields, and the reason is logged. Nothing is stored from
@@ -83,6 +83,7 @@ Version 3 adds `ingest_keys`, `users`, `sessions` and `audit`, and version 4 add
 `ingest_batches`. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
 
+Both retention settings must be at least 1 day; config validation rejects 0 and negative values.
 Retention is applied by `Store.prune`. Poll results and host samples are
 dropped after `server.retention_days`. Transitions and host events are kept for
 at least a year. The audit log has its own setting,
@@ -153,7 +154,7 @@ summary adapted from hostwatch's `integrations/summary.py` is the host views sec
 
 Each pushed host has a page at `/host?name=HOST`, linked from the dashboard
 row of its `pushed_host` monitor. It is served by two routes, `GET /api/hosts`
-(one summary row per host) and `GET /api/hosts/{host}` (the full document), both
+(one summary row per host) and `GET /api/hosts/{host:path}` (host names may contain slashes; the full document), both
 built by `watchpost/hostview.py` from the newest sample per series in the store.
 The sections are CPU, memory, power, temperatures, fans with the fan controller
 state, RAID, ZFS pools, disks, UPS, alerts and events, plus the boot state and
@@ -212,10 +213,11 @@ or deletes audit rows, and secrets are never written to it. Admins can read
 it from the admin screen.
 
 Built in `watchpost/audit.py`. Every writer calls `audit.record`, which
-sanitizes the path (control characters become `?`, 256 characters at most,
+sanitizes the path (anything shaped like an ingest key or session token is replaced with `[redacted]`, control
+characters become `?`, 256 characters at most,
 adapted from hostwatch's `sanitize_audit_path`) and replaces the value of any
 detail field whose name suggests a secret, such as password, token, csrf or
-hash. Written now: `login_ok`, `login_failed` (aggregated per peer),
+hash; string detail values get the same secret-shape redaction. Written now: `login_ok`, `login_failed` (aggregated per peer),
 `logout`, `user_created`, `user_disabled`, `user_enabled`, `user_promoted`,
 `user_demoted`, `key_created`, `key_revoked`, and `ingest_denied`.
 An action that stops partway also leaves a row: `login_error` (right password,

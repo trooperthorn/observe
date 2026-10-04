@@ -80,3 +80,10 @@ def test_example_config_validates(monkeypatch):
         "ping", "tcp", "http", "dns", "tls_cert", "snmp", "winrm", "wmi", "mqtt", "linux",
         "docker", "truenas", "proxmox", "vsphere", "homeassistant", "unifi_network",
         "unifi_protect", "technitium", "pushed_host"}
+
+
+@pytest.mark.parametrize("field", ["retention_days", "audit_retention_days"])
+@pytest.mark.parametrize("value", [0, -1])
+def test_retention_below_one_day_is_rejected(field, value):
+    with pytest.raises(ValueError):
+        make_config([{"name": "p", "type": "ping", "host": "h"}], server={field: value})

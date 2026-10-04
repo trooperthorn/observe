@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from . import SCHEMA_VERSION
 
 MAX_BODY_BYTES = 1_048_576
+MAX_JSON_DEPTH = 32  # real batches nest about 5 deep
 MAX_SOURCES = 256
 MAX_SAMPLES = 5000
 MAX_EVENTS = 500

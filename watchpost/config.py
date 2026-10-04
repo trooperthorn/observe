@@ -643,9 +643,8 @@ class ServerConfig(Strict):
     listen: str = "0.0.0.0"
     port: int = 8080
     db_path: str = "/data/watchpost.db"
-    retention_days: int = 30
-    audit_retention_days: int = 365
-    ingest_rate_per_minute: int = Field(default=120, ge=1)
+    retention_days: int = Field(default=30, ge=1)
+    audit_retention_days: int = Field(default=365, ge=1)
     ingest_rate_per_minute: int = Field(default=120, ge=1)
     basic_auth_user: str | None = None
     basic_auth_password: str | None = None

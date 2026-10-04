@@ -6,7 +6,8 @@ constrained. Order of checks, cheapest and least informative first:
 1. Per-peer rate limit (429).
 2. A bearer ingest key is required and must be valid and unrevoked (401). The
    body is not read before this passes.
-3. The body is read with a hard cap of MAX_BODY_BYTES (413).
+3. The body is read with a hard cap of MAX_BODY_BYTES (413) and a nesting limit of
+   MAX_JSON_DEPTH checked before parsing (400).
 4. The host in the body must equal the host the key is bound to (403).
 5. The body must validate against the wire schema (422). Unknown fields are ignored. Nothing is
    stored from a request that fails any check.
@@ -35,7 +36,7 @@ from ..config import Config
 from ..store import Store
 from .boot import classify_events
 from .keys import key_host, verify_key
-from .schema import MAX_BODY_BYTES, Batch
+from .schema import MAX_BODY_BYTES, MAX_JSON_DEPTH, Batch
 
 log = logging.getLogger("watchpost.ingest")
 
@@ -121,6 +122,31 @@ async def _read_capped(request: Request) -> bytes | None:
     return b"".join(chunks)
 
 
+def _too_deep(body: bytes) -> bool:
+    """True when the JSON nesting depth exceeds MAX_JSON_DEPTH. A linear scan that ignores
+    brackets inside strings, run before json.loads so a deeply nested body can not recurse."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in body:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:
+                escaped = True
+            elif byte == 0x22:
+                in_string = False
+        elif byte == 0x22:
+            in_string = True
+        elif byte in (0x5B, 0x7B):
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                return True
+        elif byte in (0x5D, 0x7D):
+            depth -= 1
+    return False
+
+
 def build_router(config: Config, store: Store,
                  clock: Callable[[], float] = time.monotonic) -> APIRouter:
     router = APIRouter()
@@ -161,9 +187,11 @@ def build_router(config: Config, store: Store,
         body = await _read_capped(request)
         if body is None:
             return await deny(request, 413, "body too large", prefix)
+        if _too_deep(body):
+            return await deny(request, 400, "body is nested too deeply", prefix)
         try:
             raw = json.loads(body)
-        except ValueError:
+        except (ValueError, RecursionError):
             return await deny(request, 422, "body is not valid JSON", prefix)
         claimed = raw.get("host") if isinstance(raw, dict) else None
         if not isinstance(claimed, str):

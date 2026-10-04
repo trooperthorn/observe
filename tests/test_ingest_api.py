@@ -387,3 +387,22 @@ def test_future_dated_boot_event_does_not_freeze_boot_state(env):
     assert env.post(real, key).status_code == 200
     assert env.rows("SELECT boot_id, clean_shutdown FROM hosts") == [("rrrr", 0)]
     assert env.rows("SELECT MAX(ts) FROM host_events")[0][0] < 4_000_000_000.0
+
+
+@pytest.mark.parametrize("body", [b"[" * 10000, b'{"a":' * 10000, b"[" * 10000 + b"]" * 10000],
+                         ids=["open-arrays", "open-objects", "balanced-arrays"])
+def test_deeply_nested_body_is_rejected_and_recorded(env, body):
+    key = env.key("nas01")
+    r = env.post(body, key)
+    assert r.status_code == 400
+    rows = env.rows("SELECT kind, status, detail FROM audit WHERE kind='ingest_denied'")
+    assert len(rows) == 1 and rows[0][1] == 400 and "nested" in rows[0][2]
+    assert env.rows("SELECT COUNT(*) FROM host_samples") == [(0,)]
+
+
+def test_brackets_inside_strings_do_not_count_as_nesting(env):
+    key = env.key("nas01")
+    body = fixture("batch_minimal")
+    body["agent_version"] = "[" * 100
+    assert env.post(body, key).status_code in (200, 422)
+    assert env.rows("SELECT COUNT(*) FROM audit WHERE detail LIKE '%nested%'") == [(0,)]

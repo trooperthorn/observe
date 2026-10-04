@@ -271,3 +271,14 @@ def test_host_page_is_static_and_dashboard_links_to_it(env):
     assert r.status_code == 200 and "host.js" in r.text
     assert "/api/hosts" in env.client.get("/static/host.js").text
     assert "hostlink" in env.client.get("/static/app.js").text
+
+
+def test_host_name_with_slash_opens_in_api_and_page_link(env):
+    env.push(batch(host="rack/nas 01?#%", samples=FULL, sources=FULL_SOURCES))
+    env.login()
+    assert [h["host"] for h in env.client.get("/api/hosts").json()["hosts"]] == ["rack/nas 01?#%"]
+    from urllib.parse import quote
+    r = env.client.get(f"/api/hosts/{quote('rack/nas 01?#%', safe='')}")
+    assert r.status_code == 200 and r.json()["host"] == "rack/nas 01?#%"
+    assert env.client.get("/api/hosts/rack/nas 01?#%".replace("?#%", "%3F%23%25")).status_code == 200
+    assert env.client.get("/host?name=rack%2Fnas%2001").status_code == 200

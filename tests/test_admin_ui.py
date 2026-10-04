@@ -180,3 +180,14 @@ def test_user_create_through_admin_route_is_audited(env):
     assert [r[0] for r in audit_rows(env, "user_created")] == ["root"]
     rows = asyncio.run(audit.list_rows(env.store, 10, "user_created"))
     assert rows and PASSWORD not in str(rows)
+
+
+def test_revoke_url_containing_the_full_key_leaves_no_key_text_in_the_audit_log(env):
+    hdr = admin_login(env)
+    made = env.client.post("/api/admin/keys", json={"host": "nas1"}, headers=hdr).json()
+    secret = made["key"].split("_", 2)[2]
+    for url_key in (made["key"], made["key"] + "?k=" + made["key"]):
+        env.client.post(f"/api/admin/keys/{url_key}/revoke", headers=hdr)
+    everything = " ".join(str(x) for row in env.rows("SELECT * FROM audit") for x in row)
+    assert made["key"] not in everything and secret not in everything
+    assert env.rows("SELECT COUNT(*) FROM audit WHERE kind LIKE 'key_revoke%'")[0][0] >= 1

@@ -175,7 +175,7 @@ def test_no_secret_reaches_the_log(env):
 
 def test_record_redacts_secret_named_fields_and_sanitizes_the_path(env):
     asyncio.run(audit.record(env.store, "probe", actor="x", method="GET",
-                             path="/a\nforged line\x00/" + "z" * 400,
+                             path="/a\nforged line\x00/" + "z/" * 200,
                              detail={"password": "p1", "Session_Token": "t1", "ok": "fine",
                                      "ingest_key": "k1"}))
     path, detail = env.rows("SELECT path, detail FROM audit WHERE kind='probe'")[0]
@@ -214,3 +214,10 @@ def test_non_admin_anonymous_and_basic_auth_are_denied(env):
     assert denied.status_code == 403 and "kind" not in denied.text
     assert env.client.get("/api/audit", headers=BASIC).status_code == 403
 
+
+
+def test_sanitizer_redacts_keys_and_session_tokens_anywhere(env):
+    token = "A" * 43
+    out = audit.sanitize_audit_path(f"/x/wpi_abc123_{token}/y?t={token}&k=wpi_zz")
+    assert token not in out and "wpi_" not in out
+    assert audit.sanitize_audit_path("/api/hosts/nas01") == "/api/hosts/nas01"
