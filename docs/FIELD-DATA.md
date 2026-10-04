@@ -1,6 +1,6 @@
 # Field data from the Pockethernet app
 
-Status: design; the plugin loader, per-plugin migrations and plugin pages are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
+Status: design; the plugin loader, per-plugin migrations, plugin pages and the infrastructure tables with port keys and property history are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
 Pockethernet Android app (repo `pocketethernet-app`) become properties of switch
 ports in watchpost, and how the mapping data in those results builds an
 infrastructure map with live availability and health.
@@ -160,13 +160,23 @@ watchpost gains a plugin system, and this design is split between the core and t
 - A plugin's settings are validated by its own model under `plugin_settings.<name>`. The error names the field and the reason, never the value.
 - Pages and navigation entries exist only for listed plugins. A page path must be `/plugins/<name>` or below it. A plugin may also serve a `static_dir` at `/plugins/<name>/static`, behind the core's security headers and CSP.
 
+### Built: infrastructure tables and property history (slice 4)
+
+Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement the data model. Details that the sketch above left open:
+
+- `switch_id` is `mac:<12 hex digits>` or `name:<lower-cased sysName>`, so a sysName that looks like a MAC cannot collide with a chassis id. Port keys are lower case with no whitespace; LLDP port ids that are not names keep a prefix (`mac:`, `addr:`, `circuit:`, `pc:`).
+- `infra_links` stores its two ends as sorted `(kind, ref)` pairs and is unique per ends and source. A port ref is `<switch_id>|<port_key>`, so neither may contain a vertical bar. `closed_at` is reserved for the ageing slice.
+- `port_properties` has an extra `last_verified` column. A report that repeats the newest value bumps it and adds no row; the original `observed_at` stays.
+- Property values are stored as JSON text with the type fixed per name (for example `link_speed_mbps` is an integer and `dhcp_ok` a boolean). `custom.<name>` values are text.
+- The new `scope` column on `ingest_keys` is not part of this step; it comes with the key scope slice.
+
 ## Build order
 
 **watchpost core.**
 1. Plugin loader and hooks (built).
 2. Per-plugin migrations (built).
 3. Plugin pages and navigation (built).
-4. Infrastructure tables, port-key normalisation and property history.
+4. Infrastructure tables, port-key normalisation and property history (built).
 5. Monitor matching and conflict findings.
 6. Map data, ageing and inferred dependencies.
 7. Map and port pages.

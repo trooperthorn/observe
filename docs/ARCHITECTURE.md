@@ -90,7 +90,8 @@ tables.
 
 Version 2 adds `hosts`, `host_samples`, `host_sources` and `host_events`.
 Version 3 adds `ingest_keys`, `users`, `sessions` and `audit`, and version 4 adds
-`ingest_batches`, and version 5 adds `plugin_schema`. Existing history
+`ingest_batches`, version 5 adds `plugin_schema`, and version 6 adds the
+infrastructure tables (see "Infrastructure map core"). Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
 
 Both retention settings must be at least 1 day; config validation rejects 0 and negative values.
@@ -229,7 +230,7 @@ adapted from hostwatch's `sanitize_audit_path`) and replaces the value of any
 detail field whose name suggests a secret, such as password, token, csrf or
 hash; string detail values get the same secret-shape redaction. Written now: `login_ok`, `login_failed` (aggregated per peer),
 `logout`, `user_created`, `user_disabled`, `user_enabled`, `user_promoted`,
-`user_demoted`, `key_created`, `key_revoked`, and `ingest_denied`.
+`user_demoted`, `key_created`, `key_revoked`, `ingest_denied`, and `port_property_custom` (a hand-entered custom port property).
 An action that stops partway also leaves a row: `login_error` (right password,
 no session), `user_create_failed` and `user_create_error`, `key_create_failed`,
 `key_revoke_failed`, `user_change_failed` and `user_change_error`, and `ingest_failed` (a valid batch the store could not
@@ -306,6 +307,35 @@ when a route raises. Reads that succeed are not audited, like the core read
 routes. `GET /api/plugins` lists loaded plugins and the navigation entries the
 caller may see. Key-authenticated plugin routes, such as phone uploads, arrive
 with the key scope slice; until then every plugin route needs a session.
+
+## Infrastructure map core
+
+Schema version 6 adds `infra_switches`, `infra_ports`, `infra_jacks`, `infra_links`,
+`infra_endpoints` and `port_properties`, as described in `docs/FIELD-DATA.md`. Nothing
+existing changes. The `scope` column on `ingest_keys` belongs to the key scope slice and is
+not part of this step.
+
+`watchpost/portkey.py` holds the pure normalisers. `port_key` maps the spellings of one
+interface to one key (`Gi1/0/5` and `GigabitEthernet1/0/5`, Juniper `ge-0/0/5.0`, UniFi
+`Port 5`, Linux `eth0`) and keeps different ports apart (`Gi1/0/5` and `Gi1/0/50`, `Gi1/0/5`
+and `Te1/0/5`, `eth0` and `eth0.100`, `ge-0/0/5` and `ge-0/0/5.1`); an unrecognised name is
+only lower-cased and stripped of whitespace. `lldp_port_key` reads an LLDP port id by its
+subtype: names and aliases are normalised like interface names, while MAC, network address,
+circuit id and port component keep a prefix so they cannot collide with a name. `switch_id`
+gives `mac:<12 hex digits>` from the chassis id, else `name:<lower-cased sysName>`.
+
+`watchpost/infra.py` is the service plugins call (`InfraService`). It upserts switches,
+ports, jacks, endpoints and links, and appends typed port properties. An upsert refreshes
+`last_seen` and never blanks a stored value with an empty one. A link names two ends built
+with `port_ref`, `jack_ref` or `endpoint_ref`, both of which must exist; the ends are stored
+in sorted order, so an edge has one row whichever way and in whichever spelling it was
+reported, and confirming it again reopens it. Port properties are append-only: the newest
+row per name is the current value, a write identical to the newest row only moves its
+`last_verified`, and a value that changes and then returns is a new row each time. Names must
+be in the allowlist (`PROPERTY_TYPES`) or `custom.<name>`; values are type checked and
+capped; the port must already exist. A custom write needs `recorded_by` and writes a
+`port_property_custom` audit row that names the property but not its value. This slice has no
+routes; the service is called in process.
 
 ## Phase 2 (planned): control
 

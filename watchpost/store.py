@@ -117,6 +117,48 @@ PLUGIN_TABLES = (
 )""",
 )
 
+# The infrastructure map: switches, their ports, wall jacks, the links between them, endpoints
+# seen on ports, and the append-only port property history (docs/FIELD-DATA.md). Keys are the
+# normalised forms made by watchpost/portkey.py. A link names its two ends as (kind, ref) pairs,
+# stored in sorted order so an edge has one row whichever way it was reported. All steps are
+# additive; no existing table changes.
+INFRA_TABLES = (
+    """CREATE TABLE IF NOT EXISTS infra_switches (
+  switch_id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', mgmt_addresses TEXT NOT NULL DEFAULT '[]',
+  vendor TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL DEFAULT '', matched_monitor TEXT,
+  first_seen REAL NOT NULL, last_seen REAL NOT NULL
+)""",
+    """CREATE TABLE IF NOT EXISTS infra_ports (
+  switch_id TEXT NOT NULL REFERENCES infra_switches(switch_id), port_key TEXT NOT NULL,
+  raw_port_id TEXT NOT NULL DEFAULT '', if_index INTEGER, unifi_index INTEGER,
+  role TEXT NOT NULL DEFAULT 'unknown', first_seen REAL NOT NULL, last_seen REAL NOT NULL,
+  PRIMARY KEY (switch_id, port_key)
+)""",
+    """CREATE TABLE IF NOT EXISTS infra_jacks (
+  jack_key TEXT PRIMARY KEY, room TEXT NOT NULL DEFAULT '', site TEXT NOT NULL DEFAULT '',
+  switch_id TEXT, port_key TEXT, first_seen REAL NOT NULL, last_seen REAL NOT NULL
+)""",
+    """CREATE TABLE IF NOT EXISTS infra_endpoints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, ref TEXT NOT NULL,
+  mac TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '',
+  first_seen REAL NOT NULL, last_seen REAL NOT NULL, UNIQUE (kind, ref)
+)""",
+    """CREATE TABLE IF NOT EXISTS infra_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, a_kind TEXT NOT NULL, a_ref TEXT NOT NULL,
+  b_kind TEXT NOT NULL, b_ref TEXT NOT NULL, source TEXT NOT NULL, confidence REAL NOT NULL,
+  first_seen REAL NOT NULL, last_seen REAL NOT NULL, closed_at REAL,
+  UNIQUE (a_kind, a_ref, b_kind, b_ref, source)
+)""",
+    """CREATE TABLE IF NOT EXISTS port_properties (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, switch_id TEXT NOT NULL, port_key TEXT NOT NULL,
+  name TEXT NOT NULL, value TEXT NOT NULL, unit TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL, report_id TEXT NOT NULL DEFAULT '', observed_at REAL NOT NULL,
+  recorded_at REAL NOT NULL, recorded_by TEXT NOT NULL DEFAULT '', last_verified REAL NOT NULL,
+  FOREIGN KEY (switch_id, port_key) REFERENCES infra_ports(switch_id, port_key)
+)""",
+    "CREATE INDEX IF NOT EXISTS port_properties_lookup ON port_properties(switch_id, port_key, name, id)",
+)
+
 # Stored as the reason when an agent says a source does not exist on the host.
 ABSENT_REASON = "not present on this host"
 
@@ -131,6 +173,7 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     3: ACCESS_TABLES,
     4: BATCH_TABLES,
     5: PLUGIN_TABLES,
+    6: INFRA_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

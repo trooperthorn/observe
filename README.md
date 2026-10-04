@@ -479,9 +479,15 @@ entries and routes but keeps its data, so listing it again resumes where it
 stopped. Plugin pages live under `/plugins/<name>/` and need a login. Plugins run in the same process with full trust, so install only
 plugins you trust. The design is in `docs/FIELD-DATA.md`.
 
+The core also keeps an infrastructure map in the same database: switches, ports, wall jacks,
+links, endpoints and port properties with history. Port names are normalised, so
+`GigabitEthernet1/0/5` and `Gi1/0/5` are one port while `Gi1/0/5` and `Gi1/0/50` stay
+apart. Plugins write to it through `watchpost.infra.InfraService`; there are no map pages or
+routes yet (the map and port pages are later slices).
+
 ## Not implemented
 
-Network discovery, automated remediation actions, maps, native DCOM WMI,
+Network discovery, automated remediation actions, the map and port pages, native DCOM WMI,
 Holt-Winters seasonal forecasting, alerts on forecasts,
 SNMP traps, maintenance windows, and editing monitors from the UI (the YAML stays the
 source of truth for polled monitors). See `docs/VERIFICATION.md` for what has and
