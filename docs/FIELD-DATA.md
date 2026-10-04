@@ -90,7 +90,7 @@ except a new `scope` column on `ingest_keys`.
   - **Units** are part of each field name.
   - **Idempotency:** a report uploaded again is recognised by its report id; an edited report carries a higher revision.
   - **Limit:** 256 KiB per report.
-- **Authentication.** A per-phone key `wpr_<prefix>_<secret>` that can only upload reports. A host key cannot upload reports, and a report key cannot ingest host data.
+- **Authentication.** A per-phone key `wpf_<prefix>_<secret>` that can only upload reports. A host key cannot upload reports, and a report key cannot ingest host data.
 - **Phone-side delivery.**
   - Reports go into a queue on the phone that survives restarts.
   - The queue is sent when the phone is on Wi-Fi or a VPN, with backoff between retries.
@@ -120,20 +120,50 @@ except a new `scope` column on `ingest_keys`.
 - A switch seen in the field that matches no monitor is created as an unlinked switch and queued for an admin to link.
 - A gzip body is accepted only with a capped inflated size and compression ratio.
 
+## Packaging: core map, Pockethernet as a plugin (owner decision 2026-10-04)
+
+watchpost gains a plugin system, and this design is split between the core and the first plugin.
+
+- **Core.**
+  - Switches, ports and port properties with history, the infrastructure map, monitor matching, conflict findings and inferred dependencies.
+  - SNMP, UniFi and pushed hosts feed the same map, so none of it is specific to Pockethernet.
+- **Plugin host (core).** Plugins are found through Python entry points (group `watchpost.plugins`) and loaded only when listed under `plugins:` in `watchpost.yaml`. A plugin declares the core versions it supports, and a mismatch refuses to start. Through fixed hooks a plugin can register:
+  - routers;
+  - a key scope;
+  - its own migrations, with a version number per plugin;
+  - a config section;
+  - pages and navigation entries;
+  - monitor types;
+  - map contributions: nodes, edges, property writes and suggested dependencies.
+- **Core enforcement.** Every plugin route gets the core's authentication, CSRF, rate limiting and audit, so a plugin cannot bypass them.
+- **Trust.** Plugins run in-process with full trust. Only plugins installed into the image and named in the config are loaded, and nothing is downloaded at runtime.
+- **Pockethernet plugin** (package `watchpost-pockethernet`, kept in this repository under `plugins/pockethernet` until it needs its own):
+  - the report schema and the `wpf` key scope;
+  - the upload endpoint;
+  - mapping from a report to port properties and edges;
+  - the report and jack pages.
+- **Later plugins.** hostwatch ingest and the control phase can move to plugins under the same rules. Control would then be entirely absent unless enabled.
+
 ## Build order
 
-**watchpost first.**
-1. Migration.
-2. Report schema.
-3. `wpr` keys.
-4. Upload endpoint.
-5. Port, jack and property derivation, with history.
-6. Findings: field changes and conflicts with live data.
-7. Monitor matching.
-8. Map data and inferred dependencies.
-9. Views.
-10. Findings on the dashboard (no alerts).
-11. LLDP-MIB polling for uplinks.
+**watchpost core.**
+1. Plugin loader and hooks.
+2. Per-plugin migrations.
+3. Plugin pages and navigation.
+4. Infrastructure tables, port-key normalisation and property history.
+5. Monitor matching and conflict findings.
+6. Map data, ageing and inferred dependencies.
+7. Map and port pages.
+
+**Pockethernet plugin.**
+1. Report schema.
+2. Key scope.
+3. Upload endpoint.
+4. Report to properties and edges.
+5. Report and jack pages.
+6. Findings on the dashboard.
+
+**Later.** LLDP-MIB polling for uplinks (core).
 
 **Then the app.**
 1. Payload mapper with golden files shared with watchpost.
