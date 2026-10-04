@@ -9,6 +9,7 @@
   python -m watchpost --config ... --ingest-key-create HOST    print a new ingest key once
   python -m watchpost --config ... --ingest-key-revoke ID      revoke an ingest key
   python -m watchpost --config ... --ingest-key-list           list keys, never the secrets
+  python -m watchpost --config ... --create-admin USERNAME     create an admin user
 """
 
 from __future__ import annotations
@@ -147,6 +148,39 @@ def _ingest_keys(config, args) -> int:  # type: ignore[no-untyped-def]
         store.close()
 
 
+def _create_admin(config, args) -> int:  # type: ignore[no-untyped-def]
+    """Create an admin user. The password comes from WATCHPOST_ADMIN_PASSWORD or a prompt,
+    never from the command line, so it does not land in shell history or the process list."""
+    import getpass
+    import os
+
+    from .auth import AuthError, create_user
+
+    password = os.environ.get("WATCHPOST_ADMIN_PASSWORD")
+    if password is None:
+        password = getpass.getpass("Password: ")
+        if getpass.getpass("Repeat password: ") != password:
+            print("error: passwords do not match", file=sys.stderr)
+            return 2
+
+    async def run(store: Store) -> int:
+        try:
+            await create_user(store, config, args.create_admin, password, is_admin=True)
+        except AuthError as err:
+            print(f"error: {err}", file=sys.stderr)
+            return 2
+        await store.write_audit("user_created", actor="cli",
+                                detail={"username": args.create_admin.strip(), "is_admin": True})
+        print(f"created admin {args.create_admin.strip()}", file=sys.stderr)
+        return 0
+
+    store = Store(config.server.db_path)
+    try:
+        return asyncio.run(run(store))
+    finally:
+        store.close()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="watchpost")
     ap.add_argument("--config", default="/config/watchpost.yaml")
@@ -176,6 +210,9 @@ def main() -> int:
                     help="revoke the ingest key with this id (see --ingest-key-list) and exit")
     ap.add_argument("--ingest-key-list", action="store_true",
                     help="list ingest keys with host, state and last use, and exit")
+    ap.add_argument("--create-admin", metavar="USERNAME",
+                    help="create an admin user (password from WATCHPOST_ADMIN_PASSWORD or a "
+                         "prompt) and exit")
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     logging.basicConfig(level=args.log_level.upper(),
@@ -192,6 +229,8 @@ def main() -> int:
         return 0
     if args.ingest_key_create or args.ingest_key_revoke or args.ingest_key_list:
         return _ingest_keys(config, args)
+    if args.create_admin:
+        return _create_admin(config, args)
     if args.once:
         return asyncio.run(_once(config, args.only))
     if args.discover:

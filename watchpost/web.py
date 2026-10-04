@@ -1,11 +1,15 @@
 """HTTP surface: dashboard, JSON API, Prometheus metrics, and host ingest.
 
-The dashboard endpoints do not change state. Adding, removing, or editing a
-monitor means editing the YAML and restarting the container, which keeps the
-config reviewable and means a stolen dashboard session can read your
-inventory but can not change what is watched or silence an alert. The one
-write path is POST /api/ingest (watchpost/ingest/api.py), which accepts pushed
-host data with a host-bound ingest key and does not touch monitors.
+The dashboard and monitor endpoints do not change state. Adding, removing, or
+editing a monitor means editing the YAML and restarting the container, so a
+stolen session can read your inventory but can not change what is watched or
+silence an alert. The write paths are POST /api/ingest (watchpost/ingest/api.py,
+host-bound ingest key, does not touch monitors) and the login surface below.
+
+Two credentials exist and they do not mix. The optional basic auth, and a
+login session, both open the read-only API and /metrics. Only a session with a
+CSRF token reaches /api/logout and /api/admin/*, and an admin session is needed
+for the admin routes; basic auth is never accepted there (watchpost/auth.py).
 """
 
 from __future__ import annotations
@@ -18,13 +22,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from . import auth as authmod
 from .alerts import Alerter
 from .config import Config
-from .ingest.api import build_router
+from .ingest.api import DenialAggregator, RateLimiter, build_router
 from .scheduler import Scheduler
 from .store import Store
 
@@ -71,13 +76,20 @@ def _monitor_view(mon: Any, st: Any, sched: Any) -> dict[str, Any]:
 
 
 def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Alerter,
-               ingest_clock: Callable[[], float] = time.monotonic) -> FastAPI:
+               ingest_clock: Callable[[], float] = time.monotonic,
+               auth_clock: Callable[[], float] = time.time) -> FastAPI:
     app = FastAPI(title="watchpost", version=__version__, docs_url=None, redoc_url=None,
                   openapi_url=None)
     user, pw = config.server.basic_auth_user, config.server.basic_auth_password
 
-    def auth(request: Request) -> None:
+    guards = authmod.build_guards(config, store, auth_clock)
+
+    async def auth(request: Request) -> None:
+        """Read-only surfaces: a login session, or basic auth when it is configured."""
         if not user:
+            return
+        if await authmod.load_session(store, config, request.cookies.get(authmod.COOKIE),
+                                      auth_clock()) is not None:
             return
         header = request.headers.get("authorization", "")
         ok = False
@@ -109,6 +121,29 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
+    login_limiter = RateLimiter(config.server.login_rate_per_minute, ingest_clock)
+    login_denials = DenialAggregator(ingest_clock)
+    secure = config.server.session_cookie_secure
+
+    def set_cookie(resp: Response, token: str) -> None:
+        resp.set_cookie(authmod.COOKIE, token, max_age=config.server.session_absolute_s,
+                        path="/", httponly=True, secure=secure, samesite="strict")
+
+    async def login_failed(peer: str, status: int, reason: str,
+                           actor: str = "") -> JSONResponse:
+        # Audit growth is bounded: one row per peer per window, with a count.
+        covered = login_denials.note(peer)
+        if covered is not None:
+            detail: dict[str, Any] = {"reason": reason}
+            if covered:
+                detail["denials_covered"] = covered
+            await store.write_audit("login_failed", actor=actor, method="POST",
+                                    path="/api/login", status=status, remote=peer, detail=detail)
+        headers = {"Retry-After": "60"} if status == 429 else None
+        # One generic message for every credential failure, so it reveals nothing.
+        msg = "rate limit exceeded" if status == 429 else "invalid username or password"
+        return JSONResponse({"detail": msg}, status_code=status, headers=headers)
+
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     by_slug = {m.slug: m for m in scheduler.monitors}
 
@@ -119,6 +154,84 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     @app.get("/", dependencies=guarded, include_in_schema=False)
     async def index() -> FileResponse:
         return FileResponse(STATIC / "index.html")
+
+    @app.get("/login", include_in_schema=False)
+    async def login_page() -> FileResponse:
+        return FileResponse(STATIC / "login.html")
+
+    @app.post("/api/login", include_in_schema=False)
+    async def login(request: Request) -> Response:
+        peer = request.client.host if request.client else "unknown"
+        if not login_limiter.allow(peer):
+            return await login_failed(peer, 429, "rate limit exceeded")
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > 4096:
+            return JSONResponse({"detail": "body too large"}, status_code=413)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        name = body.get("username") if isinstance(body, dict) else None
+        pw = body.get("password") if isinstance(body, dict) else None
+        if not isinstance(name, str) or not isinstance(pw, str):
+            return JSONResponse({"detail": "username and password are required"},
+                                status_code=422)
+        res = await authmod.check_login(store, config, name, pw, auth_clock())
+        if not res.ok:
+            # The attempted name is audited only when it is a real account.
+            return await login_failed(peer, 401, res.reason, res.username if res.user_id else "")
+        assert res.user_id is not None
+        token, csrf = await authmod.create_session(store, config, res.user_id, auth_clock())
+        await store.write_audit("login_ok", actor=res.username, method="POST",
+                                path="/api/login", status=200, remote=peer)
+        out = JSONResponse({"username": res.username, "is_admin": res.is_admin, "csrf": csrf})
+        set_cookie(out, token)
+        return out
+
+    @app.post("/api/logout", include_in_schema=False)
+    async def logout(request: Request,
+                     sess: authmod.Session = Depends(guards.mutating)) -> Response:
+        token = request.cookies.get(authmod.COOKIE)
+        if token:
+            await authmod.revoke_session(store, token)
+        await store.write_audit("logout", actor=sess.username, method="POST",
+                                path="/api/logout", status=200,
+                                remote=request.client.host if request.client else "")
+        out = JSONResponse({"ok": True})
+        out.delete_cookie(authmod.COOKIE, path="/", httponly=True, secure=secure,
+                          samesite="strict")
+        return out
+
+    @app.get("/api/session", include_in_schema=False)
+    async def whoami(sess: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
+        return {"username": sess.username, "is_admin": sess.is_admin, "csrf": sess.csrf}
+
+    @app.get("/api/admin/users", include_in_schema=False)
+    async def admin_users(_: authmod.Session = Depends(guards.admin)) -> list[dict[str, Any]]:
+        return await authmod.list_users(store)
+
+    @app.post("/api/admin/users", include_in_schema=False)
+    async def admin_create_user(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict) or not isinstance(body.get("username"), str) \
+                or not isinstance(body.get("password"), str):
+            return JSONResponse({"detail": "username and password are required"},
+                                status_code=422)
+        make_admin = body.get("is_admin") is True
+        try:
+            uid = await authmod.create_user(store, config, body["username"], body["password"],
+                                            is_admin=make_admin, now=auth_clock())
+        except authmod.AuthError as err:
+            return JSONResponse({"detail": str(err)}, status_code=422)
+        await store.write_audit(
+            "user_created", actor=sess.username, method="POST", path="/api/admin/users",
+            status=200, remote=request.client.host if request.client else "",
+            detail={"username": body["username"].strip(), "is_admin": make_admin})
+        return JSONResponse({"id": uid})
 
     @app.get("/api/monitors", dependencies=guarded)
     async def monitors() -> dict[str, Any]:

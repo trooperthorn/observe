@@ -644,6 +644,17 @@ class ServerConfig(Strict):
     basic_auth_user: str | None = None
     basic_auth_password: str | None = None
     max_concurrency: int = 32
+    # Logins and sessions (watchpost/auth.py). The argon2 defaults follow the
+    # argon2-cffi RFC 9106 low-memory profile; tests lower them.
+    session_idle_s: int = Field(default=1800, ge=60)
+    session_absolute_s: int = Field(default=43200, ge=60)
+    session_cookie_secure: bool = True
+    login_max_failures: int = Field(default=5, ge=1)
+    login_lock_s: int = Field(default=900, ge=1)
+    login_rate_per_minute: int = Field(default=20, ge=1)
+    argon2_time_cost: int = Field(default=3, ge=1)
+    argon2_memory_kib: int = Field(default=65536, ge=8)
+    argon2_parallelism: int = Field(default=4, ge=1)
 
 
 class ForecastSettings(Strict):

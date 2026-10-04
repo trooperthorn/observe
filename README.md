@@ -349,8 +349,8 @@ The SQLite store is now versioned. On startup watchpost applies any missing
 additive migrations, keeps all existing history, and refuses to open a
 database written by a newer version. `server.retention_days` governs poll
 results and host samples, and the new `server.audit_retention_days` (default
-365) governs the audit log independently. The new tables for hosts, keys,
-users, sessions and audit stay empty until the ingest and login work lands.
+365) governs the audit log independently. The tables for hosts, keys,
+users, sessions and audit are filled by the ingest and login routes.
 
 The hostwatch wire schema models exist in `watchpost/ingest/schema.py`, with
 size and count limits and strict rejection of unknown fields and schema
@@ -396,6 +396,22 @@ new key once and stores only a hash; the key works for ingest and only for
 that host name. `--ingest-key-list` shows each key's id, host, state and last
 use, and `--ingest-key-revoke ID` revokes one. The keys are accepted only
 by `POST /api/ingest`.
+
+Logins use Argon2id password hashes and server-side sessions. Create the first
+admin with `python -m watchpost --config watchpost.yaml --create-admin NAME`; it
+reads the password (12 characters or more) from `WATCHPOST_ADMIN_PASSWORD` or a
+prompt, never from an argument. Sign in at `/login`. The session cookie is
+HttpOnly, Secure and SameSite=Strict, and expires after 30 idle minutes or 12
+hours in all (`server.session_idle_s`, `session_absolute_s`). Set
+`server.session_cookie_secure: false` only when serving plain HTTP on a trusted
+network. An account locks for 15 minutes after 5 failures, and logins are
+limited per peer address. Routes that change state need the session's CSRF
+token in an `X-CSRF-Token` header (`GET /api/session` returns it), and admin
+routes (`GET` and `POST /api/admin/users` so far) also need an admin user. The
+optional basic auth is kept for the read-only API and `/metrics` and is never
+accepted for admin routes. A session also opens the read-only API. No action
+that changes a host exists yet. The admin screen, host views and key
+management in the browser are later slices.
 
 ## Not implemented
 

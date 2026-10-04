@@ -147,8 +147,23 @@ rate limited per account and per source address and are recorded.
 
 Two roles exist. A **viewer** can read dashboards and host views. An
 **admin** can also manage users and ingest keys and confirm pushed hosts.
-The existing optional basic auth keeps working for deployments that do not
-create users.
+The existing optional basic auth is kept, by owner decision, for the read-only
+API and `/metrics` only. It can never reach admin, ingest-key, user or future
+action routes, which require a session login with CSRF.
+
+Implemented in `watchpost/auth.py` and the routes in `watchpost/web.py`. The
+session identifier and CSRF token are never stored as plaintext: the table
+holds a SHA-256 digest of the identifier, and the CSRF token is an HMAC of the
+identifier, recomputed on each request. Four FastAPI dependencies enforce the
+boundary: `session` (any user), `mutating` (session plus CSRF), `admin`, and
+`admin_mutating`. None of them looks at the Authorization header, so basic
+auth credentials get 401 there. Read routes accept a session or, when
+configured, basic auth. Login is `POST /api/login` (JSON), logout is
+`POST /api/logout`, and `GET /api/session` returns the current user and token.
+The first admin is created from the command line (`--create-admin`). Failed
+logins lock the account (`login_max_failures`, `login_lock_s`) and are limited
+per peer, with an unknown account taking the same time and answer as a wrong
+password. Settings live under `server:` in the config.
 
 ## Audit log
 

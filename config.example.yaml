@@ -12,6 +12,13 @@ server:
   # The audit log has its own retention, separate from polls and host samples.
   audit_retention_days: 365
   ingest_rate_per_minute: 120  # POST /api/ingest requests per peer per minute
+  # Logins (create the first admin with --create-admin). Defaults shown.
+  # session_idle_s: 1800
+  # session_absolute_s: 43200
+  # session_cookie_secure: true   # false only for plain HTTP on a trusted network
+  # login_max_failures: 5
+  # login_lock_s: 900
+  # login_rate_per_minute: 20
   # Optional HTTP basic auth for the dashboard and API. Put a TLS reverse
   # proxy in front if you enable this, basic auth over plain HTTP is not
   # confidential.
