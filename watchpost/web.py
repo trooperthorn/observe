@@ -36,6 +36,7 @@ from .config import Config
 from .ingest.api import DenialAggregator, RateLimiter, build_router
 from .ingest.keys import IngestKeyError, create_key, list_keys, revoke_key
 from .ingest.schema import MAX_NAME
+from .plugins import ROUTE_PREFIX, LoadedPlugins
 from .scheduler import Scheduler
 from .store import Store
 
@@ -83,7 +84,8 @@ def _monitor_view(mon: Any, st: Any, sched: Any) -> dict[str, Any]:
 
 def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Alerter,
                ingest_clock: Callable[[], float] = time.monotonic,
-               auth_clock: Callable[[], float] = time.time) -> FastAPI:
+               auth_clock: Callable[[], float] = time.time,
+               plugins: LoadedPlugins | None = None) -> FastAPI:
     app = FastAPI(title="watchpost", version=__version__, docs_url=None, redoc_url=None,
                   openapi_url=None)
     user, pw = config.server.basic_auth_user, config.server.basic_auth_password
@@ -149,6 +151,68 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         # One generic message for every credential failure, so it reveals nothing.
         msg = "rate limit exceeded" if status == 429 else "invalid username or password"
         return JSONResponse({"detail": msg}, status_code=status, headers=headers)
+
+    plugins = plugins or LoadedPlugins()
+    plugin_limiter = RateLimiter(config.server.plugin_rate_per_minute, ingest_clock)
+    plugin_denials = DenialAggregator(ingest_clock)
+
+    async def plugin_rate_limit(request: Request) -> None:
+        peer = request.client.host if request.client else "unknown"
+        if not plugin_limiter.allow(peer):
+            raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": "60"})
+
+    async def plugin_session(request: Request) -> authmod.Session:
+        # Reads need a session; any other method also needs the CSRF token.
+        if request.method in ("GET", "HEAD"):
+            return await guards.session(request)
+        return await guards.mutating(request)
+
+    async def plugin_admin(request: Request) -> authmod.Session:
+        if request.method in ("GET", "HEAD"):
+            return await guards.admin(request)
+        return await guards.admin_mutating(request)
+
+    # The core, not the plugin, chooses the dependencies: rate limit first, then the session
+    # and CSRF checks. A plugin can only ask for the admin role, never for less.
+    for loaded in plugins.plugins:
+        for pr in loaded.routers:
+            app.include_router(
+                pr.router, prefix=f"{ROUTE_PREFIX}/{loaded.name}",
+                dependencies=[Depends(plugin_rate_limit),
+                              Depends(plugin_admin if pr.admin else plugin_session)])
+
+    @app.middleware("http")
+    async def plugin_audit(request: Request, call_next: Any) -> Response:
+        """Audit every plugin request that changes state, and every refused one."""
+        path = request.url.path
+        if not path.startswith(ROUTE_PREFIX + "/"):
+            return await call_next(request)
+        remote = request.client.host if request.client else ""
+        plugin = path[len(ROUTE_PREFIX) + 1:].split("/", 1)[0][:64]
+        try:
+            resp: Response = await call_next(request)
+        except Exception as err:
+            sess = getattr(request.state, "session", None)
+            await audit.record(store, "plugin_failed", actor=sess.username if sess else "",
+                               method=request.method, path=path, status=500, remote=remote,
+                               detail={"plugin": plugin, "error": type(err).__name__})
+            raise
+        sess = getattr(request.state, "session", None)
+        if resp.status_code in (401, 403, 429):
+            # Bounded like login failures: one row per peer per window, with a count.
+            covered = plugin_denials.note(remote or "unknown")
+            if covered is not None:
+                detail: dict[str, Any] = {"plugin": plugin}
+                if covered:
+                    detail["denials_covered"] = covered
+                await audit.record(store, "plugin_denied", actor=sess.username if sess else "",
+                                   method=request.method, path=path, status=resp.status_code,
+                                   remote=remote, detail=detail)
+        elif sess is not None and request.method not in ("GET", "HEAD"):
+            await audit.record(store, "plugin_request", actor=sess.username,
+                               method=request.method, path=path, status=resp.status_code,
+                               remote=remote, detail={"plugin": plugin})
+        return resp
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     by_slug = {m.slug: m for m in scheduler.monitors}
@@ -218,6 +282,13 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     @app.get("/api/session", include_in_schema=False)
     async def whoami(sess: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
         return {"username": sess.username, "is_admin": sess.is_admin, "csrf": sess.csrf}
+
+    @app.get("/api/plugins", include_in_schema=False)
+    async def plugin_list(sess: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
+        """Loaded plugins and the navigation entries this user may see."""
+        return {"plugins": [{"name": p.name, "version": p.plugin.version}
+                            for p in plugins.plugins],
+                "nav": plugins.nav(sess.is_admin)}
 
     @app.get("/api/admin/users", include_in_schema=False)
     async def admin_users(_: authmod.Session = Depends(guards.admin)) -> list[dict[str, Any]]:

@@ -455,6 +455,26 @@ or `*_error` row says so. Passwords, tokens and keys are never written, paths
 are sanitized, and `GET /api/audit` (admin session only; parameters `limit`,
 `kind` and `before`) returns the rows newest first.
 
+## Plugins
+
+watchpost can load plugins, which are Python packages installed into the image
+that publish an entry point in the group `watchpost.plugins`. Installing one
+does nothing until you list it in the config:
+
+```yaml
+plugins: [pockethernet]
+plugin_settings:
+  pockethernet: {}   # validated by the plugin's own settings model
+```
+
+A listed plugin that is not installed, or that does not support this watchpost
+version, stops startup with a message naming it (`--validate` checks this too).
+Plugin routes live under `/api/plugins/<name>/` and always need a login
+session, the CSRF token for anything but a read, and count against
+`server.plugin_rate_per_minute`; state changes and refusals are written to the
+audit log. Plugins run in the same process with full trust, so install only
+plugins you trust. The design is in `docs/FIELD-DATA.md`.
+
 ## Not implemented
 
 Network discovery, automated remediation actions, maps, native DCOM WMI,

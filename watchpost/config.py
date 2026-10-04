@@ -660,6 +660,7 @@ class ServerConfig(Strict):
     argon2_time_cost: int = Field(default=3, ge=1)
     argon2_memory_kib: int = Field(default=65536, ge=8)
     argon2_parallelism: int = Field(default=4, ge=1)
+    plugin_rate_per_minute: int = Field(default=300, ge=1)  # requests per peer to plugin routes
 
 
 class ForecastSettings(Strict):
@@ -745,6 +746,17 @@ class Config(Strict):
     credentials: dict[str, Credential] = Field(default_factory=dict)
     alerts: list[Alert] = Field(default_factory=list)
     monitors: list[Monitor] = Field(default_factory=list)
+    # Plugins to load by entry point name (watchpost/plugins.py). Installed plugins that are
+    # not listed here are never imported. Each one's settings sit under plugin_settings.<name>.
+    plugins: list[str] = Field(default_factory=list)
+    plugin_settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("plugins")
+    @classmethod
+    def _unique_plugins(cls, names: list[str]) -> list[str]:
+        if len(set(names)) != len(names):
+            raise ValueError("plugins: a plugin is listed more than once")
+        return names
 
     @field_validator("monitors")
     @classmethod
@@ -803,6 +815,9 @@ class Config(Strict):
         for mon in self.monitors:
             if mon.forecast and mon.thresholds is None and mon.type != "tls_cert":
                 raise ValueError(f"monitor {mon.name!r}: forecast needs thresholds to project to")
+        for name in self.plugin_settings:
+            if name not in self.plugins:
+                raise ValueError(f"plugin_settings.{name}: that plugin is not listed in plugins")
         if bool(self.server.basic_auth_user) != bool(self.server.basic_auth_password):
             raise ValueError("server.basic_auth_user and basic_auth_password go together")
         return self

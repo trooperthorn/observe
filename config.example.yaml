@@ -12,6 +12,7 @@ server:
   # The audit log has its own retention, separate from polls and host samples.
   audit_retention_days: 365
   ingest_rate_per_minute: 120  # POST /api/ingest requests per peer per minute
+  # plugin_rate_per_minute: 300  # requests per peer to /api/plugins/* routes
   # Logins (create the first admin with --create-admin). Defaults shown.
   # session_idle_s: 1800
   # session_absolute_s: 43200
@@ -512,3 +513,8 @@ monitors:
     crash_result: warn
     components:
       - {source: hwmon, metric: cpu_temp_c, direction: above, warn: 75, crit: 90}
+
+# Plugins (watchpost/plugins.py). Only names listed here are loaded.
+# plugins: [pockethernet]
+# plugin_settings:
+#   pockethernet: {}

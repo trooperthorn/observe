@@ -246,6 +246,45 @@ last active admin cannot be disabled or demoted, enforced in one SQL
 statement. Rendering uses `textContent` only. Host confirmation is not on the
 screen yet, and no control changes a host.
 
+## Plugin host
+
+`watchpost/plugins.py` loads plugins (design in `docs/FIELD-DATA.md`). A plugin
+is a package that publishes a `Plugin` object under the entry point group
+`watchpost.plugins`. Only names listed under `plugins:` in the config are
+loaded; an installed plugin that is not listed is never imported. Startup stops
+with a `PluginError` naming the plugin when a listed plugin is not installed,
+its declared `core_versions` range (a PEP 440 specifier) does not contain this
+release, two packages claim one name, its settings fail validation, or a hook
+returns something malformed. `--validate` runs the same checks.
+
+The hooks are `routers`, `key_scopes`, `config_model` (settings come from
+`plugin_settings.<name>`), `migrations`, `pages`, `nav_entries`,
+`monitor_types` and `map_contribution`. `PluginBase` gives each an empty
+default. Routers, the config section and the navigation list are used now.
+Migrations, key scopes, monitor types, pages and map contributions are
+validated at load and applied by the later slices that build those features.
+Monitor type names must start with the plugin name and a dot, and key scope
+markers are three to eight lower-case letters that may not be `wpi`.
+
+The core mounts every plugin router under `/api/plugins/<name>/` and chooses
+the dependencies itself (`create_app` in `watchpost/web.py`):
+
+1. a per-peer rate limit (`server.plugin_rate_per_minute`, default 300);
+2. a login session for `GET` and `HEAD`, and a session plus the CSRF token for
+   every other method; a router may ask for `admin=True`, which also requires
+   the admin role, and can never ask for less;
+3. an audit middleware, so a plugin cannot skip it.
+
+Only plain HTTP routes are accepted, so a mounted sub-application or websocket
+cannot sit outside those dependencies. Basic auth never opens a plugin route.
+Audit rows: `plugin_request` for every state-changing request from a session
+(actor, method, path, status, plugin name), `plugin_denied` for 401, 403 and 429
+answers (at most one per peer per minute, with a count), and `plugin_failed`
+when a route raises. Reads that succeed are not audited, like the core read
+routes. `GET /api/plugins` lists loaded plugins and the navigation entries the
+caller may see. Key-authenticated plugin routes, such as phone uploads, arrive
+with the key scope slice; until then every plugin route needs a session.
+
 ## Phase 2 (planned): control
 
 Nothing in this section is built. It records the intended design so that

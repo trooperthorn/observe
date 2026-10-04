@@ -1,6 +1,6 @@
 # Field data from the Pockethernet app
 
-Status: design, not built. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
+Status: design; the plugin loader is built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
 Pockethernet Android app (repo `pocketethernet-app`) become properties of switch
 ports in watchpost, and how the mapping data in those results builds an
 infrastructure map with live availability and health.
@@ -144,10 +144,20 @@ watchpost gains a plugin system, and this design is split between the core and t
   - the report and jack pages.
 - **Later plugins.** hostwatch ingest and the control phase can move to plugins under the same rules. Control would then be entirely absent unless enabled.
 
+### Built: plugin loader (slice 1)
+
+`watchpost/plugins.py` and the mounting code in `watchpost/web.py` implement the host. Details differ from the sketch above in these ways:
+
+- Settings live under `plugin_settings.<name>` next to `plugins:`, because the core config rejects unknown keys.
+- Routers, the config section and navigation entries are active. Migrations, key scopes, monitor types, pages and map contributions are declared and validated at load, and applied by the slices that build them (build order items 2, 3 and 6, and the plugin's key scope work).
+- Every plugin route needs a login session for now. A key-authenticated route, as the phone upload needs, comes with the key scope slice and will be mounted by the core in the same way.
+- Audit kinds are `plugin_request` (state-changing requests), `plugin_denied` and `plugin_failed`. Successful reads are not audited.
+- A plugin's monitor type names must start with `<plugin>.`, and key scope markers may not be `wpi`.
+
 ## Build order
 
 **watchpost core.**
-1. Plugin loader and hooks.
+1. Plugin loader and hooks (built).
 2. Per-plugin migrations.
 3. Plugin pages and navigation.
 4. Infrastructure tables, port-key normalisation and property history.

@@ -16,3 +16,4 @@ requests-kerberos==0.15.0
 PyYAML==6.0.3
 uvicorn==0.53.0
 websockets==17.1
+packaging==26.3

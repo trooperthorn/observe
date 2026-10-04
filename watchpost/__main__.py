@@ -26,6 +26,7 @@ import uvicorn
 from . import __version__
 from .alerts import Alerter
 from .config import ConfigError, load_config
+from .plugins import PluginError, load_plugins
 from .scheduler import Scheduler
 from .store import Store
 from .web import create_app
@@ -48,11 +49,11 @@ async def _once(config, only: str | None) -> int:  # type: ignore[no-untyped-def
     return worst
 
 
-async def _serve(config) -> None:  # type: ignore[no-untyped-def]
+async def _serve(config, plugins) -> None:  # type: ignore[no-untyped-def]
     store = Store(config.server.db_path)
     alerter = Alerter(config)
     sched = Scheduler(config, store, alerter)
-    app = create_app(config, store, sched, alerter)
+    app = create_app(config, store, sched, alerter, plugins=plugins)
     server = uvicorn.Server(uvicorn.Config(
         app, host=config.server.listen, port=config.server.port,
         log_level="warning", access_log=False, proxy_headers=False,
@@ -196,6 +197,15 @@ def _create_admin(config, args) -> int:  # type: ignore[no-untyped-def]
         store.close()
 
 
+def _plugins(config):  # type: ignore[no-untyped-def]
+    """The listed plugins, or None after printing why startup must stop."""
+    try:
+        return load_plugins(config)
+    except PluginError as err:
+        print(f"plugin error: {err}", file=sys.stderr)
+        return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="watchpost")
     ap.add_argument("--config", default="/config/watchpost.yaml")
@@ -239,8 +249,11 @@ def main() -> int:
         print(f"config error: {err}", file=sys.stderr)
         return 2
     if args.validate:
+        plugins = _plugins(config)
+        if plugins is None:
+            return 2
         print(f"ok: {len(config.monitors)} monitors, {len(config.credentials)} credentials, "
-              f"{len(config.alerts)} alert targets")
+              f"{len(config.alerts)} alert targets, {len(plugins.plugins)} plugins")
         return 0
     if args.ingest_key_create or args.ingest_key_revoke or args.ingest_key_list:
         return _ingest_keys(config, args)
@@ -250,7 +263,10 @@ def main() -> int:
         return asyncio.run(_once(config, args.only))
     if args.discover:
         return _discover(config, args)
-    asyncio.run(_serve(config))
+    plugins = _plugins(config)
+    if plugins is None:
+        return 2
+    asyncio.run(_serve(config, plugins))
     return 0
 
 
