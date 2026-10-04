@@ -115,6 +115,7 @@ def _discover(config, args) -> int:  # type: ignore[no-untyped-def]
 
 def _ingest_keys(config, args) -> int:  # type: ignore[no-untyped-def]
     """Manage ingest keys directly in the database until the admin screen exists."""
+    from . import audit
     from .ingest.keys import IngestKeyError, create_key, list_keys, revoke_key
 
     async def run(store: Store) -> int:
@@ -122,16 +123,26 @@ def _ingest_keys(config, args) -> int:  # type: ignore[no-untyped-def]
             try:
                 key, info = await create_key(store, args.ingest_key_create, created_by="cli")
             except IngestKeyError as err:
+                await audit.record(store, "key_create_failed", actor="cli",
+                                   detail={"host": args.ingest_key_create[:128],
+                                           "reason": str(err)})
                 print(f"error: {err}", file=sys.stderr)
                 return 2
+            await audit.record(store, "key_created", actor="cli",
+                               detail={"host": info.host, "key_id": info.prefix})
             print(key)
             print(f"bound to host {info.host}, id {info.prefix}. This is the only time the "
                   "key is shown; it is stored hashed.", file=sys.stderr)
             return 0
         if args.ingest_key_revoke:
             if await revoke_key(store, args.ingest_key_revoke):
+                await audit.record(store, "key_revoked", actor="cli",
+                                   detail={"key_id": args.ingest_key_revoke[:64]})
                 print(f"revoked {args.ingest_key_revoke}", file=sys.stderr)
                 return 0
+            await audit.record(store, "key_revoke_failed", actor="cli",
+                               detail={"key_id": args.ingest_key_revoke[:64],
+                                       "reason": "no active key with that id"})
             print("error: no active key with that id", file=sys.stderr)
             return 2
         for k in await list_keys(store):
@@ -154,6 +165,7 @@ def _create_admin(config, args) -> int:  # type: ignore[no-untyped-def]
     import getpass
     import os
 
+    from . import audit
     from .auth import AuthError, create_user
 
     password = os.environ.get("WATCHPOST_ADMIN_PASSWORD")
@@ -167,10 +179,13 @@ def _create_admin(config, args) -> int:  # type: ignore[no-untyped-def]
         try:
             await create_user(store, config, args.create_admin, password, is_admin=True)
         except AuthError as err:
+            await audit.record(store, "user_create_failed", actor="cli",
+                               detail={"username": args.create_admin.strip()[:64],
+                                       "is_admin": True, "reason": str(err)})
             print(f"error: {err}", file=sys.stderr)
             return 2
-        await store.write_audit("user_created", actor="cli",
-                                detail={"username": args.create_admin.strip(), "is_admin": True})
+        await audit.record(store, "user_created", actor="cli",
+                           detail={"username": args.create_admin.strip(), "is_admin": True})
         print(f"created admin {args.create_admin.strip()}", file=sys.stderr)
         return 0
 

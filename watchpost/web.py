@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from . import audit
 from . import auth as authmod
 from .alerts import Alerter
 from .config import Config
@@ -137,8 +138,8 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             detail: dict[str, Any] = {"reason": reason}
             if covered:
                 detail["denials_covered"] = covered
-            await store.write_audit("login_failed", actor=actor, method="POST",
-                                    path="/api/login", status=status, remote=peer, detail=detail)
+            await audit.record(store, "login_failed", actor=actor, method="POST",
+                               path="/api/login", status=status, remote=peer, detail=detail)
         headers = {"Retry-After": "60"} if status == 429 else None
         # One generic message for every credential failure, so it reveals nothing.
         msg = "rate limit exceeded" if status == 429 else "invalid username or password"
@@ -181,9 +182,16 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             # The attempted name is audited only when it is a real account.
             return await login_failed(peer, 401, res.reason, res.username if res.user_id else "")
         assert res.user_id is not None
-        token, csrf = await authmod.create_session(store, config, res.user_id, auth_clock())
-        await store.write_audit("login_ok", actor=res.username, method="POST",
-                                path="/api/login", status=200, remote=peer)
+        try:
+            token, csrf = await authmod.create_session(store, config, res.user_id, auth_clock())
+        except Exception as err:
+            # The password was right but no session exists: record the partial login.
+            await audit.record(store, "login_error", actor=res.username, method="POST",
+                               path="/api/login", status=500, remote=peer,
+                               detail={"error": type(err).__name__})
+            raise
+        await audit.record(store, "login_ok", actor=res.username, method="POST",
+                           path="/api/login", status=200, remote=peer)
         out = JSONResponse({"username": res.username, "is_admin": res.is_admin, "csrf": csrf})
         set_cookie(out, token)
         return out
@@ -194,9 +202,9 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         token = request.cookies.get(authmod.COOKIE)
         if token:
             await authmod.revoke_session(store, token)
-        await store.write_audit("logout", actor=sess.username, method="POST",
-                                path="/api/logout", status=200,
-                                remote=request.client.host if request.client else "")
+        await audit.record(store, "logout", actor=sess.username, method="POST",
+                           path="/api/logout", status=200,
+                           remote=request.client.host if request.client else "")
         out = JSONResponse({"ok": True})
         out.delete_cookie(authmod.COOKIE, path="/", httponly=True, secure=secure,
                           samesite="strict")
@@ -222,16 +230,32 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             return JSONResponse({"detail": "username and password are required"},
                                 status_code=422)
         make_admin = body.get("is_admin") is True
+        remote = request.client.host if request.client else ""
+        shown = {"username": body["username"].strip()[:authmod.MAX_USERNAME],
+                 "is_admin": make_admin}
         try:
             uid = await authmod.create_user(store, config, body["username"], body["password"],
                                             is_admin=make_admin, now=auth_clock())
         except authmod.AuthError as err:
+            # AuthError texts describe the rule that failed and never echo the password.
+            await audit.record(store, "user_create_failed", actor=sess.username, method="POST",
+                               path="/api/admin/users", status=422, remote=remote,
+                               detail={**shown, "reason": str(err)})
             return JSONResponse({"detail": str(err)}, status_code=422)
-        await store.write_audit(
-            "user_created", actor=sess.username, method="POST", path="/api/admin/users",
-            status=200, remote=request.client.host if request.client else "",
-            detail={"username": body["username"].strip(), "is_admin": make_admin})
+        except Exception as err:
+            await audit.record(store, "user_create_error", actor=sess.username, method="POST",
+                               path="/api/admin/users", status=500, remote=remote,
+                               detail={**shown, "error": type(err).__name__})
+            raise
+        await audit.record(store, "user_created", actor=sess.username, method="POST",
+                           path="/api/admin/users", status=200, remote=remote, detail=shown)
         return JSONResponse({"id": uid})
+
+    @app.get("/api/audit", include_in_schema=False)
+    async def audit_log(limit: int = 100, kind: str | None = None, before: int | None = None,
+                        _: authmod.Session = Depends(guards.admin)) -> list[dict[str, Any]]:
+        """Admin only, session only: basic auth never reaches this route."""
+        return await audit.list_rows(store, limit, kind, before)
 
     @app.get("/api/monitors", dependencies=guarded)
     async def monitors() -> dict[str, Any]:

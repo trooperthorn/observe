@@ -285,6 +285,7 @@ def test_create_admin_cli(tmp_path, monkeypatch):
     conn = sqlite3.connect(db)
     try:
         assert conn.execute("SELECT username, is_admin FROM users").fetchall() == [("root", 1)]
-        assert conn.execute("SELECT kind, actor FROM audit").fetchall() == [("user_created", "cli")]
+        assert conn.execute("SELECT kind, actor FROM audit").fetchall() == [
+            ("user_created", "cli"), ("user_create_failed", "cli")]
     finally:
         conn.close()

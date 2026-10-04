@@ -174,6 +174,21 @@ source address, action, target, and outcome. The application never updates
 or deletes audit rows, and secrets are never written to it. Admins can read
 it from the admin screen.
 
+Built in `watchpost/audit.py`. Every writer calls `audit.record`, which
+sanitizes the path (control characters become `?`, 256 characters at most,
+adapted from hostwatch's `sanitize_audit_path`) and replaces the value of any
+detail field whose name suggests a secret, such as password, token, csrf or
+hash. Written now: `login_ok`, `login_failed` (aggregated per peer),
+`logout`, `user_created`, `key_created`, `key_revoked`, and `ingest_denied`.
+An action that stops partway also leaves a row: `login_error` (right password,
+no session), `user_create_failed` and `user_create_error`, `key_create_failed`,
+`key_revoke_failed`, and `ingest_failed` (a valid batch the store could not
+write). Key and CLI user changes are recorded with the actor `cli`. Role
+changes, user disabling and host confirmation have no routes yet, so they have
+no rows yet. `GET /api/audit` returns rows newest first and is admin only,
+session only, so basic auth never reaches it. It takes `limit` (1 to 500),
+`kind`, and `before` (a row id, to page backwards).
+
 ## Admin screen
 
 A single admin-only page lists users and ingest keys, creates and revokes

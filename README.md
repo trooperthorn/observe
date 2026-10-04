@@ -407,11 +407,20 @@ hours in all (`server.session_idle_s`, `session_absolute_s`). Set
 network. An account locks for 15 minutes after 5 failures, and logins are
 limited per peer address. Routes that change state need the session's CSRF
 token in an `X-CSRF-Token` header (`GET /api/session` returns it), and admin
-routes (`GET` and `POST /api/admin/users` so far) also need an admin user. The
+routes (`GET` and `POST /api/admin/users` and `GET /api/audit` so far) also need
+an admin user. The
 optional basic auth is kept for the read-only API and `/metrics` and is never
 accepted for admin routes. A session also opens the read-only API. No action
 that changes a host exists yet. The admin screen, host views and key
 management in the browser are later slices.
+
+The audit log (`watchpost/audit.py`) records logins, failed logins, logouts,
+user creation, key creation and revocation, and rejected ingest. When an action
+fails partway, such as a refused user, a login that cannot create a session, a
+failed key action or a batch the store could not write, a separate `*_failed`
+or `*_error` row says so. Passwords, tokens and keys are never written, paths
+are sanitized, and `GET /api/audit` (admin session only; parameters `limit`,
+`kind` and `before`) returns the rows newest first.
 
 ## Not implemented
 

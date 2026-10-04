@@ -29,6 +29,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
+from .. import audit
 from ..config import Config
 from ..store import Store
 from .boot import classify_events
@@ -131,9 +132,9 @@ def build_router(config: Config, store: Store,
             detail: dict[str, Any] = {"reason": reason, **(extra or {})}
             if covered:
                 detail["denials_covered"] = covered
-            await store.write_audit("ingest_denied", actor=actor, method=request.method,
-                                    path=request.url.path, status=status, remote=peer,
-                                    detail=detail)
+            await audit.record(store, "ingest_denied", actor=actor, method=request.method,
+                               path=request.url.path, status=status, remote=peer,
+                               detail=detail)
         headers = None
         if status == 429:
             headers = {"Retry-After": "60"}
@@ -171,7 +172,14 @@ def build_router(config: Config, store: Store,
             return await deny(request, 422, "schema validation failed", prefix, {"fields": where})
         if not await verify_key(store, key, batch.host):
             return await deny(request, 401, "missing or invalid ingest key")
-        n, e, duplicate = await store.ingest_batch(batch, classify_events(batch.events))
+        try:
+            n, e, duplicate = await store.ingest_batch(batch, classify_events(batch.events))
+        except Exception as err:
+            # Nothing was stored, so record that the batch failed partway.
+            await audit.record(store, "ingest_failed", actor=prefix, method=request.method,
+                               path=request.url.path, status=500, remote=peer,
+                               detail={"host": batch.host, "error": type(err).__name__})
+            raise
         out: dict[str, Any] = {"stored": n, "events_stored": e}
         if duplicate:
             out["duplicate"] = True

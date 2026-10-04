@@ -1,0 +1,81 @@
+"""The audit log: who did what, from where, and whether it worked.
+
+Rows are appended to the `audit` table and are never updated by the
+application; the only deletion is retention pruning in Store.prune. Every
+writer goes through record(), which sanitizes the request path and redacts any
+detail field whose name suggests a secret, so a careless caller cannot put a
+password, session token or ingest key into the log. Callers still must not pass
+secrets on purpose; the redaction is a second line, not the first.
+
+The path sanitizer is adapted from hostwatch's sanitize_audit_path (hostwatch,
+same owner): control characters, including ones decoded from percent-encoded
+input, become "?" and the length is capped, so a hostile path cannot forge log
+lines or bloat a row.
+
+Kinds written today: login_ok, login_failed, login_error, logout,
+user_created, user_create_failed, user_create_error, key_created,
+key_create_failed, key_revoked, key_revoke_failed, ingest_denied and
+ingest_failed. A kind ending in _failed or _error is an action that stopped
+partway or was refused after it started.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from .store import Store
+
+AUDIT_PATH_MAX = 256
+MAX_LIST = 500
+REDACTED = "[redacted]"
+_SECRET_WORDS = ("password", "passwd", "secret", "token", "csrf", "cookie", "authorization",
+                 "bearer", "api_key", "apikey", "ingest_key", "hash")
+
+
+def sanitize_audit_path(path: str) -> str:
+    """Control characters become "?" and the result is capped at AUDIT_PATH_MAX."""
+    cleaned = "".join("?" if (ord(c) < 32 or 0x7F <= ord(c) <= 0x9F) else c for c in str(path))
+    return cleaned[:AUDIT_PATH_MAX]
+
+
+def _redact(detail: dict[str, Any] | None) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in (detail or {}).items():
+        name = str(key).lower()
+        out[str(key)] = REDACTED if any(w in name for w in _SECRET_WORDS) else value
+    return out
+
+
+async def record(store: Store, kind: str, actor: str = "", method: str = "", path: str = "",
+                 status: int = 0, remote: str = "",
+                 detail: dict[str, Any] | None = None) -> None:
+    """Append one audit row with a sanitized path and redacted detail."""
+    await store.write_audit(kind, actor=actor, method=method, path=sanitize_audit_path(path),
+                            status=status, remote=remote, detail=_redact(detail))
+
+
+async def list_rows(store: Store, limit: int = 100, kind: str | None = None,
+                    before_id: int | None = None) -> list[dict[str, Any]]:
+    """Newest rows first. `before_id` pages backwards: only rows with a smaller id."""
+    limit = max(1, min(int(limit), MAX_LIST))
+    where, args = [], []
+    if kind:
+        where.append("kind=?")
+        args.append(kind)
+    if before_id is not None:
+        where.append("id<?")
+        args.append(int(before_id))
+    clause = f" WHERE {' AND '.join(where)}" if where else ""
+    rows = await store._run(
+        "SELECT id, ts, actor, kind, method, path, status, remote, detail FROM audit"
+        f"{clause} ORDER BY id DESC LIMIT ?", (*args, limit))
+    out = []
+    for r in rows:
+        try:
+            detail = json.loads(r[8])
+        except ValueError:
+            detail = {}
+        out.append({"id": r[0], "ts": r[1], "actor": r[2], "kind": r[3], "method": r[4],
+                    "path": r[5], "status": r[6], "remote": r[7], "detail": detail})
+    return out
