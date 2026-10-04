@@ -18,25 +18,119 @@ from typing import Any
 from .checks.base import CheckResult
 from .state import Transition
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS results (
+# Schema versioning uses a schema_version table. Databases created before it
+# existed hold only the results and events tables; they are treated as version
+# 1 once the baseline step has run, which changes nothing for them because every
+# statement is guarded. Each later step is additive: it only creates objects,
+# guarded with IF NOT EXISTS, so rerunning a step changes nothing. The layout
+# is adapted from hostwatch (hostwatch/store.py).
+BASELINE = (
+    """CREATE TABLE IF NOT EXISTS results (
     monitor TEXT NOT NULL,
     ts REAL NOT NULL,
     result TEXT NOT NULL,
     value REAL,
     latency_ms REAL,
     message TEXT
-);
-CREATE INDEX IF NOT EXISTS results_monitor_ts ON results(monitor, ts);
-CREATE TABLE IF NOT EXISTS events (
+)""",
+    "CREATE INDEX IF NOT EXISTS results_monitor_ts ON results(monitor, ts)",
+    """CREATE TABLE IF NOT EXISTS events (
     monitor TEXT NOT NULL,
     ts REAL NOT NULL,
     previous TEXT NOT NULL,
     current TEXT NOT NULL,
     message TEXT
-);
-CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
-"""
+)""",
+    "CREATE INDEX IF NOT EXISTS events_ts ON events(ts)",
+)
+
+HOST_TABLES = (
+    """CREATE TABLE IF NOT EXISTS hosts (
+  host TEXT PRIMARY KEY, platform TEXT NOT NULL DEFAULT '', agent_version TEXT NOT NULL DEFAULT '',
+  first_seen REAL NOT NULL, last_seen REAL NOT NULL, boot_id TEXT, boot_ts REAL,
+  heartbeat_ts REAL, clean_shutdown INTEGER, confirmed INTEGER NOT NULL DEFAULT 0, confirmed_at REAL
+)""",
+    """CREATE TABLE IF NOT EXISTS host_samples (
+  ts REAL NOT NULL, host TEXT NOT NULL, source TEXT NOT NULL, metric TEXT NOT NULL,
+  labels TEXT NOT NULL DEFAULT '{}', value REAL, unit TEXT NOT NULL DEFAULT ''
+)""",
+    "CREATE INDEX IF NOT EXISTS host_samples_lookup ON host_samples(host, source, metric, ts)",
+    "CREATE INDEX IF NOT EXISTS host_samples_ts ON host_samples(ts)",
+    """CREATE TABLE IF NOT EXISTS host_sources (
+  host TEXT NOT NULL, source TEXT NOT NULL, available INTEGER NOT NULL,
+  reason TEXT NOT NULL DEFAULT '', updated REAL NOT NULL, PRIMARY KEY (host, source)
+)""",
+    """CREATE TABLE IF NOT EXISTS host_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT NOT NULL, ts REAL NOT NULL,
+  kind TEXT NOT NULL, severity TEXT NOT NULL, source TEXT NOT NULL, title TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '{}', dedup_key TEXT NOT NULL, boot_id TEXT,
+  UNIQUE (host, dedup_key)
+)""",
+    "CREATE INDEX IF NOT EXISTS host_events_host_ts ON host_events(host, ts)",
+    "CREATE INDEX IF NOT EXISTS host_events_ts ON host_events(ts)",
+)
+
+ACCESS_TABLES = (
+    """CREATE TABLE IF NOT EXISTS ingest_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, prefix TEXT NOT NULL UNIQUE, hash TEXT NOT NULL,
+  host TEXT NOT NULL, created REAL NOT NULL, created_by TEXT NOT NULL DEFAULT '',
+  revoked_at REAL, last_used REAL
+)""",
+    """CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, hash TEXT NOT NULL,
+  is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0, locked_until REAL, created REAL NOT NULL
+)""",
+    """CREATE TABLE IF NOT EXISTS sessions (
+  id_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), csrf_hash TEXT NOT NULL,
+  created REAL NOT NULL, expires REAL NOT NULL, last_seen REAL NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0
+)""",
+    "CREATE INDEX IF NOT EXISTS sessions_expires ON sessions(expires)",
+    """CREATE TABLE IF NOT EXISTS audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL,
+  method TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '', status INTEGER NOT NULL DEFAULT 0,
+  remote TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '{}'
+)""",
+    "CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts)",
+)
+
+MIGRATIONS: dict[int, tuple[str, ...]] = {
+    1: BASELINE,
+    2: HOST_TABLES,
+    3: ACCESS_TABLES,
+}
+SCHEMA_VERSION = max(MIGRATIONS)
+
+
+class SchemaTooNewError(RuntimeError):
+    """Raised when the database was written by a newer version of watchpost."""
+
+
+def migrate(db: sqlite3.Connection) -> None:
+    """Bring an open database up to SCHEMA_VERSION, one transaction per step."""
+    old = db.isolation_level
+    db.isolation_level = None  # manual BEGIN and COMMIT so DDL is transactional
+    try:
+        db.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+        current = db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
+        latest = max(MIGRATIONS)
+        if current > latest:
+            raise SchemaTooNewError(
+                f"database schema version {current} is newer than this watchpost "
+                f"supports ({latest}); upgrade watchpost or restore an older database")
+        for version in range(current + 1, latest + 1):
+            db.execute("BEGIN")
+            try:
+                for stmt in MIGRATIONS[version]:
+                    db.execute(stmt)
+                db.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
+            db.execute("COMMIT")
+    finally:
+        db.isolation_level = old
 
 
 class Store:
@@ -46,7 +140,11 @@ class Store:
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
-        self._db.executescript(SCHEMA)
+        try:
+            migrate(self._db)
+        except BaseException:
+            self._db.close()
+            raise
         self._lock = threading.Lock()
 
     def _exec(self, sql: str, args: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
@@ -119,15 +217,21 @@ class Store:
             self._db.commit()
             return cur.rowcount
 
-    async def prune(self, retention_days: int) -> int:
-        """Drop poll rows past retention. Transitions are kept for at least a
-        year because they are small and are the record you want in a review."""
+    async def prune(self, retention_days: int, audit_retention_days: int = 365) -> int:
+        """Drop poll rows and host samples past retention. Transitions and host
+        events are kept for at least a year because they are small and are the
+        record you want in a review. The audit log has its own retention.
+        Expired sessions are removed. Returns the number of result rows removed."""
         now = time.time()
-        removed = await asyncio.to_thread(
-            self._delete, "DELETE FROM results WHERE ts < ?", (now - retention_days * 86400,))
+        cutoff = now - retention_days * 86400
+        keep = now - max(retention_days, 365) * 86400
+        removed = await asyncio.to_thread(self._delete, "DELETE FROM results WHERE ts < ?", (cutoff,))
+        await asyncio.to_thread(self._delete, "DELETE FROM host_samples WHERE ts < ?", (cutoff,))
+        await asyncio.to_thread(self._delete, "DELETE FROM events WHERE ts < ?", (keep,))
+        await asyncio.to_thread(self._delete, "DELETE FROM host_events WHERE ts < ?", (keep,))
         await asyncio.to_thread(
-            self._delete, "DELETE FROM events WHERE ts < ?",
-            (now - max(retention_days, 365) * 86400,))
+            self._delete, "DELETE FROM audit WHERE ts < ?", (now - audit_retention_days * 86400,))
+        await asyncio.to_thread(self._delete, "DELETE FROM sessions WHERE expires < ?", (now,))
         return removed
 
     def close(self) -> None:

@@ -50,6 +50,7 @@ surfaces write.
 | CSRF protection | planned | A per-session token is required on every state-changing request, in addition to SameSite. |
 | Admin role | planned | Only admins manage users and keys and confirm hosts. Viewers are read-only. The role is checked on the server for each request. |
 | Audit log | planned | Append-only from the application's side; records logins, failures, key and user changes, confirmations, and rejected ingest. Secrets are never written. Anyone who can edit the database file can still alter it, so protect `./data`. |
+| Versioned store | built, tables not yet used | Migrations are additive, guarded, and transactional per step. A database written by a newer version is refused rather than opened. The audit table has its own retention, `server.audit_retention_days`, separate from poll retention. The tables for keys, users, sessions and audit exist but nothing writes them until the later slices land. |
 | Future control channel | planned, not built | Agent-side allowlist, actions signed by watchpost, admin only, per-action confirmation, typed host name for reboot, all audited. A compromised watchpost could request any allowlisted action on every host, which is why the allowlist lives on the agent and the signing key is separate from ingest keys. No action that changes a host is built in the current phase. |
 
 ## Discovery

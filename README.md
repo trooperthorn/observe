@@ -344,6 +344,13 @@ builds no action that changes a host. The design and its limits are in
 this README describe the read-only behavior of the current release; they are
 updated as each phase lands.
 
+The SQLite store is now versioned. On startup watchpost applies any missing
+additive migrations, keeps all existing history, and refuses to open a
+database written by a newer version. `server.retention_days` governs poll
+results and host samples, and the new `server.audit_retention_days` (default
+365) governs the audit log independently. The new tables for hosts, keys,
+users, sessions and audit stay empty until the ingest and login work lands.
+
 ## Not implemented
 
 Network discovery, automated remediation actions, maps, native DCOM WMI,

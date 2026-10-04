@@ -608,6 +608,7 @@ class ServerConfig(Strict):
     port: int = 8080
     db_path: str = "/data/watchpost.db"
     retention_days: int = 30
+    audit_retention_days: int = 365
     basic_auth_user: str | None = None
     basic_auth_password: str | None = None
     max_concurrency: int = 32

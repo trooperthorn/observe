@@ -31,11 +31,23 @@ request that fails validation is dropped and counted, never stored in part.
 ## Storage
 
 Pushed data lives in the existing SQLite database, behind a versioned schema.
-The store records a schema version, applies migrations in order at startup
-inside a transaction, and refuses to start against a database written by a
-newer version. Tables added in this phase hold hosts, ingest keys, snapshots,
-boot and crash events, users, sessions, and the audit log. Existing history
-tables are untouched. The store layout is adapted from hostwatch's `store.py`.
+A `schema_version` table records the applied version. At startup the store
+applies each missing migration in order, one transaction per step, and rolls a
+failed step back. Every step is additive and guarded with `IF NOT EXISTS`, so
+rerunning one changes nothing. A database created before versioning existed
+holds only `results` and `events`; it is treated as version 1 and keeps all its
+rows. A database with a newer version than the code supports raises
+`SchemaTooNewError` and is left untouched.
+
+Version 2 adds `hosts`, `host_samples`, `host_sources` and `host_events`.
+Version 3 adds `ingest_keys`, `users`, `sessions` and `audit`. Existing history
+tables are untouched. The layout is adapted from hostwatch's `store.py`.
+
+Retention is applied by `Store.prune`. Poll results and host samples are
+dropped after `server.retention_days`. Transitions and host events are kept for
+at least a year. The audit log has its own setting,
+`server.audit_retention_days` (default 365), so shortening poll retention never
+shortens the audit trail. Expired sessions are deleted in the same pass.
 
 ## Host-bound keys
 

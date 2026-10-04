@@ -189,7 +189,8 @@ class Scheduler:
         while True:
             try:
                 await self.refresh_forecasts()
-                removed = await self.store.prune(self.config.server.retention_days)
+                removed = await self.store.prune(
+                    self.config.server.retention_days, self.config.server.audit_retention_days)
                 if removed:
                     log.info("pruned %d result rows", removed)
             except Exception:  # noqa: BLE001
