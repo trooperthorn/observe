@@ -25,27 +25,31 @@ identity, a boot identifier, an uptime, and hardware readings.
 
 The ingest endpoint is a write path that does not use a login, so it is the
 most constrained one. A request must carry an ingest key. The body size is
-capped, the schema is validated strictly with unknown fields rejected, and a
+capped, the schema is validated, with unknown fields ignored as hostwatch ignores them, and a
 request that fails validation is dropped and counted, never stored in part.
 
 The models live in `watchpost/ingest/schema.py` (Batch, Sample, SourceStatus,
 Event). Field names and types match hostwatch, so a well-formed agent needs no
-change. watchpost tightens them: unknown fields and unknown `schema_version`
-values are validation errors, and each batch is limited to 256 sources, 5000
+change. watchpost tightens them: unknown fields are ignored so a newer agent is not
+dead-lettered, an unknown `schema_version` is a validation error, and each batch is limited to 256 sources, 5000
 samples and 500 events, with bounded string lengths, 32 labels per sample, and
 event detail of at most 64 keys and 8192 bytes of JSON. Non-finite numbers are
 rejected. `MAX_BODY_BYTES` (1 MiB) is defined there and enforced by the
 endpoint.
 
-The endpoint is `POST /api/ingest` in `watchpost/ingest/api.py`. It checks, in
+The endpoint is `POST /internal/v1/ingest`, the path unmodified hostwatch agents
+use, with `POST /api/ingest` kept as an alias, in `watchpost/ingest/api.py`. It checks, in
 this order: a per-peer rate limit (429), a valid unrevoked bearer key (401,
 before the body is read), the body size cap (413), the key's bound host against
-the host in the body (403), and the strict schema (422). Nothing is stored from
+the host in the body (403), and the schema (422). hostwatch agents dead-letter
+400 and 422 and keep retrying every other failure, so 422 is reserved for a
+batch that is malformed or missing required fields, and the reason is logged. Nothing is stored from
 a request that fails a check. A valid batch is written in one transaction by
 `Store.ingest_batch`: the host row, samples, source status and events. A
 `batch_id` is recorded per host in `ingest_batches` (schema version 4), so an
 agent that replays its outbox gets `duplicate: true` and nothing is stored a
-second time. Events are kept once per host and `dedup_key`. A source reported
+second time. A batch without `batch_id` is identified by a SHA-256 of its
+content, so a resend is acknowledged the same way. Events are kept once per host and `dedup_key`. A source reported
 with `present: false` is stored as unavailable with the reason "not present on
 this host", because the version 2 table has no separate present column.
 

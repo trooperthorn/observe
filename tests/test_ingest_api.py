@@ -191,7 +191,7 @@ def test_older_boot_event_does_not_overwrite_newer_state(env):
 def test_invalid_body_is_422_and_stores_nothing(env):
     key = env.key("nas01")
     bad = fixture("batch_minimal")
-    bad["unexpected"] = 1
+    del bad["samples"]
     assert env.post(bad, key).status_code == 422
     worse = fixture("batch_minimal")
     worse["samples"][0]["value"] = "twelve"
@@ -305,3 +305,64 @@ def test_rate_limiter_window():
     assert rl.allow("b")
     clock.now += 60
     assert rl.allow("a")
+
+
+def hostwatch_batch() -> dict:
+    """A batch in the shape hostwatch's Batch.model_dump_json() produces, with every
+    field present, including the defaults and a null batch_id."""
+    return {"schema_version": 1, "agent_version": "0.9.0", "host": "nas01", "platform": "x86",
+            "sent_at": 1700000100.0,
+            "sources": [{"source": "rapl", "available": True, "reason": "", "present": True}],
+            "samples": [{"source": "rapl", "metric": "package_watts", "value": 12.5, "unit": "W",
+                         "labels": {}, "ts": 1700000090.0}],
+            "events": [], "batch_id": None}
+
+
+def agent_post(env, body: dict, key: str):
+    """The request hostwatch's Agent.flush sends: path, body as raw JSON, headers."""
+    return env.client.post("/internal/v1/ingest", content=json.dumps(body),
+                           headers={"Authorization": f"Bearer {key}",
+                                    "Content-Type": "application/json"})
+
+
+def test_hostwatch_agent_request_is_accepted_end_to_end(env):
+    key = env.key("nas01")
+    r = agent_post(env, hostwatch_batch(), key)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"stored": 1, "events_stored": 0}
+    assert env.rows("SELECT host, metric, value FROM host_samples") == [("nas01", "package_watts", 12.5)]
+
+
+def test_batch_with_unknown_fields_is_accepted(env):
+    key = env.key("nas01")
+    body = hostwatch_batch()
+    body["future_field"] = {"a": 1}
+    body["samples"][0]["new_thing"] = 2
+    body["sources"][0]["note"] = "x"
+    r = agent_post(env, body, key)
+    assert r.status_code == 200, r.text
+    assert r.json()["stored"] == 1
+
+
+def test_resend_without_batch_id_is_stored_once(env):
+    key = env.key("nas01")
+    body = hostwatch_batch()
+    assert agent_post(env, body, key).json() == {"stored": 1, "events_stored": 0}
+    again = agent_post(env, body, key)
+    assert again.status_code == 200
+    assert again.json() == {"stored": 0, "events_stored": 0, "duplicate": True}
+    assert env.rows("SELECT COUNT(*) FROM host_samples") == [(1,)]
+    changed = hostwatch_batch()
+    changed["samples"][0]["ts"] += 15
+    assert agent_post(env, changed, key).json()["stored"] == 1
+    assert env.rows("SELECT COUNT(*) FROM host_samples") == [(2,)]
+
+
+def test_invalid_batch_is_422_and_logged(env, caplog):
+    key = env.key("nas01")
+    body = hostwatch_batch()
+    del body["samples"]
+    with caplog.at_level("WARNING", logger="watchpost.ingest"):
+        r = agent_post(env, body, key)
+    assert r.status_code == 422
+    assert "samples" in caplog.text

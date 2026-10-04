@@ -3,9 +3,9 @@
 Copied from hostwatch/schema.py (hostwatch, same owner) and adapted. The
 field names, types and defaults are unchanged, so a batch that a hostwatch
 agent sends today parses here without modification. Differences, all
-tightening and none visible to a well-formed agent:
+tightening and none visible to a well-formed agent. Unknown fields are ignored,
+as hostwatch ignores them, so a newer agent is not dead-lettered:
 
-- Unknown fields are rejected instead of ignored.
 - Strings, lists and mappings have size and count limits.
 - An unknown schema_version is a validation error (not a bare ValueError).
 - Non-finite numbers are rejected in every float field.
@@ -38,7 +38,7 @@ MAX_TEXT = 1024
 
 
 class _Wire(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
 
 class Sample(_Wire):

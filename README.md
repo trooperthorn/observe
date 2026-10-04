@@ -353,8 +353,10 @@ results and host samples, and the new `server.audit_retention_days` (default
 users, sessions and audit are filled by the ingest and login routes.
 
 The hostwatch wire schema models exist in `watchpost/ingest/schema.py`, with
-size and count limits and strict rejection of unknown fields and schema
-versions. `POST /api/ingest` (`watchpost/ingest/api.py`) now receives batches.
+size and count limits, ignoring of unknown fields, and rejection of unknown schema
+versions. `POST /internal/v1/ingest` (the path hostwatch agents use; `/api/ingest`
+is an alias) in `watchpost/ingest/api.py` receives batches. A batch without
+`batch_id` is deduplicated by a content hash.
 It takes `Authorization: Bearer <ingest key>`, rejects a body over 1 MiB, and
 stores samples, source status and events only when the key is valid and bound
 to the host named in the body. The answers are 401 for a missing, wrong or

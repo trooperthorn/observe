@@ -54,15 +54,12 @@ def test_unknown_version_rejected(bad):
         Batch.model_validate(raw)
 
 
-def test_unknown_field_rejected():
+def test_unknown_field_ignored():
     raw = load("batch_minimal")
     raw["extra"] = 1
-    with pytest.raises(ValidationError):
-        Batch.model_validate(raw)
-    raw = load("batch_minimal")
     raw["samples"][0]["bonus"] = 1
-    with pytest.raises(ValidationError):
-        Batch.model_validate(raw)
+    batch = Batch.model_validate(raw)
+    assert not hasattr(batch, "extra")
 
 
 @pytest.mark.parametrize("path,value", [

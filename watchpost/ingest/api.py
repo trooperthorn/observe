@@ -1,4 +1,4 @@
-"""POST /api/ingest: authenticated, size-capped, rate-limited push endpoint.
+"""POST /internal/v1/ingest (alias /api/ingest): authenticated, size-capped, rate-limited push endpoint.
 
 This is the one write path that does not use a login, so it is the most
 constrained. Order of checks, cheapest and least informative first:
@@ -8,7 +8,7 @@ constrained. Order of checks, cheapest and least informative first:
    body is not read before this passes.
 3. The body is read with a hard cap of MAX_BODY_BYTES (413).
 4. The host in the body must equal the host the key is bound to (403).
-5. The body must validate against the strict wire schema (422). Nothing is
+5. The body must validate against the wire schema (422). Unknown fields are ignored. Nothing is
    stored from a request that fails any check.
 
 Denials are written to the audit log through DenialAggregator, adapted from
@@ -21,6 +21,7 @@ agent's outbox replay safe.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable
 from typing import Any
@@ -35,6 +36,8 @@ from ..store import Store
 from .boot import classify_events
 from .keys import key_host, verify_key
 from .schema import MAX_BODY_BYTES, Batch
+
+log = logging.getLogger("watchpost.ingest")
 
 
 class DenialAggregator:
@@ -142,6 +145,9 @@ def build_router(config: Config, store: Store,
             headers = {"WWW-Authenticate": "Bearer"}
         return JSONResponse({"detail": reason}, status_code=status, headers=headers)
 
+    # /internal/v1/ingest is the path unmodified hostwatch agents post to;
+    # /api/ingest is kept as an alias.
+    @router.post("/internal/v1/ingest", include_in_schema=False)
     @router.post("/api/ingest", include_in_schema=False)
     async def ingest(request: Request) -> JSONResponse:
         peer = request.client.host if request.client else "unknown"
@@ -169,6 +175,8 @@ def build_router(config: Config, store: Store,
             batch = Batch.model_validate(raw)
         except ValidationError as exc:
             where = [".".join(str(p) for p in e["loc"]) for e in exc.errors()[:5]]
+            # 422 is dead-lettered by hostwatch agents, so say why in the log.
+            log.warning("ingest batch from %s rejected as invalid (422): %s", claimed[:128], where)
             return await deny(request, 422, "schema validation failed", prefix, {"fields": where})
         if not await verify_key(store, key, batch.host):
             return await deny(request, 401, "missing or invalid ingest key")

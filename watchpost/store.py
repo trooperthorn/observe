@@ -9,6 +9,7 @@ run in a worker thread, so the event loop never blocks on disk I/O.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sqlite3
 import threading
@@ -146,6 +147,13 @@ def migrate(db: sqlite3.Connection) -> None:
         db.isolation_level = old
 
 
+def content_key(batch: Batch) -> str:
+    """Stable identity of a batch that carries no batch_id: a SHA-256 of its
+    validated content. The prefix keeps it apart from any agent-chosen id."""
+    digest = hashlib.sha256(batch.model_dump_json(exclude={"batch_id"}).encode("utf-8")).hexdigest()
+    return f"content:{digest}"
+
+
 class Store:
     def __init__(self, path: str) -> None:
         if path != ":memory:":
@@ -229,12 +237,14 @@ class Store:
         # Adapted from hostwatch's Store.ingest_batch (hostwatch, same owner): one
         # transaction for the batch id, host row, sources, samples and events.
         with self._lock, self._db:
-            if batch.batch_id is not None:
-                cur = self._db.execute(
-                    "INSERT INTO ingest_batches (host, batch_id, ts) VALUES (?,?,?) "
-                    "ON CONFLICT(host, batch_id) DO NOTHING", (batch.host, batch.batch_id, now))
-                if cur.rowcount == 0:
-                    return 0, 0, True
+            # A batch without batch_id is identified by a hash of its content, so a
+            # resend of the same batch is not stored twice.
+            batch_key = batch.batch_id if batch.batch_id is not None else content_key(batch)
+            cur = self._db.execute(
+                "INSERT INTO ingest_batches (host, batch_id, ts) VALUES (?,?,?) "
+                "ON CONFLICT(host, batch_id) DO NOTHING", (batch.host, batch_key, now))
+            if cur.rowcount == 0:
+                return 0, 0, True
             self._db.execute(
                 "INSERT INTO hosts (host, platform, agent_version, first_seen, last_seen, heartbeat_ts) "
                 "VALUES (?,?,?,?,?,?) ON CONFLICT(host) DO UPDATE SET platform=excluded.platform, "
