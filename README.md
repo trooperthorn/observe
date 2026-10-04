@@ -351,6 +351,10 @@ results and host samples, and the new `server.audit_retention_days` (default
 365) governs the audit log independently. The new tables for hosts, keys,
 users, sessions and audit stay empty until the ingest and login work lands.
 
+The hostwatch wire schema models exist in `watchpost/ingest/schema.py`, with
+size and count limits and strict rejection of unknown fields and schema
+versions. Nothing receives batches yet; the ingest endpoint is a later slice.
+
 ## Not implemented
 
 Network discovery, automated remediation actions, maps, native DCOM WMI,

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "agent_version": "0.4.0",
+  "host": "pi-garage",
+  "platform": "linux",
+  "sent_at": 1760000000.0,
+  "sources": [
+    {"source": "thermal", "available": true}
+  ],
+  "samples": [
+    {"source": "thermal", "metric": "cpu_temp_c", "value": 48.0, "unit": "C", "ts": 1760000000.0}
+  ]
+}

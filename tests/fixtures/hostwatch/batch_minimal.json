@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "agent_version": "0.9.0",
+  "host": "nas01",
+  "platform": "linux",
+  "sent_at": 1760000000.0,
+  "sources": [
+    {"source": "rapl", "available": true},
+    {"source": "mdraid", "available": false, "reason": "no md arrays", "present": false}
+  ],
+  "samples": [
+    {"source": "rapl", "metric": "package_watts", "value": 12.5, "unit": "W", "labels": {"package": "0"}, "ts": 1760000000.0},
+    {"source": "rapl", "metric": "dram_watts", "value": null, "unit": "W", "labels": {}, "ts": 1760000000.0}
+  ],
+  "events": [],
+  "batch_id": "8f14e45f-ceea-467f-a0e6-6c1f3a1c2b11"
+}

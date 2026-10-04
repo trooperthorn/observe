@@ -44,7 +44,7 @@ surfaces write.
 | Control | Status | Notes |
 |---|---|---|
 | Ingest keys bound to one host | planned | A key is valid only for the host name it was created for, shown once, stored hashed, revocable. A stolen key can impersonate only its own host. |
-| Ingest input validated | planned | Strict schema, unknown fields rejected, body size capped, nothing stored from a failed request. |
+| Ingest input validated | schema built, endpoint planned | The wire models in `watchpost/ingest/schema.py` reject unknown fields and schema versions and cap list sizes, string lengths and event detail. The body size cap and the rule that nothing is stored from a failed request belong to the endpoint, which is not built yet. |
 | Unconfirmed pushed hosts never alert | planned | A new host stays pending until an admin confirms it, so an unknown sender cannot create alerts. |
 | Sessions | planned | Random identifiers stored hashed, HttpOnly, Secure, SameSite=Strict cookie, idle and absolute expiry, Argon2id passwords, login rate limiting. |
 | CSRF protection | planned | A per-session token is required on every state-changing request, in addition to SameSite. |

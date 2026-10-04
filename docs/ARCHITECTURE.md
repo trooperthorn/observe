@@ -28,6 +28,15 @@ most constrained one. A request must carry an ingest key. The body size is
 capped, the schema is validated strictly with unknown fields rejected, and a
 request that fails validation is dropped and counted, never stored in part.
 
+The models live in `watchpost/ingest/schema.py` (Batch, Sample, SourceStatus,
+Event). Field names and types match hostwatch, so a well-formed agent needs no
+change. watchpost tightens them: unknown fields and unknown `schema_version`
+values are validation errors, and each batch is limited to 256 sources, 5000
+samples and 500 events, with bounded string lengths, 32 labels per sample, and
+event detail of at most 64 keys and 8192 bytes of JSON. Non-finite numbers are
+rejected. `MAX_BODY_BYTES` (1 MiB) is defined there for the endpoint to
+enforce. The models are built; the endpoint is a later slice.
+
 ## Storage
 
 Pushed data lives in the existing SQLite database, behind a versioned schema.

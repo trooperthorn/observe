@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "agent_version": "0.9.0",
+  "host": "nas01",
+  "platform": "linux",
+  "sent_at": 1760000000.0,
+  "sources": [
+    {"source": "journal", "available": true}
+  ],
+  "samples": [
+    {"source": "rapl", "metric": "package_watts", "value": 9.0, "unit": "W", "labels": {"package": "0"}, "ts": 1760000000.0}
+  ],
+  "events": [
+    {
+      "kind": "boot.unclean_shutdown",
+      "severity": "critical",
+      "source": "journal",
+      "ts": 1759999000.0,
+      "title": "Previous boot ended without a clean shutdown",
+      "detail": {"previous_boot_id": "aaaa", "uptime_s": 86400},
+      "dedup_key": "boot:bbbb",
+      "boot_id": "bbbb"
+    },
+    {
+      "kind": "boot.clean_shutdown",
+      "severity": "info",
+      "source": "journal",
+      "ts": 1759998000.0,
+      "title": "Clean shutdown",
+      "dedup_key": "boot:aaaa"
+    }
+  ],
+  "batch_id": "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed"
+}
