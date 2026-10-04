@@ -609,6 +609,8 @@ class ServerConfig(Strict):
     db_path: str = "/data/watchpost.db"
     retention_days: int = 30
     audit_retention_days: int = 365
+    ingest_rate_per_minute: int = Field(default=120, ge=1)
+    ingest_rate_per_minute: int = Field(default=120, ge=1)
     basic_auth_user: str | None = None
     basic_auth_password: str | None = None
     max_concurrency: int = 32

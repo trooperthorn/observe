@@ -1,9 +1,11 @@
-"""Read-only HTTP surface: dashboard, JSON API, Prometheus metrics.
+"""HTTP surface: dashboard, JSON API, Prometheus metrics, and host ingest.
 
-There are no endpoints that change state. Adding, removing, or editing a
+The dashboard endpoints do not change state. Adding, removing, or editing a
 monitor means editing the YAML and restarting the container, which keeps the
 config reviewable and means a stolen dashboard session can read your
-inventory but can not change what is watched or silence an alert.
+inventory but can not change what is watched or silence an alert. The one
+write path is POST /api/ingest (watchpost/ingest/api.py), which accepts pushed
+host data with a host-bound ingest key and does not touch monitors.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from __future__ import annotations
 import base64
 import hmac
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .alerts import Alerter
 from .config import Config
+from .ingest.api import build_router
 from .scheduler import Scheduler
 from .store import Store
 
@@ -65,7 +69,8 @@ def _monitor_view(mon: Any, st: Any, sched: Any) -> dict[str, Any]:
     }
 
 
-def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Alerter) -> FastAPI:
+def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Alerter,
+               ingest_clock: Callable[[], float] = time.monotonic) -> FastAPI:
     app = FastAPI(title="watchpost", version=__version__, docs_url=None, redoc_url=None,
                   openapi_url=None)
     user, pw = config.server.basic_auth_user, config.server.basic_auth_password
@@ -86,6 +91,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             raise HTTPException(401, headers={"WWW-Authenticate": 'Basic realm="watchpost"'})
 
     guarded = [Depends(auth)]
+    app.include_router(build_router(config, store, ingest_clock))
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Any) -> Response:

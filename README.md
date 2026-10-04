@@ -353,14 +353,31 @@ users, sessions and audit stay empty until the ingest and login work lands.
 
 The hostwatch wire schema models exist in `watchpost/ingest/schema.py`, with
 size and count limits and strict rejection of unknown fields and schema
-versions. Nothing receives batches yet; the ingest endpoint is a later slice.
+versions. `POST /api/ingest` (`watchpost/ingest/api.py`) now receives batches.
+It takes `Authorization: Bearer <ingest key>`, rejects a body over 1 MiB, and
+stores samples, source status and events only when the key is valid and bound
+to the host named in the body. The answers are 401 for a missing, wrong or
+revoked key, 403 for a valid key bound to another host, 413 for an oversized
+body, 422 for a body that fails the schema, and 429 over the per-peer rate
+limit (`server.ingest_rate_per_minute`, default 120). A batch that repeats a
+`batch_id` is acknowledged with `"duplicate": true` and stored once, so an
+agent can replay its outbox safely. Denials are written to the audit table at
+most once per peer per minute, with a count of the denials the row covers. The
+endpoint does not use the optional dashboard basic auth, because agents carry
+their own key.
+
+Boot events from the agent are classified as clean, crash or unknown. The
+classification is stored in the event detail, and the host row records the
+current boot id and whether the previous boot ended cleanly. An unrecognised
+boot kind is unknown, never clean. Pushed hosts are stored but are not yet
+shown in the dashboard or turned into monitors; that is a later slice.
 
 Ingest keys are managed from the command line until the admin screen exists.
 `python -m watchpost --config watchpost.yaml --ingest-key-create HOST` prints a
 new key once and stores only a hash; the key works for ingest and only for
 that host name. `--ingest-key-list` shows each key's id, host, state and last
-use, and `--ingest-key-revoke ID` revokes one. Nothing accepts the keys yet,
-because the ingest endpoint is a later slice.
+use, and `--ingest-key-revoke ID` revokes one. The keys are accepted only
+by `POST /api/ingest`.
 
 ## Not implemented
 

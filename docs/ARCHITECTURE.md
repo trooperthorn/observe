@@ -34,8 +34,28 @@ change. watchpost tightens them: unknown fields and unknown `schema_version`
 values are validation errors, and each batch is limited to 256 sources, 5000
 samples and 500 events, with bounded string lengths, 32 labels per sample, and
 event detail of at most 64 keys and 8192 bytes of JSON. Non-finite numbers are
-rejected. `MAX_BODY_BYTES` (1 MiB) is defined there for the endpoint to
-enforce. The models are built; the endpoint is a later slice.
+rejected. `MAX_BODY_BYTES` (1 MiB) is defined there and enforced by the
+endpoint.
+
+The endpoint is `POST /api/ingest` in `watchpost/ingest/api.py`. It checks, in
+this order: a per-peer rate limit (429), a valid unrevoked bearer key (401,
+before the body is read), the body size cap (413), the key's bound host against
+the host in the body (403), and the strict schema (422). Nothing is stored from
+a request that fails a check. A valid batch is written in one transaction by
+`Store.ingest_batch`: the host row, samples, source status and events. A
+`batch_id` is recorded per host in `ingest_batches` (schema version 4), so an
+agent that replays its outbox gets `duplicate: true` and nothing is stored a
+second time. Events are kept once per host and `dedup_key`. A source reported
+with `present: false` is stored as unavailable with the reason "not present on
+this host", because the version 2 table has no separate present column.
+
+Denied requests are written to the audit log as `ingest_denied`, through an
+aggregator adapted from hostwatch's hub: at most one row per peer per minute,
+carrying the number of denials it covers, with at most 4096 peers tracked. The
+row holds the key's public prefix and never the key. The rate limit is a fixed
+window per peer address, set by `server.ingest_rate_per_minute`. The peer is the
+socket address; forwarded headers are not trusted. The route does not use the
+dashboard basic auth, because agents authenticate with their own key.
 
 ## Storage
 
@@ -49,7 +69,8 @@ rows. A database with a newer version than the code supports raises
 `SchemaTooNewError` and is left untouched.
 
 Version 2 adds `hosts`, `host_samples`, `host_sources` and `host_events`.
-Version 3 adds `ingest_keys`, `users`, `sessions` and `audit`. Existing history
+Version 3 adds `ingest_keys`, `users`, `sessions` and `audit`, and version 4 adds
+`ingest_batches`. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
 
 Retention is applied by `Store.prune`. Poll results and host samples are
@@ -79,11 +100,17 @@ admin screen exists, `--ingest-key-create`, `--ingest-key-list` and
 
 ## Boot and crash events
 
-Each snapshot carries a boot identifier. When it changes, watchpost records a
-boot event. The classifier, adapted from hostwatch, then decides whether the
-previous session ended cleanly (a shutdown marker was pushed) or not (a crash
-or power loss), and records a crash event in the second case. Events appear in
-the existing event log and on the host view.
+The agent gathers the evidence (heartbeat, pstore, watchdog status, previous
+boot journal) and sends one `boot.<kind>` event per detected reboot. The
+classifier in `watchpost/ingest/boot.py`, adapted from hostwatch, reduces the
+kind to clean (`clean_shutdown`), crash (`kernel_panic`, `watchdog_reset`,
+`power_loss`, `unknown_unclean`, `unclean_shutdown`) or unknown (anything else,
+including `agent_stopped` and kinds this version has not seen). It never
+upgrades unknown to clean. The result is stored in the event detail as
+`classification`, and the host row keeps the newest boot id and a
+`clean_shutdown` flag (1 clean, 0 crash, null unknown). An older event never
+overwrites a newer one. Showing events in the event log and on the host view
+is a later slice.
 
 ## Status integration
 

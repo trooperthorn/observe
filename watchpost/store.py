@@ -9,6 +9,7 @@ run in a worker thread, so the event loop never blocks on disk I/O.
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import threading
 import time
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .checks.base import CheckResult
+from .ingest.schema import Batch
 from .state import Transition
 
 # Schema versioning uses a schema_version table. Databases created before it
@@ -95,10 +97,18 @@ ACCESS_TABLES = (
     "CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts)",
 )
 
+BATCH_TABLES = (
+    """CREATE TABLE IF NOT EXISTS ingest_batches (
+  host TEXT NOT NULL, batch_id TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (host, batch_id)
+)""",
+    "CREATE INDEX IF NOT EXISTS ingest_batches_ts ON ingest_batches(ts)",
+)
+
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: BASELINE,
     2: HOST_TABLES,
     3: ACCESS_TABLES,
+    4: BATCH_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
@@ -211,6 +221,80 @@ class Store:
         total, ok = rows[0]
         return None if not total else round(ok / total * 100, 3)
 
+    def _ingest_sync(self, batch: Batch, boots: dict[int, tuple[str, int | None]],
+                     now: float) -> tuple[int, int, bool]:
+        # Adapted from hostwatch's Store.ingest_batch (hostwatch, same owner): one
+        # transaction for the batch id, host row, sources, samples and events.
+        with self._lock, self._db:
+            if batch.batch_id is not None:
+                cur = self._db.execute(
+                    "INSERT INTO ingest_batches (host, batch_id, ts) VALUES (?,?,?) "
+                    "ON CONFLICT(host, batch_id) DO NOTHING", (batch.host, batch.batch_id, now))
+                if cur.rowcount == 0:
+                    return 0, 0, True
+            self._db.execute(
+                "INSERT INTO hosts (host, platform, agent_version, first_seen, last_seen, heartbeat_ts) "
+                "VALUES (?,?,?,?,?,?) ON CONFLICT(host) DO UPDATE SET platform=excluded.platform, "
+                "agent_version=excluded.agent_version, last_seen=excluded.last_seen, "
+                "heartbeat_ts=excluded.heartbeat_ts",
+                (batch.host, batch.platform, batch.agent_version, now, now, batch.sent_at))
+            self._db.executemany(
+                "INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
+                "VALUES (?,?,?,?,?,?,?)",
+                [(s.ts, batch.host, s.source, s.metric, json.dumps(s.labels, sort_keys=True),
+                  s.value, s.unit) for s in batch.samples])
+            self._db.executemany(
+                "INSERT INTO host_sources (host, source, available, reason, updated) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(host, source) DO UPDATE SET available=excluded.available, "
+                "reason=excluded.reason, updated=excluded.updated",
+                [(batch.host, st.source, int(st.available and st.present),
+                  st.reason or ("" if st.present else "not present on this host"), now)
+                 for st in batch.sources])
+            stored = 0
+            for i, ev in enumerate(batch.events):
+                detail = dict(ev.detail)
+                if i in boots:
+                    detail["classification"] = boots[i][0]
+                cur = self._db.execute(
+                    "INSERT INTO host_events (host, ts, kind, severity, source, title, detail, "
+                    "dedup_key, boot_id) VALUES (?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(host, dedup_key) DO NOTHING",
+                    (batch.host, ev.ts, ev.kind, ev.severity, ev.source, ev.title,
+                     json.dumps(detail, sort_keys=True), ev.dedup_key, ev.boot_id))
+                if cur.rowcount == 0:
+                    continue
+                stored += 1
+                if i in boots:
+                    clean = boots[i][1]
+                    self._db.execute(
+                        "UPDATE hosts SET boot_id=?, boot_ts=?, clean_shutdown=? "
+                        "WHERE host=? AND (boot_ts IS NULL OR boot_ts <= ?)",
+                        (ev.boot_id, ev.ts, clean, batch.host, ev.ts))
+            return len(batch.samples), stored, False
+
+    async def ingest_batch(self, batch: Batch, boots: dict[int, tuple[str, int | None]],
+                           now: float | None = None) -> tuple[int, int, bool]:
+        """Store a pushed batch. boots maps an event index to (classification,
+        clean_shutdown flag). Returns (samples stored, events stored, duplicate).
+        A batch_id already recorded for the host is acknowledged and nothing is
+        stored again."""
+        return await asyncio.to_thread(
+            self._ingest_sync, batch, boots, time.time() if now is None else now)
+
+    def _audit_sync(self, row: tuple[Any, ...]) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO audit (ts, actor, kind, method, path, status, remote, detail) "
+                "VALUES (?,?,?,?,?,?,?,?)", row)
+
+    async def write_audit(self, kind: str, actor: str = "", method: str = "", path: str = "",
+                          status: int = 0, remote: str = "",
+                          detail: dict[str, Any] | None = None, ts: float | None = None) -> None:
+        """Append one audit row. Callers must never put secrets in detail."""
+        row = (time.time() if ts is None else ts, actor, kind, method, path, status, remote,
+               json.dumps(detail or {}, sort_keys=True))
+        await asyncio.to_thread(self._audit_sync, row)
+
     def _delete(self, sql: str, args: tuple[Any, ...]) -> int:
         with self._lock:
             cur = self._db.execute(sql, args)
@@ -227,6 +311,7 @@ class Store:
         keep = now - max(retention_days, 365) * 86400
         removed = await asyncio.to_thread(self._delete, "DELETE FROM results WHERE ts < ?", (cutoff,))
         await asyncio.to_thread(self._delete, "DELETE FROM host_samples WHERE ts < ?", (cutoff,))
+        await asyncio.to_thread(self._delete, "DELETE FROM ingest_batches WHERE ts < ?", (cutoff,))
         await asyncio.to_thread(self._delete, "DELETE FROM events WHERE ts < ?", (keep,))
         await asyncio.to_thread(self._delete, "DELETE FROM host_events WHERE ts < ?", (keep,))
         await asyncio.to_thread(

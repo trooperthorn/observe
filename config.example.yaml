@@ -11,6 +11,7 @@ server:
   retention_days: 30
   # The audit log has its own retention, separate from polls and host samples.
   audit_retention_days: 365
+  ingest_rate_per_minute: 120  # POST /api/ingest requests per peer per minute
   # Optional HTTP basic auth for the dashboard and API. Put a TLS reverse
   # proxy in front if you enable this, basic auth over plain HTTP is not
   # confidential.

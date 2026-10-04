@@ -118,3 +118,21 @@ async def verify_key(store: Store, key: str, host: str, now: float | None = None
     await store._run("UPDATE ingest_keys SET last_used = ? WHERE prefix = ?",
                      (time.time() if now is None else now, prefix))
     return True
+
+
+async def key_host(store: Store, key: str) -> tuple[str, str] | None:
+    """Return (prefix, bound host) for an unrevoked key whose secret matches, else None.
+
+    Used by the ingest endpoint to tell a bad key (401) from a good key bound to
+    another host (403). It does not record use; verify_key does that.
+    """
+    parts = _split(key) if isinstance(key, str) else None
+    if parts is None:
+        return None
+    prefix, secret = parts
+    rows = await store._run(
+        "SELECT hash, host, revoked_at FROM ingest_keys WHERE prefix = ?", (prefix,))
+    stored, bound, revoked = rows[0] if rows else (_DUMMY_DIGEST, None, 1.0)
+    if hmac.compare_digest(stored, _digest(secret)) and bound is not None and revoked is None:
+        return prefix, bound
+    return None
