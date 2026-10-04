@@ -127,14 +127,31 @@ confirmation applies before a host is DOWN or pages. No batch within
 Because the result is an ordinary check result, `group`, `depends_on`,
 `critical`, rollup, alerts and `/metrics` work unchanged, and `/metrics` adds
 `watchpost_host_age_seconds` and `watchpost_host_component_state`. The grouped
-summary adapted from hostwatch's `integrations/summary.py` is a later slice.
+summary adapted from hostwatch's `integrations/summary.py` is the host views section below.
 
 ## Host views
 
-Each pushed host has a page showing current hardware readings (temperatures,
-fans, disks, memory, load), recent history, and its boot and crash events.
-Views are read-only. Device-supplied text is rendered as text only, as in
-the rest of the dashboard.
+Each pushed host has a page at `/host?name=HOST`, linked from the dashboard
+row of its `pushed_host` monitor. It is served by two routes, `GET /api/hosts`
+(one summary row per host) and `GET /api/hosts/{host}` (the full document), both
+built by `watchpost/hostview.py` from the newest sample per series in the store.
+The sections are CPU, memory, power, temperatures, fans with the fan controller
+state, RAID, ZFS pools, disks, UPS, alerts and events, plus the boot state and
+the list of sources. Each section and each reading carries Good, Warning or
+Critical. Built-in limits live in `hostview.py`; thresholds on the monitor in the
+YAML override them, and the agent never sets any.
+
+Missing data is shown, not hidden. Each section has a `state`: `ok`, `stale`
+(no reading inside the stale window, or the host is silent), `unavailable` (a
+source reported a failure, with its reason), `absent` (the agent says the host
+has no such hardware) or `not_reported` (no source for it ever reported). Stale
+and unavailable make the section at least Warning; absent and not_reported claim
+nothing and stay Good. A reading with no value is a Warning and never zero. A
+host with no batch inside its stale window is Critical, matching the monitor.
+The stale window is the monitor's `stale_after`, or three default intervals for
+a host that is not listed. The routes need a login session and ignore basic auth.
+Views are read-only. Device-supplied text is rendered as text only, as in the
+rest of the dashboard. The page has no actions section yet; phase 2 adds one.
 
 ## Logins, sessions, and CSRF
 

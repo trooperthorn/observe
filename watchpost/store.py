@@ -104,6 +104,9 @@ BATCH_TABLES = (
     "CREATE INDEX IF NOT EXISTS ingest_batches_ts ON ingest_batches(ts)",
 )
 
+# Stored as the reason when an agent says a source does not exist on the host.
+ABSENT_REASON = "not present on this host"
+
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: BASELINE,
     2: HOST_TABLES,
@@ -248,7 +251,7 @@ class Store:
                 "ON CONFLICT(host, source) DO UPDATE SET available=excluded.available, "
                 "reason=excluded.reason, updated=excluded.updated",
                 [(batch.host, st.source, int(st.available and st.present),
-                  st.reason or ("" if st.present else "not present on this host"), now)
+                  st.reason or ("" if st.present else ABSENT_REASON), now)
                  for st in batch.sources])
             stored = 0
             for i, ev in enumerate(batch.events):
@@ -311,6 +314,44 @@ class Store:
         (samples older than `since` are left out), its source availability, and
         when a batch last arrived. None when the host has never pushed."""
         return await asyncio.to_thread(self._latest_host_sync, host, since)
+
+    def _host_rows_sync(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT host, platform, agent_version, first_seen, last_seen, boot_id, boot_ts, "
+                "clean_shutdown, confirmed FROM hosts ORDER BY host").fetchall()
+        keys = ("host", "platform", "agent_version", "first_seen", "last_seen", "boot_id",
+                "boot_ts", "clean_shutdown", "confirmed")
+        return [dict(zip(keys, r)) for r in rows]
+
+    async def host_rows(self) -> list[dict[str, Any]]:
+        """One row per host that has ever pushed, ordered by name."""
+        return await asyncio.to_thread(self._host_rows_sync)
+
+    def _host_sources_sync(self, host: str) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT source, available, reason, updated FROM host_sources WHERE host=?",
+                (host,)).fetchall()
+        return {r[0]: {"available": bool(r[1]), "reason": r[2], "updated": r[3]} for r in rows}
+
+    async def host_sources(self, host: str) -> dict[str, dict[str, Any]]:
+        """Source status for a host, with when each source was last reported."""
+        return await asyncio.to_thread(self._host_sources_sync, host)
+
+    def _host_events_sync(self, host: str, since: float, limit: int) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT ts, kind, severity, source, title, detail, boot_id FROM host_events "
+                "WHERE host=? AND ts>=? ORDER BY ts DESC, id DESC LIMIT ?",
+                (host, since, limit)).fetchall()
+        return [{"ts": r[0], "kind": r[1], "severity": r[2], "source": r[3], "title": r[4],
+                 "detail": json.loads(r[5]), "boot_id": r[6]} for r in rows]
+
+    async def host_events(self, host: str, since: float = 0.0,
+                          limit: int = 50) -> list[dict[str, Any]]:
+        """Newest pushed events for a host (boot classifications, journal matches)."""
+        return await asyncio.to_thread(self._host_events_sync, host, since, limit)
 
     def _audit_sync(self, row: tuple[Any, ...]) -> None:
         with self._lock, self._db:

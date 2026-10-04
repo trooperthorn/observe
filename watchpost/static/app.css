@@ -61,3 +61,22 @@ ol#capacity li, ol#events li, ol.mon-events li { padding: .3rem 0; border-bottom
                                   overflow-wrap: anywhere; }
 .when { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: .4rem; }
 footer { color: var(--muted); font-size: .75rem; padding: 1.5rem 1rem; }
+a.hostlink { margin-left: .5rem; font-size: .8rem; color: var(--muted); }
+.hostpage { padding: 0 1rem 2rem; max-width: 70rem; margin: 0 auto; }
+.hostpage .banner { margin: 1rem 0; padding: .6rem .8rem; border-radius: 6px;
+                    border: 1px solid var(--line); background: var(--card); }
+.hostpage .banner.critical { border-color: var(--down); }
+.hostpage .banner.warning { border-color: var(--warn); }
+.sec { background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+       padding: .5rem .8rem; margin: .75rem 0; }
+.sec h2 { display: flex; gap: .5rem; align-items: center; margin: .25rem 0; }
+.sec .note { color: var(--muted); font-size: .85rem; }
+.pill.good { background: var(--up); } .pill.warning { background: var(--warn); color: #1c2230; }
+.pill.critical { background: var(--down); }
+.pill.stale, .pill.unavailable, .pill.absent, .pill.not_reported { background: var(--pending); }
+table.items { width: 100%; border-collapse: collapse; font-size: .88rem; }
+table.items td, table.items th { text-align: left; padding: .2rem .4rem;
+                                 border-top: 1px solid var(--line); }
+table.items td.num { font-variant-numeric: tabular-nums; }
+.stalemark { color: var(--muted); font-style: italic; }
+a.home { color: inherit; text-decoration: none; }

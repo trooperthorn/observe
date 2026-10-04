@@ -81,6 +81,9 @@ function updateRow(node, m) {
   node.querySelector(".target").textContent =
     `${m.target}  ·  ${st} since ${ago(m.since)}  ·  polled ${ago(m.last_at)}` +
     (m.critical ? "" : "  ·  non-critical");
+  const link = node.querySelector(".hostlink");
+  link.hidden = m.type !== "pushed_host";
+  if (m.type === "pushed_host") link.href = `/host?name=${encodeURIComponent(m.target)}`;
   node.querySelector(".msg").textContent = m.message;
   const fcEl = node.querySelector(".fc");
   const fc = fcText(m.forecast);

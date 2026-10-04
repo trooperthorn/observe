@@ -7,7 +7,9 @@ silence an alert. The write paths are POST /api/ingest (watchpost/ingest/api.py,
 host-bound ingest key, does not touch monitors) and the login surface below.
 
 Two credentials exist and they do not mix. The optional basic auth, and a
-login session, both open the read-only API and /metrics. Only a session with a
+login session, both open the read-only API and /metrics. The host views
+(/host, /api/hosts) hold hardware inventory and need a login session; basic
+auth does not open them. Only a session with a
 CSRF token reaches /api/logout and /api/admin/*, and an admin session is needed
 for the admin routes; basic auth is never accepted there (watchpost/auth.py).
 """
@@ -28,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from . import audit
 from . import auth as authmod
+from . import hostview
 from .alerts import Alerter
 from .config import Config
 from .ingest.api import DenialAggregator, RateLimiter, build_router
@@ -263,6 +266,57 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                 for m in scheduler.monitors]
         return {"version": __version__, "monitors": rows,
                 "groups": scheduler.rollup.group_states(), "alerts": alerter.status}
+
+    pushed = {m.host: m for m in scheduler.monitors if m.type == "pushed_host"}
+
+    async def host_view(host: str, row: dict[str, Any] | None) -> dict[str, Any] | None:
+        mon = pushed.get(host)
+        if row is None:
+            if mon is None:
+                return None
+            # Listed in the YAML but no batch has ever arrived.
+            row = {"host": host, "platform": "", "agent_version": "", "last_seen": 0.0,
+                   "confirmed": 1}
+            data = None
+        else:
+            data = await store.latest_host(host)
+        now = auth_clock()
+        stale_after = (mon.stale_after or 3 * config.effective(mon, "interval")) if mon             else 3 * config.defaults.interval
+        state = None
+        if mon is not None:
+            st = scheduler.states[mon.slug]
+            effective, blocker = scheduler.rollup.effective(mon.slug)
+            state = {"slug": mon.slug, "name": mon.name, "state": st.state.value,
+                     "effective_state": effective, "blocked_by": blocker}
+        overrides = {(c.source, c.metric): c for c in mon.components} if mon else {}
+        return hostview.build_host_view(
+            row, data, await store.host_sources(host),
+            await store.host_events(host, limit=50), now, stale_after, mon, overrides, state)
+
+    @app.get("/api/hosts", include_in_schema=False)
+    async def hosts(_: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
+        """Every pushed host, with the status of each hardware section. Session only."""
+        rows = {r["host"]: r for r in await store.host_rows()}
+        out = []
+        for name in sorted({*rows, *pushed}):
+            view = await host_view(name, rows.get(name))
+            if view is not None:
+                out.append(hostview.summarize(view))
+        return {"hosts": out}
+
+    @app.get("/api/hosts/{host}", include_in_schema=False)
+    async def host_detail(host: str,
+                          _: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
+        rows = {r["host"]: r for r in await store.host_rows()}
+        view = await host_view(host, rows.get(host))
+        if view is None:
+            raise HTTPException(404, "unknown host")
+        return view
+
+    @app.get("/host", include_in_schema=False)
+    async def host_page() -> FileResponse:
+        # Like /login, the page holds no data; host.js sends a visitor without a session to /login.
+        return FileResponse(STATIC / "host.html")
 
     @app.get("/api/groups", dependencies=guarded)
     async def groups() -> dict[str, Any]:

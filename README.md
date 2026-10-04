@@ -388,7 +388,22 @@ arrived, the check fails like an unreachable host. `group`, `depends_on` and
 is suppressed when a parent switch is down, and raises alerts. `/metrics` gains
 `watchpost_host_age_seconds` and `watchpost_host_component_state` (0 good, 1
 warning, 2 critical) for pushed hosts, alongside the usual state, effective
-state and group lines. Per-host hardware pages are a later slice.
+state and group lines.
+
+Each pushed host also has a hardware page at `/host?name=HOST`, linked from its
+row on the dashboard. `GET /api/hosts` lists every host that has pushed (and
+every listed `pushed_host` monitor that never has), and `GET /api/hosts/HOST`
+returns its CPU, memory, power, temperatures, fans with the fan controller
+state, RAID, ZFS pools, disks, UPS, recent alerts and events, boot state and
+sources. Every section and every reading is Good, Warning or Critical. The
+built-in limits are fixed in `watchpost/hostview.py`, and thresholds listed on
+the monitor in the YAML override them for that source and metric. The page says
+so when data is missing: a reading with no value is a Warning and is never
+shown as zero, a reading or source older than the stale window is marked stale,
+a source that failed shows its reason, a source the agent says the host does not
+have is shown as not present without making the host look worse, and a host that
+has stopped pushing is Critical. These routes need a login session; basic auth
+does not open them. They only read; no action that changes a host exists.
 
 Ingest keys are managed from the command line until the admin screen exists.
 `python -m watchpost --config watchpost.yaml --ingest-key-create HOST` prints a
@@ -411,7 +426,7 @@ routes (`GET` and `POST /api/admin/users` and `GET /api/audit` so far) also need
 an admin user. The
 optional basic auth is kept for the read-only API and `/metrics` and is never
 accepted for admin routes. A session also opens the read-only API. No action
-that changes a host exists yet. The admin screen, host views and key
+that changes a host exists yet. The admin screen and key
 management in the browser are later slices.
 
 The audit log (`watchpost/audit.py`) records logins, failed logins, logouts,
