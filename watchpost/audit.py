@@ -14,8 +14,9 @@ lines or bloat a row.
 
 Kinds written today: login_ok, login_failed, login_error, logout,
 user_created, user_create_failed, user_create_error, key_created,
-key_create_failed, key_revoked, key_revoke_failed, ingest_denied and
-ingest_failed. A kind ending in _failed or _error is an action that stopped
+key_create_failed, key_revoked, key_revoke_failed, user_disabled,
+user_enabled, user_promoted, user_demoted, user_change_failed (refused or
+unknown user), ingest_denied and ingest_failed. A kind ending in _failed or _error is an action that stopped
 partway or was refused after it started.
 """
 

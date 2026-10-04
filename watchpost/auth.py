@@ -140,6 +140,26 @@ async def count_admins(store: Store) -> int:
     return int(rows[0][0])
 
 
+async def set_user_flag(store: Store, user_id: int, column: str, value: bool) -> str:
+    """Set `disabled` or `is_admin` on a user. Returns "ok", "missing" or "last_admin".
+
+    One statement does the check and the change, so two concurrent requests cannot
+    both remove the last active admin. A disabled user's sessions stop working at
+    once because load_session reads the flag on every request."""
+    if column not in ("disabled", "is_admin"):
+        raise ValueError(column)
+    rows = await store._run("SELECT id FROM users WHERE id=?", (user_id,))
+    if not rows:
+        return "missing"
+    removes_admin = (column == "disabled" and value) or (column == "is_admin" and not value)
+    guard = (" AND NOT (is_admin=1 AND disabled=0 AND "
+             "(SELECT COUNT(*) FROM users WHERE is_admin=1 AND disabled=0) <= 1)"
+             if removes_admin else "")
+    done = await store._run(
+        f"UPDATE users SET {column}=? WHERE id=?{guard} RETURNING id", (int(value), user_id))
+    return "ok" if done else "last_admin"
+
+
 async def check_login(store: Store, cfg: Config, username: str, password: str,
                       now: float | None = None) -> LoginResult:
     """Check credentials and apply the lockout policy. An unknown, locked or disabled

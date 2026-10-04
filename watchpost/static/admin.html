@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>admin - watchpost</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <h1><a href="/" class="home">watchpost</a></h1>
+  <span id="who"></span>
+  <button type="button" id="logout">Sign out</button>
+</header>
+<main class="adminpage">
+  <p id="msg" role="alert"></p>
+
+  <section id="newkey" hidden>
+    <h2>New ingest key</h2>
+    <p>Copy this key now. It is shown once and cannot be shown again.</p>
+    <p><code id="newkey-value"></code></p>
+    <p><button type="button" id="newkey-dismiss">I have copied it</button></p>
+  </section>
+
+  <section>
+    <h2>Ingest keys</h2>
+    <form id="key-form">
+      <label>Host name <input name="host" required maxlength="128"></label>
+      <button type="submit">Create key</button>
+    </form>
+    <table id="keys"><thead><tr><th>Id</th><th>Host</th><th>State</th><th>Created by</th><th>Last used</th><th></th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>Users</h2>
+    <form id="user-form" autocomplete="off">
+      <label>Username <input name="username" required maxlength="64" autocomplete="off"></label>
+      <label>Password <input name="password" type="password" required minlength="12" maxlength="256" autocomplete="new-password"></label>
+      <label><input name="is_admin" type="checkbox"> admin</label>
+      <button type="submit">Create user</button>
+    </form>
+    <table id="users"><thead><tr><th>Id</th><th>Username</th><th>Role</th><th>State</th><th></th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>Audit log</h2>
+    <table id="audit"><thead><tr><th>Time</th><th>Actor</th><th>Kind</th><th>Status</th><th>Detail</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+<script src="/static/admin.js"></script>
+</body>
+</html>

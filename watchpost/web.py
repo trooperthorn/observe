@@ -34,6 +34,8 @@ from . import hostview
 from .alerts import Alerter
 from .config import Config
 from .ingest.api import DenialAggregator, RateLimiter, build_router
+from .ingest.keys import IngestKeyError, create_key, list_keys, revoke_key
+from .ingest.schema import MAX_NAME
 from .scheduler import Scheduler
 from .store import Store
 
@@ -253,6 +255,118 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         await audit.record(store, "user_created", actor=sess.username, method="POST",
                            path="/api/admin/users", status=200, remote=remote, detail=shown)
         return JSONResponse({"id": uid})
+
+    async def user_flag(request: Request, uid: int, sess: authmod.Session, column: str,
+                        kind_on: str, kind_off: str) -> Response:
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        value = body.get("value") if isinstance(body, dict) else None
+        path = request.url.path
+        remote = request.client.host if request.client else ""
+        if not isinstance(value, bool):
+            return JSONResponse({"detail": "value must be true or false"}, status_code=422)
+        detail: dict[str, Any] = {"user_id": uid, "value": value}
+        try:
+            outcome = await authmod.set_user_flag(store, uid, column, value)
+        except Exception as err:
+            await audit.record(store, "user_change_error", actor=sess.username,
+                               method="POST", path=path, status=500, remote=remote,
+                               detail={**detail, "error": type(err).__name__})
+            raise
+        if outcome != "ok":
+            status = 404 if outcome == "missing" else 409
+            msg = ("unknown user" if outcome == "missing"
+                   else "the last active admin cannot be removed")
+            await audit.record(store, "user_change_failed", actor=sess.username,
+                               method="POST", path=path, status=status, remote=remote,
+                               detail={**detail, "reason": outcome})
+            return JSONResponse({"detail": msg}, status_code=status)
+        await audit.record(store, kind_on if value else kind_off, actor=sess.username,
+                           method="POST", path=path, status=200, remote=remote, detail=detail)
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/admin/users/{uid}/disabled", include_in_schema=False)
+    async def admin_user_disabled(
+            uid: int, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        return await user_flag(request, uid, sess, "disabled",
+                               "user_disabled", "user_enabled")
+
+    @app.post("/api/admin/users/{uid}/admin", include_in_schema=False)
+    async def admin_user_role(
+            uid: int, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        return await user_flag(request, uid, sess, "is_admin",
+                               "user_promoted", "user_demoted")
+
+    @app.get("/api/admin/keys", include_in_schema=False)
+    async def admin_keys(_: authmod.Session = Depends(guards.admin)) -> list[dict[str, Any]]:
+        """Key ids, hosts and state. The secret part is never stored, so never listed."""
+        return [{"id": k.prefix, "host": k.host, "created": k.created,
+                 "created_by": k.created_by, "revoked_at": k.revoked_at,
+                 "last_used": k.last_used, "active": k.active}
+                for k in await list_keys(store)]
+
+    @app.post("/api/admin/keys", include_in_schema=False)
+    async def admin_create_key(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        host = body.get("host") if isinstance(body, dict) else None
+        if not isinstance(host, str):
+            return JSONResponse({"detail": "host is required"}, status_code=422)
+        remote = request.client.host if request.client else ""
+        shown = {"host": host[:MAX_NAME]}
+        try:
+            plaintext, info = await create_key(store, host, created_by=sess.username)
+        except IngestKeyError as err:
+            await audit.record(store, "key_create_failed", actor=sess.username, method="POST",
+                               path="/api/admin/keys", status=422, remote=remote,
+                               detail={**shown, "reason": str(err)})
+            return JSONResponse({"detail": str(err)}, status_code=422)
+        except Exception as err:
+            await audit.record(store, "key_create_failed", actor=sess.username, method="POST",
+                               path="/api/admin/keys", status=500, remote=remote,
+                               detail={**shown, "error": type(err).__name__})
+            raise
+        await audit.record(store, "key_created", actor=sess.username, method="POST",
+                           path="/api/admin/keys", status=200, remote=remote,
+                           detail={"host": info.host, "key_id": info.prefix})
+        # The plaintext appears in this one response, which is sent with Cache-Control: no-store.
+        return JSONResponse({"id": info.prefix, "host": info.host, "key": plaintext})
+
+    @app.post("/api/admin/keys/{key_id}/revoke", include_in_schema=False)
+    async def admin_revoke_key(
+            key_id: str, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        remote = request.client.host if request.client else ""
+        path = f"/api/admin/keys/{key_id[:64]}/revoke"
+        detail = {"key_id": key_id[:64]}
+        try:
+            done = await revoke_key(store, key_id)
+        except Exception as err:
+            await audit.record(store, "key_revoke_failed", actor=sess.username, method="POST",
+                               path=path, status=500, remote=remote,
+                               detail={**detail, "error": type(err).__name__})
+            raise
+        if not done:
+            await audit.record(store, "key_revoke_failed", actor=sess.username, method="POST",
+                               path=path, status=404, remote=remote,
+                               detail={**detail, "reason": "unknown or already revoked"})
+            return JSONResponse({"detail": "unknown or already revoked key"}, status_code=404)
+        await audit.record(store, "key_revoked", actor=sess.username, method="POST", path=path,
+                           status=200, remote=remote, detail=detail)
+        return JSONResponse({"ok": True})
+
+    @app.get("/admin", include_in_schema=False)
+    async def admin_page() -> FileResponse:
+        # Like /login, the page holds no data; admin.js sends a visitor without an admin
+        # session to /login.
+        return FileResponse(STATIC / "admin.html")
 
     @app.get("/api/audit", include_in_schema=False)
     async def audit_log(limit: int = 100, kind: str | None = None, before: int | None = None,

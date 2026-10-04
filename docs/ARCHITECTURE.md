@@ -94,9 +94,9 @@ bits, and only its SHA-256 digest is stored. A fast digest is adequate for a
 random secret, unlike a user password, which uses argon2. Lookup is by
 prefix, the digest and host name are compared in constant time, and a
 revoked key fails the same way a wrong one does. Last use is recorded only
-after a successful check. The code is `watchpost/ingest/keys.py`. Until the
-admin screen exists, `--ingest-key-create`, `--ingest-key-list` and
-`--ingest-key-revoke` manage keys from the command line.
+after a successful check. The code is `watchpost/ingest/keys.py`. Keys are managed on the admin screen,
+and also by `--ingest-key-create`, `--ingest-key-list` and
+`--ingest-key-revoke` from the command line.
 
 ## Boot and crash events
 
@@ -196,21 +196,33 @@ sanitizes the path (control characters become `?`, 256 characters at most,
 adapted from hostwatch's `sanitize_audit_path`) and replaces the value of any
 detail field whose name suggests a secret, such as password, token, csrf or
 hash. Written now: `login_ok`, `login_failed` (aggregated per peer),
-`logout`, `user_created`, `key_created`, `key_revoked`, and `ingest_denied`.
+`logout`, `user_created`, `user_disabled`, `user_enabled`, `user_promoted`,
+`user_demoted`, `key_created`, `key_revoked`, and `ingest_denied`.
 An action that stops partway also leaves a row: `login_error` (right password,
 no session), `user_create_failed` and `user_create_error`, `key_create_failed`,
-`key_revoke_failed`, and `ingest_failed` (a valid batch the store could not
-write). Key and CLI user changes are recorded with the actor `cli`. Role
-changes, user disabling and host confirmation have no routes yet, so they have
-no rows yet. `GET /api/audit` returns rows newest first and is admin only,
+`key_revoke_failed`, `user_change_failed` and `user_change_error`, and `ingest_failed` (a valid batch the store could not
+write). Admin screen changes are recorded with the signed-in admin as actor, and
+CLI key and user changes with the actor `cli`. Host confirmation has no route
+yet, so it has no rows yet. `GET /api/audit` returns rows newest first and is admin only,
 session only, so basic auth never reaches it. It takes `limit` (1 to 500),
 `kind`, and `before` (a row id, to page backwards).
 
 ## Admin screen
 
-A single admin-only page lists users and ingest keys, creates and revokes
-them, and shows the audit log. It is the first write surface in watchpost's
-web UI, which is why it sits behind login, role, and CSRF checks.
+A single admin-only page, `/admin` (`static/admin.html` and `admin.js`), lists
+users and ingest keys, creates and revokes keys, creates users, disables or
+enables them, grants or removes the admin role, and shows the latest audit
+rows. It is the first write surface in watchpost's web UI, which is why every
+route behind it sits behind the login, role, and CSRF dependencies.
+
+The page is a static file with no data, so a visitor without a session is sent
+to `/login` by the script. The routes are `GET` and `POST /api/admin/users`,
+`POST /api/admin/users/{id}/disabled` and `/admin` (body `{"value": bool}`),
+`GET` and `POST /api/admin/keys`, and `POST /api/admin/keys/{id}/revoke`. A
+created key is returned once in the create response and is never listed. The
+last active admin cannot be disabled or demoted, enforced in one SQL
+statement. Rendering uses `textContent` only. Host confirmation is not on the
+screen yet, and no control changes a host.
 
 ## Phase 2 (planned): control
 

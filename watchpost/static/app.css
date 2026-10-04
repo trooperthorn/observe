@@ -80,3 +80,8 @@ table.items td, table.items th { text-align: left; padding: .2rem .4rem;
 table.items td.num { font-variant-numeric: tabular-nums; }
 .stalemark { color: var(--muted); font-style: italic; }
 a.home { color: inherit; text-decoration: none; }
+.adminpage { padding: 0 1rem 2rem; }
+.adminpage table { width: 100%; border-collapse: collapse; margin-top: .5rem; }
+.adminpage th, .adminpage td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.adminpage form { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; }
+.adminpage code { word-break: break-all; }

@@ -405,7 +405,7 @@ have is shown as not present without making the host look worse, and a host that
 has stopped pushing is Critical. These routes need a login session; basic auth
 does not open them. They only read; no action that changes a host exists.
 
-Ingest keys are managed from the command line until the admin screen exists.
+Ingest keys are managed on the admin screen (below) or from the command line.
 `python -m watchpost --config watchpost.yaml --ingest-key-create HOST` prints a
 new key once and stores only a hash; the key works for ingest and only for
 that host name. `--ingest-key-list` shows each key's id, host, state and last
@@ -422,12 +422,20 @@ hours in all (`server.session_idle_s`, `session_absolute_s`). Set
 network. An account locks for 15 minutes after 5 failures, and logins are
 limited per peer address. Routes that change state need the session's CSRF
 token in an `X-CSRF-Token` header (`GET /api/session` returns it), and admin
-routes (`GET` and `POST /api/admin/users` and `GET /api/audit` so far) also need
-an admin user. The
-optional basic auth is kept for the read-only API and `/metrics` and is never
-accepted for admin routes. A session also opens the read-only API. No action
-that changes a host exists yet. The admin screen and key
-management in the browser are later slices.
+routes (everything under `/api/admin/` and `GET /api/audit`) also need an admin
+user. The optional basic auth is kept for the read-only API and `/metrics` and
+is never accepted for admin routes. A session also opens the read-only API. No
+action that changes a host exists yet.
+
+The admin screen is at `/admin`. It lists ingest keys and users, creates a key
+bound to one host name, revokes a key, creates a user, disables or enables a
+user, grants or removes the admin role, and shows the latest audit rows. A new
+key is shown once, in the response to the create request, and cannot be shown
+again; only its hash is stored. Disabling a user ends their sessions at once.
+The last active admin cannot be disabled or demoted. Every change is a
+request carrying the CSRF token and is written to the audit log. The page
+itself is a static file with no data and sends a visitor without a session to
+the login page. It has no control for any host.
 
 The audit log (`watchpost/audit.py`) records logins, failed logins, logouts,
 user creation, key creation and revocation, and rejected ingest. When an action
