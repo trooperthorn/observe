@@ -1,6 +1,6 @@
 # Field data from the Pockethernet app
 
-Status: design; the plugin loader, per-plugin migrations, plugin pages and the infrastructure tables with port keys and property history are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
+Status: design; the plugin loader, per-plugin migrations, plugin pages, the infrastructure tables with port keys and property history, and monitor matching with conflict findings are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
 Pockethernet Android app (repo `pocketethernet-app`) become properties of switch
 ports in watchpost, and how the mapping data in those results builds an
 infrastructure map with live availability and health.
@@ -170,6 +170,18 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 - Property values are stored as JSON text with the type fixed per name (for example `link_speed_mbps` is an integer and `dhcp_ok` a boolean). `custom.<name>` values are text.
 - The new `scope` column on `ingest_keys` is not part of this step; it comes with the key scope slice.
 
+### Built: monitor matching and conflict findings (slice 5)
+
+`watchpost/infra_match.py` implements the matching and findings. Details that the sketch above left open:
+
+- A switch matches by chassis MAC, then management address, then sysName; the first key with candidates decides. The sketch said address or sysName equals the monitor's target; the chassis MAC was added for UniFi device monitors, whose `device` may be a MAC.
+- The best monitor type wins (snmp, unifi_network, ping, tcp). A tie between monitors of that type matches nothing and the switch goes to the unlinked queue. SNMP interface monitors belong to ports and never match a switch.
+- `matched_monitor` is filled only when empty or when its monitor is gone, so an admin link is kept.
+- The unlinked queue is the set of switches with no `matched_monitor`. `GET /api/admin/infra/unlinked` lists it, and `POST /api/admin/infra/link` with `switch_id` and `monitor` links one. Both need an admin session, the post needs the CSRF token, and the result is audited.
+- Findings are `speed_above_live`, `vlan_mismatch`, `poe_no_power` and `repatched`, computed on each `GET /api/infra/findings`. Live values come from the last polled check detail. The SNMP interface check now reports `speed_mbps`. VLAN, PoE power and UniFi per-port values are used when a check reports them (`vlan`, `poe_w`, or `ports.<index>` for UniFi); until then those comparisons produce nothing, never a guess.
+- `repatched` is derived from the `jack_label` property history: the newest row for a label is on a different port than an older row for the same label.
+- Findings are never stored, never acknowledged yet (the port page slice adds that), and never call an alert target.
+
 ## Build order
 
 **watchpost core.**
@@ -177,7 +189,7 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 2. Per-plugin migrations (built).
 3. Plugin pages and navigation (built).
 4. Infrastructure tables, port-key normalisation and property history (built).
-5. Monitor matching and conflict findings.
+5. Monitor matching and conflict findings (built).
 6. Map data, ageing and inferred dependencies.
 7. Map and port pages.
 

@@ -337,6 +337,28 @@ capped; the port must already exist. A custom write needs `recorded_by` and writ
 `port_property_custom` audit row that names the property but not its value. This slice has no
 routes; the service is called in process.
 
+`watchpost/infra_match.py` links the map to monitors. `Matcher.match_switch` tries the chassis
+MAC (a `unifi_network` monitor whose `device` is that MAC), then the management addresses, then
+the sysName against monitor hosts and UniFi device names; the first key with candidates decides,
+the best monitor type wins (snmp, unifi_network, ping, tcp), and a tie between monitors of the
+same type matches nothing. Interface monitors never stand for a whole switch. The result is
+stored in `infra_switches.matched_monitor` only while that column is empty or names a monitor
+that is no longer configured, so an admin's link is kept. `match_port` finds `snmp` interface
+monitors on the switch's host whose `interface` has the same port key (or whose number is the
+port's ifIndex) and the UniFi device monitor for the chassis MAC when the port has a UniFi
+index. Nothing creates a monitor. Switches with no match form the unlinked queue.
+`link_switch` is the admin action; it audits `infra_switch_linked` or
+`infra_switch_link_failed` with the switch id and monitor slug.
+
+`Matcher.findings` runs at request time. It takes the newest value of each property and a
+`LiveReader`; the web layer's reader returns the last polled `detail` of the matched monitor
+(`speed_mbps` from the SNMP interface check, and `vlan` and `poe_w` where a check reports them).
+An unknown live value never produces a finding. The kinds are `speed_above_live`,
+`vlan_mismatch`, `poe_no_power` (all warnings) and `repatched` (info, from a jack label that
+moved to another port). Findings are not stored and never reach the alerter. Routes:
+`GET /api/admin/infra/unlinked` (admin session), `POST /api/admin/infra/link` (admin session and
+CSRF token) and `GET /api/infra/findings` (session).
+
 ## Phase 2 (planned): control
 
 Nothing in this section is built. It records the intended design so that

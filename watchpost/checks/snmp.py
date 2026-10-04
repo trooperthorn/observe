@@ -174,6 +174,9 @@ class SnmpCheck(Check):
                                     detail={"ifIndex": i})
         now = asyncio.get_running_loop().time()
         detail: dict[str, Any] = {"ifIndex": i}
+        link_speed = int(vals.get(oids[3], "0") or 0)
+        if link_speed > 0:
+            detail["speed_mbps"] = link_speed  # read by the infrastructure findings
         msg = f"{self.monitor.interface} up"
         value = None
         if oids[1] in vals and oids[2] in vals:

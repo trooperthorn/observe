@@ -482,8 +482,14 @@ plugins you trust. The design is in `docs/FIELD-DATA.md`.
 The core also keeps an infrastructure map in the same database: switches, ports, wall jacks,
 links, endpoints and port properties with history. Port names are normalised, so
 `GigabitEthernet1/0/5` and `Gi1/0/5` are one port while `Gi1/0/5` and `Gi1/0/50` stay
-apart. Plugins write to it through `watchpost.infra.InfraService`; there are no map pages or
-routes yet (the map and port pages are later slices).
+apart. Plugins write to it through `watchpost.infra.InfraService`. A switch is matched to a
+monitor by chassis MAC, management address or sysName, and a port to an SNMP interface monitor
+or a UniFi device port. Matching never creates a monitor, and an ambiguous match is left for
+an admin. Switches that match nothing are listed at `GET /api/admin/infra/unlinked` and an
+admin links one with `POST /api/admin/infra/link` (audited). `GET /api/infra/findings` lists
+conflicts between field results and live state: speed above live, VLAN mismatch, PoE verified
+but no power, and re-patched. Findings are computed on request, are for the dashboard only,
+and never send alerts. The map and port pages are later slices.
 
 ## Not implemented
 

@@ -33,6 +33,8 @@ from . import auth as authmod
 from . import hostview
 from .alerts import Alerter
 from .config import Config
+from .infra import InfraError, InfraService
+from .infra_match import LivePort, Matcher, PortMatch
 from .ingest.api import DenialAggregator, RateLimiter, build_router
 from .ingest.keys import IngestKeyError, create_key, list_keys, revoke_key
 from .ingest.schema import MAX_NAME
@@ -449,6 +451,51 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         await audit.record(store, "key_revoked", actor=sess.username, method="POST", path=path,
                            status=200, remote=remote, detail=detail)
         return JSONResponse({"ok": True})
+
+    matcher = Matcher(config, InfraService(store))
+
+    def live_port(match: PortMatch) -> LivePort | None:
+        """The last polled state of a matched port. Only what the check reported is used."""
+        st = scheduler.states.get(match.monitor)
+        detail = st.last.detail if st is not None and st.last is not None else None
+        if not isinstance(detail, dict):
+            return None
+        if match.kind == "unifi":
+            ports = detail.get("ports")
+            detail = ports.get(match.detail) if isinstance(ports, dict) else None
+            if not isinstance(detail, dict):
+                return None
+        return LivePort(detail.get("speed_mbps"), detail.get("vlan"), detail.get("poe_w"))
+
+    @app.get("/api/admin/infra/unlinked", include_in_schema=False)
+    async def admin_infra_unlinked(
+            _: authmod.Session = Depends(guards.admin)) -> list[dict[str, Any]]:
+        """Switches seen in the field that match no monitor, waiting for an admin to link."""
+        return await matcher.unlinked()
+
+    @app.post("/api/admin/infra/link", include_in_schema=False)
+    async def admin_infra_link(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        sid = body.get("switch_id") if isinstance(body, dict) else None
+        slug = body.get("monitor") if isinstance(body, dict) else None
+        if not isinstance(sid, str) or not isinstance(slug, str):
+            return JSONResponse({"detail": "switch_id and monitor are required"},
+                                status_code=422)
+        remote = request.client.host if request.client else ""
+        try:
+            await matcher.link_switch(sid, slug, sess.username, remote)
+        except InfraError as err:
+            return JSONResponse({"detail": str(err)}, status_code=422)
+        return JSONResponse({"ok": True})
+
+    @app.get("/api/infra/findings", include_in_schema=False)
+    async def infra_findings(_: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
+        """Field conflicts, computed now. Dashboard only; nothing here raises an alert."""
+        return {"findings": [f.as_dict() for f in await matcher.findings(live_port)]}
 
     @app.get("/admin", include_in_schema=False)
     async def admin_page() -> FileResponse:
