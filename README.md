@@ -355,6 +355,13 @@ The hostwatch wire schema models exist in `watchpost/ingest/schema.py`, with
 size and count limits and strict rejection of unknown fields and schema
 versions. Nothing receives batches yet; the ingest endpoint is a later slice.
 
+Ingest keys are managed from the command line until the admin screen exists.
+`python -m watchpost --config watchpost.yaml --ingest-key-create HOST` prints a
+new key once and stores only a hash; the key works for ingest and only for
+that host name. `--ingest-key-list` shows each key's id, host, state and last
+use, and `--ingest-key-revoke ID` revokes one. Nothing accepts the keys yet,
+because the ingest endpoint is a later slice.
+
 ## Not implemented
 
 Network discovery, automated remediation actions, maps, native DCOM WMI,

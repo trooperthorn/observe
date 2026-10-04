@@ -67,6 +67,16 @@ one host therefore cannot report as another, and revoking a key stops that
 host without affecting any other. A host that pushes with a valid key but has
 no confirmed monitor appears as pending until an admin confirms it.
 
+The key format is `wpi_<prefix>_<secret>`. The prefix is public and is the
+key's id in the `ingest_keys` table and in listings. The secret is 256 random
+bits, and only its SHA-256 digest is stored. A fast digest is adequate for a
+random secret, unlike a user password, which uses argon2. Lookup is by
+prefix, the digest and host name are compared in constant time, and a
+revoked key fails the same way a wrong one does. Last use is recorded only
+after a successful check. The code is `watchpost/ingest/keys.py`. Until the
+admin screen exists, `--ingest-key-create`, `--ingest-key-list` and
+`--ingest-key-revoke` manage keys from the command line.
+
 ## Boot and crash events
 
 Each snapshot carries a boot identifier. When it changes, watchpost records a

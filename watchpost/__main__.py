@@ -6,6 +6,9 @@
   python -m watchpost --config ... --discover [--target 192.0.2.0/24 ...]
         [--credential NAME ...] [--out proposals.yaml] [--report report.json]
                                                                propose monitors, exit
+  python -m watchpost --config ... --ingest-key-create HOST    print a new ingest key once
+  python -m watchpost --config ... --ingest-key-revoke ID      revoke an ingest key
+  python -m watchpost --config ... --ingest-key-list           list keys, never the secrets
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import asyncio
 import logging
 import signal
 import sys
+import time
 
 import uvicorn
 
@@ -108,6 +112,41 @@ def _discover(config, args) -> int:  # type: ignore[no-untyped-def]
     return 0
 
 
+def _ingest_keys(config, args) -> int:  # type: ignore[no-untyped-def]
+    """Manage ingest keys directly in the database until the admin screen exists."""
+    from .ingest.keys import IngestKeyError, create_key, list_keys, revoke_key
+
+    async def run(store: Store) -> int:
+        if args.ingest_key_create:
+            try:
+                key, info = await create_key(store, args.ingest_key_create, created_by="cli")
+            except IngestKeyError as err:
+                print(f"error: {err}", file=sys.stderr)
+                return 2
+            print(key)
+            print(f"bound to host {info.host}, id {info.prefix}. This is the only time the "
+                  "key is shown; it is stored hashed.", file=sys.stderr)
+            return 0
+        if args.ingest_key_revoke:
+            if await revoke_key(store, args.ingest_key_revoke):
+                print(f"revoked {args.ingest_key_revoke}", file=sys.stderr)
+                return 0
+            print("error: no active key with that id", file=sys.stderr)
+            return 2
+        for k in await list_keys(store):
+            state = "active" if k.active else "revoked"
+            used = "never" if k.last_used is None else time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(k.last_used))
+            print(f"{k.prefix}  {state:7}  {k.host}  last used {used}")
+        return 0
+
+    store = Store(config.server.db_path)
+    try:
+        return asyncio.run(run(store))
+    finally:
+        store.close()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="watchpost")
     ap.add_argument("--config", default="/config/watchpost.yaml")
@@ -131,6 +170,12 @@ def main() -> int:
                          "validate, one PEM per endpoint, for review and pinning")
     ap.add_argument("--no-directory", action="store_true",
                     help="with --discover: do not query discovery.directory")
+    ap.add_argument("--ingest-key-create", metavar="HOST",
+                    help="create an ingest key bound to HOST, print it once, and exit")
+    ap.add_argument("--ingest-key-revoke", metavar="ID",
+                    help="revoke the ingest key with this id (see --ingest-key-list) and exit")
+    ap.add_argument("--ingest-key-list", action="store_true",
+                    help="list ingest keys with host, state and last use, and exit")
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     logging.basicConfig(level=args.log_level.upper(),
@@ -145,6 +190,8 @@ def main() -> int:
         print(f"ok: {len(config.monitors)} monitors, {len(config.credentials)} credentials, "
               f"{len(config.alerts)} alert targets")
         return 0
+    if args.ingest_key_create or args.ingest_key_revoke or args.ingest_key_list:
+        return _ingest_keys(config, args)
     if args.once:
         return asyncio.run(_once(config, args.only))
     if args.discover:
