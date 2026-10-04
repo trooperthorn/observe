@@ -60,9 +60,7 @@ async def test_switch_matches_by_chassis_address_and_sysname(world):
     by_mac = await add(infra, switch_id(CHASSIS), name="whatever")
     by_addr = await add(infra, switch_id("aa:bb:cc:dd:ee:02"), mgmt_addresses=["10.0.0.2"])
     by_name = await add(infra, switch_id(sys_name="DIST1.lab"))
-    await m.sync_switches()
-    got = dict(await infra._run(lambda db: db.execute(
-        "SELECT switch_id, matched_monitor FROM infra_switches").fetchall()))
+    got = await m.effective_matches()
     assert got[by_mac] == "uni-core"
     assert got[by_addr] == "snmp-edge"
     assert got[by_name] == "ping-dist"
@@ -73,9 +71,7 @@ async def test_chassis_beats_address_and_ties_are_not_guessed(world):
     _, infra, m = world
     both = await add(infra, switch_id(CHASSIS), mgmt_addresses=["10.0.0.2"])
     tie = await add(infra, switch_id("aa:bb:cc:dd:ee:03"), mgmt_addresses=["twin.lab"])
-    await m.sync_switches()
-    rows = dict(await infra._run(lambda db: db.execute(
-        "SELECT switch_id, matched_monitor FROM infra_switches").fetchall()))
+    rows = await m.effective_matches()
     assert rows[both] == "uni-core"
     assert rows[tie] is None
     assert [s["switch_id"] for s in await m.unlinked()] == [tie]
@@ -98,7 +94,7 @@ async def test_port_matches_snmp_by_name_alias_and_index_and_unifi_by_mac_and_in
 async def test_matching_never_creates_monitors(world):
     _, infra, m = world
     await add(infra, switch_id(sys_name="nowhere"))
-    await m.sync_switches()
+    await m.effective_matches()
     assert len(m._config.monitors) == len(MONITORS)
 
 
@@ -108,8 +104,8 @@ async def test_unmatched_switch_is_queued_and_admin_link_is_audited(world):
     assert [s["switch_id"] for s in await m.unlinked()] == [sid]
     await m.link_switch(sid, "ping-dist", "alice", "10.1.1.1")
     assert await m.unlinked() == []
-    # A later sync keeps the admin's choice.
-    await m.sync_switches()
+    # A later read keeps the admin's choice.
+    assert (await m.effective_matches())[sid] == "ping-dist"
     (mon,) = [r[0] for r in await infra._run(lambda db: db.execute(
         "SELECT matched_monitor FROM infra_switches WHERE switch_id=?", (sid,)).fetchall())]
     assert mon == "ping-dist"
@@ -118,6 +114,53 @@ async def test_unmatched_switch_is_queued_and_admin_link_is_audited(world):
     assert [r[0] for r in rows] == ["infra_switch_linked"]
     assert rows[0][1] == "alice" and rows[0][2] == "10.1.1.1"
     assert "ping-dist" in rows[0][3] and sid in rows[0][3]
+
+
+async def test_admin_link_survives_disabled_monitor_and_reads_never_write(tmp_path):
+    store = Store(str(tmp_path / "d.db"))
+    infra = InfraService(store)
+    try:
+        sid = await add(infra, switch_id(CHASSIS), mgmt_addresses=["10.0.0.2"])
+        enabled = Matcher(cfg(), infra)
+        await enabled.link_switch(sid, "ping-dist", "alice")
+        mons = [dict(m, **({"enabled": False} if m["name"] == "ping dist" else {}))
+                for m in MONITORS]
+        off = Matcher(make_config(mons, credentials={
+            "u": {"type": "unifi", "api_key": "k"},
+            "v2": {"type": "snmpv2c", "community": "c"}}), infra)
+
+        def column(db: Any) -> Any:
+            return db.execute("SELECT matched_monitor FROM infra_switches").fetchall()
+        before = await infra._run(column)
+        assert (await off.effective_matches())[sid] == "ping-dist"
+        await off.unlinked()
+        await off.findings(lambda _m: None)
+        assert await infra._run(column) == before == [("ping-dist",)]
+        assert (await enabled.effective_matches())[sid] == "ping-dist"
+        kinds = [r[0] for r in await infra._run(lambda d: d.execute(
+            "SELECT kind FROM audit").fetchall())]
+        assert kinds == ["infra_switch_linked"]
+    finally:
+        store.close()
+
+
+async def test_interface_check_reports_speed_and_survives_odd_value():
+    from watchpost.checks import build_check
+    from watchpost.checks.base import Result
+    from watchpost.checks.snmp import IF_HIGH_SPEED
+
+    cf = make_config([{"name": "s", "type": "snmp", "host": "127.0.0.1", "credential": "v2",
+                       "mode": "interface", "interface": "7"}],
+                     credentials={"v2": {"type": "snmpv2c", "community": "c"}})
+    for raw, want in (("1000", 1000), ("junk", None)):
+        c = build_check(cf.monitors[0], cf)
+
+        async def fake_get(*oids: str, _raw: str = raw) -> dict[str, str]:
+            return {o: (_raw if o.startswith(IF_HIGH_SPEED) else "1") for o in oids}
+        c.get = fake_get  # type: ignore[method-assign]
+        res = await c.run()
+        assert res.result is Result.OK
+        assert res.detail.get("speed_mbps") == want
 
 
 async def test_bad_links_are_refused_and_audited(world):
@@ -236,7 +279,7 @@ async def test_link_routes_need_admin_and_csrf_and_audit(web):
     web.client.cookies.clear()
     csrf = await web.login("root", admin=True)
     assert [s["switch_id"] for s in web.client.get("/api/admin/infra/unlinked").json()] == [sid]
-    assert web.client.post("/api/admin/infra/link", json=payload).status_code in (400, 403)
+    assert web.client.post("/api/admin/infra/link", json=payload).status_code == 403
     assert web.client.post("/api/admin/infra/link", json={"switch_id": sid},
                            headers=csrf).status_code == 422
     assert web.client.post("/api/admin/infra/link", json={**payload, "monitor": "nope"},

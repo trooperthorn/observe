@@ -176,8 +176,8 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 
 - A switch matches by chassis MAC, then management address, then sysName; the first key with candidates decides. The sketch said address or sysName equals the monitor's target; the chassis MAC was added for UniFi device monitors, whose `device` may be a MAC.
 - The best monitor type wins (snmp, unifi_network, ping, tcp). A tie between monitors of that type matches nothing and the switch goes to the unlinked queue. SNMP interface monitors belong to ports and never match a switch.
-- `matched_monitor` is filled only when empty or when its monitor is gone, so an admin link is kept.
-- The unlinked queue is the set of switches with no `matched_monitor`. `GET /api/admin/infra/unlinked` lists it, and `POST /api/admin/infra/link` with `switch_id` and `monitor` links one. Both need an admin session, the post needs the CSRF token, and the result is audited.
+- Matches are computed on each read and never written. `matched_monitor` holds only an admin link, which is kept while its monitor is configured, enabled or not.
+- The unlinked queue is the set of switches with no admin link and no automatic match. `GET /api/admin/infra/unlinked` lists it, and `POST /api/admin/infra/link` with `switch_id` and `monitor` links one. Both need an admin session, the post needs the CSRF token, and the result is audited.
 - Findings are `speed_above_live`, `vlan_mismatch`, `poe_no_power` and `repatched`, computed on each `GET /api/infra/findings`. Live values come from the last polled check detail. The SNMP interface check now reports `speed_mbps`. VLAN, PoE power and UniFi per-port values are used when a check reports them (`vlan`, `poe_w`, or `ports.<index>` for UniFi); until then those comparisons produce nothing, never a guess.
 - `repatched` is derived from the `jack_label` property history: the newest row for a label is on a different port than an older row for the same label.
 - Findings are never stored, never acknowledged yet (the port page slice adds that), and never call an alert target.

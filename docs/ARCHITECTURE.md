@@ -342,8 +342,8 @@ MAC (a `unifi_network` monitor whose `device` is that MAC), then the management 
 the sysName against monitor hosts and UniFi device names; the first key with candidates decides,
 the best monitor type wins (snmp, unifi_network, ping, tcp), and a tie between monitors of the
 same type matches nothing. Interface monitors never stand for a whole switch. The result is
-stored in `infra_switches.matched_monitor` only while that column is empty or names a monitor
-that is no longer configured, so an admin's link is kept. `match_port` finds `snmp` interface
+computed on each read and never written. `infra_switches.matched_monitor` holds only an
+admin's link, which wins while its monitor is configured, enabled or not. `match_port` finds `snmp` interface
 monitors on the switch's host whose `interface` has the same port key (or whose number is the
 port's ifIndex) and the UniFi device monitor for the chassis MAC when the port has a UniFi
 index. Nothing creates a monitor. Switches with no match form the unlinked queue.

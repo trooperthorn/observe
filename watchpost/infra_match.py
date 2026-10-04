@@ -6,7 +6,8 @@ target host of an snmp, ping or tcp monitor), or by sysName (the target host or 
 name). Those keys are tried in that order, and the first key that finds candidates decides.
 If the candidates of the best type tie, nothing is matched, because guessing would attach live
 state to the wrong switch. A link made by an admin is kept for as long as its monitor is
-configured and is never replaced here.
+configured, enabled or not, and is never replaced here. Matching is computed on each read
+and never written; only an admin link is stored.
 
 A port matches an snmp `interface` monitor on the same host when the monitor's interface
 (ifName or ifDescr) has the same port key, or its numeric ifIndex equals the port's if_index.
@@ -89,8 +90,11 @@ class Matcher:
         self._config = config
         self._infra = infra
         # Interface monitors belong to a port, so they never stand for a whole switch.
-        self._monitors = [m for m in config.monitors if m.enabled and m.type in SWITCH_TYPES
-                          and not (m.type == "snmp" and m.mode == "interface")]
+        suitable = [m for m in config.monitors if m.type in SWITCH_TYPES
+                    and not (m.type == "snmp" and m.mode == "interface")]
+        self._configured = {m.slug for m in suitable}
+        self._all = suitable
+        self._monitors = [m for m in suitable if m.enabled]
 
     # Switches ---------------------------------------------------------------------------
 
@@ -119,34 +123,35 @@ class Matcher:
                 return hit
         return None
 
-    async def sync_switches(self) -> None:
-        """Fill in matched_monitor for switches that have none, or whose monitor is gone."""
-        usable = {m.slug for m in self._monitors}
+    async def effective_matches(self) -> dict[str, str | None]:
+        """The monitor slug for every known switch, computed without writing anything.
 
-        def go(db: Any) -> None:
-            rows = db.execute("SELECT switch_id, name, mgmt_addresses, matched_monitor "
-                              "FROM infra_switches").fetchall()
-            for sid, name, addrs, current in rows:
-                if current in usable:
-                    continue
-                found = self.match_switch(sid, name, json.loads(addrs))
-                if found != current:
-                    db.execute("UPDATE infra_switches SET matched_monitor=? WHERE switch_id=?",
-                               (found, sid))
-        await self._infra._run(go)
+        The stored column holds only an admin's link. It wins while its monitor is still
+        configured, even if that monitor is disabled, so the link comes back when the monitor
+        is enabled again. Otherwise the automatic match is used.
+        """
+        def go(db: Any) -> list[tuple[Any, ...]]:
+            return db.execute("SELECT switch_id, name, mgmt_addresses, matched_monitor "
+                              "FROM infra_switches ORDER BY first_seen, switch_id").fetchall()
+        out: dict[str, str | None] = {}
+        for sid, name, addrs, linked in await self._infra._run(go):
+            if linked in self._configured:
+                out[sid] = linked
+            else:
+                out[sid] = self.match_switch(sid, name, json.loads(addrs))
+        return out
 
     async def unlinked(self) -> list[dict[str, Any]]:
         """The queue: switches seen but matching no monitor, oldest first."""
-        await self.sync_switches()
+        matches = await self.effective_matches()
 
         def go(db: Any) -> list[tuple[Any, ...]]:
             return db.execute(
                 "SELECT switch_id, name, mgmt_addresses, vendor, platform, first_seen, last_seen "
-                "FROM infra_switches WHERE matched_monitor IS NULL "
-                "ORDER BY first_seen, switch_id").fetchall()
+                "FROM infra_switches ORDER BY first_seen, switch_id").fetchall()
         return [{"switch_id": r[0], "name": r[1], "mgmt_addresses": json.loads(r[2]),
                  "vendor": r[3], "platform": r[4], "first_seen": r[5], "last_seen": r[6]}
-                for r in await self._infra._run(go)]
+                for r in await self._infra._run(go) if matches.get(r[0]) is None]
 
     async def link_switch(self, sid: str, slug: str, actor: str, remote: str = "") -> None:
         """An admin links a queued switch to a configured monitor. Audited."""
@@ -184,7 +189,7 @@ class Matcher:
         out: list[PortMatch] = []
         chassis = sid[4:] if sid.startswith("mac:") else None
         hosts = {_norm_host(a) for a in addresses if a}
-        sw = next((m for m in self._monitors if m.slug == matched_monitor), None)
+        sw = next((m for m in self._all if m.slug == matched_monitor), None)
         if sw is not None and sw.type != "unifi_network":
             hosts.add(_norm_host(sw.host))
         for m in self._config.monitors:
@@ -208,7 +213,7 @@ class Matcher:
         return out
 
     async def port_matches(self, sid: str, port: str) -> list[PortMatch]:
-        await self.sync_switches()
+        matches = await self.effective_matches()
         key = port_key(port)
 
         def go(db: Any) -> tuple[Any, ...] | None:
@@ -219,17 +224,17 @@ class Matcher:
         row = await self._infra._run(go)
         if row is None:
             return []
-        return self.match_port(sid, row[0], json.loads(row[1]), key, row[2], row[3])
+        return self.match_port(sid, matches.get(sid), json.loads(row[1]), key, row[2], row[3])
 
     # Findings ---------------------------------------------------------------------------
 
     async def findings(self, live: LiveReader) -> list[Finding]:
         """Conflicts between the newest field properties and the live state, computed now."""
-        await self.sync_switches()
+        linked = await self.effective_matches()
 
         def go(db: Any) -> tuple[list[Any], list[Any], list[Any]]:
             ports = db.execute(
-                "SELECT p.switch_id, p.port_key, s.matched_monitor, s.mgmt_addresses, "
+                "SELECT p.switch_id, p.port_key, s.mgmt_addresses, "
                 "p.if_index, p.unifi_index FROM infra_ports p "
                 "JOIN infra_switches s USING (switch_id) ORDER BY p.switch_id, p.port_key"
             ).fetchall()
@@ -247,12 +252,13 @@ class Matcher:
             cur.setdefault((sid, key), {})[name] = json.loads(value)
 
         out: list[Finding] = []
-        for sid, key, mon, addrs, if_index, unifi_index in ports:
+        for sid, key, addrs, if_index, unifi_index in ports:
             field = cur.get((sid, key), {})
             if not field:
                 continue
-            matches = self.match_port(sid, mon, json.loads(addrs), key, if_index, unifi_index)
-            out.extend(self._compare(sid, key, field, self._live_of(matches, live)))
+            found = self.match_port(sid, linked.get(sid), json.loads(addrs), key, if_index,
+                                    unifi_index)
+            out.extend(self._compare(sid, key, field, self._live_of(found, live)))
         out.extend(_repatched(labels))
         return out
 
