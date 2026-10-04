@@ -472,7 +472,11 @@ version, stops startup with a message naming it (`--validate` checks this too).
 Plugin routes live under `/api/plugins/<name>/` and always need a login
 session, the CSRF token for anything but a read, and count against
 `server.plugin_rate_per_minute`; state changes and refusals are written to the
-audit log. Plugins run in the same process with full trust, so install only
+audit log. A plugin keeps its own tables and schema version in the same database;
+its migrations run at startup, and a database written by a newer release of the
+plugin is refused. Removing a plugin from `plugins:` hides its pages, navigation
+entries and routes but keeps its data, so listing it again resumes where it
+stopped. Plugin pages live under `/plugins/<name>/` and need a login. Plugins run in the same process with full trust, so install only
 plugins you trust. The design is in `docs/FIELD-DATA.md`.
 
 ## Not implemented

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict
 
 from watchpost.plugins import (KeyScope, MapContribution, Migration, NavEntry, PluginBase,
-                               PluginRouter)
+                               PluginPage, PluginRouter)
+
+STATIC = Path(__file__).parent / "echo_static"
 
 
 class EchoSettings(BaseModel):
@@ -58,6 +61,13 @@ class EchoPlugin(PluginBase):
 
     def migrations(self) -> list[Migration]:
         return [Migration(1, ("CREATE TABLE IF NOT EXISTS echo_things (id INTEGER)",))]
+
+    def pages(self) -> list[PluginPage]:
+        return [PluginPage("/plugins/echo", STATIC / "echo.html"),
+                PluginPage("/plugins/echo/a", STATIC / "echo.html", admin_only=True)]
+
+    def static_dir(self) -> Path:
+        return STATIC
 
     def nav_entries(self) -> list[NavEntry]:
         return [NavEntry("Echo", "/plugins/echo"), NavEntry("Echo admin", "/plugins/echo/a", True)]

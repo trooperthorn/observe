@@ -19,7 +19,7 @@ from __future__ import annotations
 import base64
 import hmac
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +36,7 @@ from .config import Config
 from .ingest.api import DenialAggregator, RateLimiter, build_router
 from .ingest.keys import IngestKeyError, create_key, list_keys, revoke_key
 from .ingest.schema import MAX_NAME
-from .plugins import ROUTE_PREFIX, LoadedPlugins
+from .plugins import PAGE_PREFIX, ROUTE_PREFIX, LoadedPlugins
 from .scheduler import Scheduler
 from .store import Store
 
@@ -80,6 +80,12 @@ def _monitor_view(mon: Any, st: Any, sched: Any) -> dict[str, Any]:
         "latency_ms": last.latency_ms if last else None,
         "detail": last.detail if last else {},
     }
+
+
+def _page_handler(file: Path) -> Callable[[], Awaitable[FileResponse]]:
+    async def page() -> FileResponse:
+        return FileResponse(file)
+    return page
 
 
 def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Alerter,
@@ -214,6 +220,17 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                                remote=remote, detail={"plugin": plugin})
         return resp
 
+    # Pages and static files exist only for listed plugins, so a disabled plugin has no
+    # surface at all. load_plugins keeps every page path clear of the plugin's own /static.
+    for loaded in plugins.plugins:
+        for page in loaded.pages:
+            app.add_api_route(
+                page.path, _page_handler(page.file), methods=["GET"], include_in_schema=False,
+                response_class=FileResponse,
+                dependencies=[Depends(guards.admin if page.admin_only else auth)])
+        if loaded.static_dir is not None:
+            app.mount(f"{PAGE_PREFIX}/{loaded.name}/static",
+                      StaticFiles(directory=loaded.static_dir), name=f"plugin_{loaded.name}")
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     by_slug = {m.slug: m for m in scheduler.monitors}
 

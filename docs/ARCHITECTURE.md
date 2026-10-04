@@ -78,9 +78,19 @@ holds only `results` and `events`; it is treated as version 1 and keeps all its
 rows. A database with a newer version than the code supports raises
 `SchemaTooNewError` and is left untouched.
 
+Plugins keep their own version sequence. `plugin_schema` holds one row per plugin
+with the highest migration applied. After the core steps, `Store` runs the
+migrations of each listed plugin (`migrate_plugins`), one transaction per step,
+rolling a failed step back. A plugin whose recorded version is newer than the
+migrations in its code raises `PluginSchemaTooNewError` (a `SchemaTooNewError`),
+and every plugin is checked before any is changed. A plugin that is not listed
+is not touched: its tables and its `plugin_schema` row stay as they were, so
+listing it again later picks up where it stopped. watchpost never drops plugin
+tables.
+
 Version 2 adds `hosts`, `host_samples`, `host_sources` and `host_events`.
 Version 3 adds `ingest_keys`, `users`, `sessions` and `audit`, and version 4 adds
-`ingest_batches`. Existing history
+`ingest_batches`, and version 5 adds `plugin_schema`. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
 
 Both retention settings must be at least 1 day; config validation rejects 0 and negative values.
@@ -258,11 +268,23 @@ release, two packages claim one name, its settings fail validation, or a hook
 returns something malformed. `--validate` runs the same checks.
 
 The hooks are `routers`, `key_scopes`, `config_model` (settings come from
-`plugin_settings.<name>`), `migrations`, `pages`, `nav_entries`,
+`plugin_settings.<name>`), `migrations`, `pages`, `static_dir`, `nav_entries`,
 `monitor_types` and `map_contribution`. `PluginBase` gives each an empty
-default. Routers, the config section and the navigation list are used now.
-Migrations, key scopes, monitor types, pages and map contributions are
-validated at load and applied by the later slices that build those features.
+default. Routers, the config section, migrations, pages, static files and the
+navigation list are used now. Key scopes, monitor types and map contributions
+are validated at load and applied by the later slices that build those features.
+A settings section is validated by the plugin's own model under its own
+`plugin_settings.<name>` key; the startup error names each bad field and the
+reason but never the rejected value, which may be a secret.
+
+Pages and static files appear only for listed plugins. A `PluginPage` path must
+be `/plugins/<name>` or below it and not under `/plugins/<name>/static`, so a
+plugin cannot replace a core page, and its file must exist. A page needs a
+session like the other pages (or the admin role when `admin_only` is set); the
+page holds no data and its script reads the plugin's API. `static_dir` is a
+folder inside the plugin package, served read-only at `/plugins/<name>/static`
+like the core's own `/static`. Both go through the core's security-headers
+middleware, so they carry the same CSP, which forbids inline script.
 Monitor type names must start with the plugin name and a dot, and key scope
 markers are three to eight lower-case letters that may not be `wpi`.
 

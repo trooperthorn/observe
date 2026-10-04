@@ -16,9 +16,11 @@ mount_plugins). The plugin cannot choose weaker authentication, skip CSRF,
 skip the rate limit or skip the audit log, because it never controls the
 mounting. It can only ask for the stricter admin role.
 
-Hooks that later slices consume (migrations, monitor types, map contributions,
-pages, key scopes) are declared and validated here so a malformed plugin fails
-at startup, but they are applied by the code for those features.
+Migrations are applied by the store (watchpost/store.py, migrate_plugins), and
+pages and static files are served by the app (watchpost/web.py), both only for
+plugins that are listed. Hooks that later slices consume (monitor types, map
+contributions, key scopes) are declared and validated here so a malformed
+plugin fails at startup, but they are applied by the code for those features.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ from .config import Config
 
 GROUP = "watchpost.plugins"
 ROUTE_PREFIX = "/api/plugins"
+PAGE_PREFIX = "/plugins"  # plugin pages and static files: /plugins/<name>/...
 RESERVED_SCOPES = frozenset({"wpi"})  # the core's own ingest key scope
 _NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _SCOPE = re.compile(r"^[a-z]{3,8}$")
@@ -84,10 +87,14 @@ class NavEntry:
 
 @dataclass(frozen=True)
 class PluginPage:
-    """A static HTML page. Like /host it must hold no data; its script fetches from the API."""
+    """A static HTML page. Like /host it must hold no data; its script fetches from the API.
+
+    The path must sit under /plugins/<name>, so a plugin cannot take over a core page.
+    """
 
     path: str
     file: Path
+    admin_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -113,6 +120,7 @@ class Plugin(Protocol):
     def config_model(self) -> type[BaseModel] | None: ...
     def migrations(self) -> list[Migration]: ...
     def pages(self) -> list[PluginPage]: ...
+    def static_dir(self) -> Path | None: ...
     def nav_entries(self) -> list[NavEntry]: ...
     def monitor_types(self) -> dict[str, Any]: ...
     def map_contribution(self, store: Any) -> Awaitable[MapContribution]: ...
@@ -141,6 +149,10 @@ class PluginBase:
     def pages(self) -> list[PluginPage]:
         return []
 
+    def static_dir(self) -> Path | None:
+        """A folder inside the plugin package, served at /plugins/<name>/static."""
+        return None
+
     def nav_entries(self) -> list[NavEntry]:
         return []
 
@@ -161,6 +173,7 @@ class LoadedPlugin:
     key_scopes: tuple[KeyScope, ...]
     migrations: tuple[Migration, ...]
     pages: tuple[PluginPage, ...]
+    static_dir: Path | None
     nav_entries: tuple[NavEntry, ...]
     monitor_types: Mapping[str, Any]
     settings: BaseModel | None
@@ -240,15 +253,29 @@ def _check_migrations(name: str, migrations: list[Migration]) -> None:
         raise PluginError(f"plugin {name!r}: migration versions must be 1, 2, 3 ... in order")
 
 
-def _check_nav_and_pages(name: str, nav: list[NavEntry], pages: list[PluginPage]) -> None:
+def _check_nav_and_pages(name: str, nav: list[NavEntry], pages: list[PluginPage],
+                         static_dir: Path | None) -> None:
     for n in nav:
         if not n.label or len(n.label) > MAX_LABEL or not n.path.startswith("/") \
                 or n.path.startswith("//"):
             raise PluginError(f"plugin {name!r}: nav entry {n.label!r} needs a short label "
                               "and a path starting with one /")
+    base = f"{PAGE_PREFIX}/{name}"
+    static = f"{base}/static"
+    if static_dir is not None and not Path(static_dir).is_dir():
+        raise PluginError(f"plugin {name!r}: static_dir {str(static_dir)!r} is not a folder")
+    seen: set[str] = set()
     for p in pages:
-        if not p.path.startswith("/") or ".." in p.path.split("/"):
-            raise PluginError(f"plugin {name!r}: page path {p.path!r} is not valid")
+        if not isinstance(p, PluginPage) or not (p.path == base or p.path.startswith(base + "/")) \
+                or ".." in p.path.split("/") or p.path.endswith("/") \
+                or p.path == static or p.path.startswith(static + "/"):
+            raise PluginError(f"plugin {name!r}: page path {getattr(p, 'path', p)!r} must be "
+                              f"{base} or below it, and not under {static}")
+        if p.path in seen:
+            raise PluginError(f"plugin {name!r}: page path {p.path!r} is declared twice")
+        seen.add(p.path)
+        if not Path(p.file).is_file():
+            raise PluginError(f"plugin {name!r}: page file {str(p.file)!r} does not exist")
 
 
 def _check_monitor_types(name: str, types: dict[str, Any]) -> None:
@@ -269,8 +296,11 @@ def _settings(name: str, model: type[BaseModel] | None,
     try:
         return model.model_validate(dict(raw))
     except ValidationError as err:
+        # Only where and why, never the rejected value, which may be a secret.
+        problems = "; ".join(f"{'.'.join(str(x) for x in e['loc']) or '(section)'}: {e['msg']}"
+                             for e in err.errors())
         raise PluginError(f"plugin {name!r}: invalid settings in "
-                          f"plugin_settings.{name}: {err}") from err
+                          f"plugin_settings.{name}: {problems}") from err
 
 
 def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
@@ -286,6 +316,7 @@ def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
         settings = _settings(name, plugin.config_model(), settings_raw)
         routers, scopes = plugin.routers(), plugin.key_scopes()
         migrations, pages = plugin.migrations(), plugin.pages()
+        static_dir = plugin.static_dir()
         nav, mtypes = plugin.nav_entries(), plugin.monitor_types()
     except PluginError:
         raise
@@ -294,11 +325,11 @@ def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
     _check_routers(name, routers)
     _check_scopes(name, scopes, scopes_seen)
     _check_migrations(name, migrations)
-    _check_nav_and_pages(name, nav, pages)
+    _check_nav_and_pages(name, nav, pages, static_dir)
     _check_monitor_types(name, mtypes)
     plugin.configure(settings)
     return LoadedPlugin(plugin, tuple(routers), tuple(scopes), tuple(migrations), tuple(pages),
-                        tuple(nav), dict(mtypes), settings)
+                        static_dir, tuple(nav), dict(mtypes), settings)
 
 
 def load_plugins(config: Config, entry_points: EntryPoints = installed_entry_points,

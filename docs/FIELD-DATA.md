@@ -1,6 +1,6 @@
 # Field data from the Pockethernet app
 
-Status: design; the plugin loader is built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
+Status: design; the plugin loader, per-plugin migrations and plugin pages are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
 Pockethernet Android app (repo `pocketethernet-app`) become properties of switch
 ports in watchpost, and how the mapping data in those results builds an
 infrastructure map with live availability and health.
@@ -149,17 +149,23 @@ watchpost gains a plugin system, and this design is split between the core and t
 `watchpost/plugins.py` and the mounting code in `watchpost/web.py` implement the host. Details differ from the sketch above in these ways:
 
 - Settings live under `plugin_settings.<name>` next to `plugins:`, because the core config rejects unknown keys.
-- Routers, the config section and navigation entries are active. Migrations, key scopes, monitor types, pages and map contributions are declared and validated at load, and applied by the slices that build them (build order items 2, 3 and 6, and the plugin's key scope work).
+- Routers, the config section and navigation entries are active. Key scopes, monitor types and map contributions are declared and validated at load, and applied by the slices that build them (build order item 6 and the plugin's key scope work).
 - Every plugin route needs a login session for now. A key-authenticated route, as the phone upload needs, comes with the key scope slice and will be mounted by the core in the same way.
 - Audit kinds are `plugin_request` (state-changing requests), `plugin_denied` and `plugin_failed`. Successful reads are not audited.
 - A plugin's monitor type names must start with `<plugin>.`, and key scope markers may not be `wpi`.
+
+### Built: plugin migrations, config and pages (slice 2)
+
+- `plugin_schema` (core schema version 5) holds one version per plugin. `Store` applies the migrations of listed plugins after the core's, one transaction per step, and raises `PluginSchemaTooNewError` when a plugin's recorded version is newer than its code. A plugin that is not listed is not touched, and its tables are kept when it is disabled.
+- A plugin's settings are validated by its own model under `plugin_settings.<name>`. The error names the field and the reason, never the value.
+- Pages and navigation entries exist only for listed plugins. A page path must be `/plugins/<name>` or below it. A plugin may also serve a `static_dir` at `/plugins/<name>/static`, behind the core's security headers and CSP.
 
 ## Build order
 
 **watchpost core.**
 1. Plugin loader and hooks (built).
-2. Per-plugin migrations.
-3. Plugin pages and navigation.
+2. Per-plugin migrations (built).
+3. Plugin pages and navigation (built).
 4. Infrastructure tables, port-key normalisation and property history.
 5. Monitor matching and conflict findings.
 6. Map data, ageing and inferred dependencies.

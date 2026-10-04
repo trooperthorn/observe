@@ -14,12 +14,16 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .checks.base import CheckResult
 from .ingest.schema import Batch, normalize_severity
 from .state import Transition
+
+if TYPE_CHECKING:
+    from .plugins import LoadedPlugins
 
 # Schema versioning uses a schema_version table. Databases created before it
 # existed hold only the results and events tables; they are treated as version
@@ -105,6 +109,14 @@ BATCH_TABLES = (
     "CREATE INDEX IF NOT EXISTS ingest_batches_ts ON ingest_batches(ts)",
 )
 
+# One row per plugin holds the highest migration version applied for it. Plugin tables
+# live beside the core's and are never dropped, so disabling a plugin leaves them as they are.
+PLUGIN_TABLES = (
+    """CREATE TABLE IF NOT EXISTS plugin_schema (
+  plugin TEXT PRIMARY KEY, version INTEGER NOT NULL
+)""",
+)
+
 # Stored as the reason when an agent says a source does not exist on the host.
 ABSENT_REASON = "not present on this host"
 
@@ -118,6 +130,7 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     2: HOST_TABLES,
     3: ACCESS_TABLES,
     4: BATCH_TABLES,
+    5: PLUGIN_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
@@ -152,6 +165,48 @@ def migrate(db: sqlite3.Connection) -> None:
         db.isolation_level = old
 
 
+class PluginSchemaTooNewError(SchemaTooNewError):
+    """Raised when a plugin's tables were written by a newer release of that plugin."""
+
+
+def migrate_plugins(db: sqlite3.Connection,
+                    plugins: Mapping[str, Sequence[Any]]) -> None:
+    """Apply each listed plugin's migrations after the core's, one transaction per step.
+
+    `plugins` maps a plugin name to its Migration objects (version, statements), numbered
+    from 1. Every plugin is checked before any is changed, so a database that is too new
+    for one plugin is refused whole. A plugin that is not listed is not touched at all.
+    """
+    old = db.isolation_level
+    db.isolation_level = None
+    try:
+        db.execute(PLUGIN_TABLES[0])
+        current: dict[str, int] = {}
+        for name, migrations in plugins.items():
+            row = db.execute("SELECT version FROM plugin_schema WHERE plugin=?",
+                             (name,)).fetchone()
+            current[name] = row[0] if row else 0
+            if current[name] > len(migrations):
+                raise PluginSchemaTooNewError(
+                    f"plugin {name!r} database schema version {current[name]} is newer than "
+                    f"this plugin release supports ({len(migrations)}); upgrade the plugin "
+                    "or restore an older database")
+        for name, migrations in plugins.items():
+            for migration in migrations[current[name]:]:
+                db.execute("BEGIN")
+                try:
+                    for stmt in migration.statements:
+                        db.execute(stmt)
+                    db.execute("INSERT OR REPLACE INTO plugin_schema (plugin, version) "
+                               "VALUES (?, ?)", (name, migration.version))
+                except BaseException:
+                    db.execute("ROLLBACK")
+                    raise
+                db.execute("COMMIT")
+    finally:
+        db.isolation_level = old
+
+
 def content_key(batch: Batch) -> str:
     """Stable identity of a batch that carries no batch_id: a SHA-256 of its
     validated content. The prefix keeps it apart from any agent-chosen id."""
@@ -160,7 +215,7 @@ def content_key(batch: Batch) -> str:
 
 
 class Store:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, plugins: LoadedPlugins | None = None) -> None:
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(path, check_same_thread=False)
@@ -168,6 +223,8 @@ class Store:
         self._db.execute("PRAGMA synchronous=NORMAL")
         try:
             migrate(self._db)
+            migrate_plugins(self._db, {p.name: p.migrations
+                                       for p in plugins.plugins} if plugins else {})
         except BaseException:
             self._db.close()
             raise

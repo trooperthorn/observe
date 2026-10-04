@@ -50,7 +50,7 @@ async def _once(config, only: str | None) -> int:  # type: ignore[no-untyped-def
 
 
 async def _serve(config, plugins) -> None:  # type: ignore[no-untyped-def]
-    store = Store(config.server.db_path)
+    store = Store(config.server.db_path, plugins)
     alerter = Alerter(config)
     sched = Scheduler(config, store, alerter)
     app = create_app(config, store, sched, alerter, plugins=plugins)
