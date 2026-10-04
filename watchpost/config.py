@@ -236,6 +236,35 @@ class MonitorBase(Strict):
         return re.sub(r"[^a-z0-9]+", "-", self.name.lower()).strip("-")
 
 
+class ComponentThresholds(Thresholds):
+    """Thresholds for one pushed reading, named by its source and metric.
+
+    The latest value of every sample with this source and metric is compared.
+    """
+
+    source: str = Field(min_length=1)
+    metric: str = Field(min_length=1)
+
+
+class PushedHostMonitor(MonitorBase):
+    """A host that pushes hostwatch batches to POST /api/ingest.
+
+    Nothing is polled. Each check reads the latest batch from the store and
+    derives Good, Warning or Critical per component. `host` is the host name
+    the agent sends, which is also the name its ingest key is bound to.
+    """
+
+    type: Literal["pushed_host"]
+    host: str = Field(min_length=1)
+    # Seconds without a batch before the host counts as a failure. Default is
+    # three monitor intervals, so one late push does not count.
+    stale_after: float | None = Field(default=None, gt=0)
+    components: list[ComponentThresholds] = Field(default_factory=list)
+    # Sources that must be available. An unavailable one is a Warning. Other
+    # unavailable sources are ignored, because a host without a GPU is normal.
+    require_sources: list[str] = Field(default_factory=list)
+
+
 class PingMonitor(MonitorBase):
     type: Literal["ping"]
     host: str
@@ -548,6 +577,7 @@ Monitor = Annotated[
         WinRMMonitor,
         WmiMonitor,
         MqttMonitor,
+        PushedHostMonitor,
     ],
     Field(discriminator="type"),
 ]

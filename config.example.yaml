@@ -488,3 +488,17 @@ monitors:
     credential: mqtt-monitor
     topic: zigbee2mqtt/bridge/state
     expect: online
+
+  # ------------------------------------------------- Pushed hosts (hostwatch)
+  # The agent pushes to POST /api/ingest with a key from
+  # --ingest-key-create nas01. Listing the host here is what makes it a
+  # monitor. No batch within stale_after seconds (default three intervals)
+  # counts as a failure.
+  - name: nas01
+    group: storage
+    type: pushed_host
+    host: nas01
+    depends_on: [Core switch]
+    require_sources: [mdraid]
+    components:
+      - {source: hwmon, metric: cpu_temp_c, direction: above, warn: 75, crit: 90}

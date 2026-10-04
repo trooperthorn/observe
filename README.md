@@ -29,6 +29,7 @@ It shares no code with, and is not affiliated with, any SolarWinds product.
 | `unifi_network` | Integration API: `devices` online summary, one `device`, `device_cpu`, `device_memory`, `firmware` updates | %, counts |
 | `unifi_protect` | Integration API: `cameras` connected summary, one `camera`, `info` | not-connected count |
 | `technitium` | HTTP API: `stats` (SERVFAIL rate over the last hour or day), `update` available | % SERVFAIL |
+| `pushed_host` | No poll: reads the newest batch a hostwatch agent pushed; Good, Warning or Critical per component, plus staleness | seconds since last batch |
 
 `config.example.yaml` has one worked example of every type.
 
@@ -369,8 +370,25 @@ their own key.
 Boot events from the agent are classified as clean, crash or unknown. The
 classification is stored in the event detail, and the host row records the
 current boot id and whether the previous boot ended cleanly. An unrecognised
-boot kind is unknown, never clean. Pushed hosts are stored but are not yet
-shown in the dashboard or turned into monitors; that is a later slice.
+boot kind is unknown, never clean.
+
+A pushed host becomes a monitor when you list it in the YAML with
+`type: pushed_host` and the `host` name its agent sends. Listing it is the
+confirmation: a host that pushes but is not listed is stored and never alerts.
+Nothing is polled. Each check reads the latest batch and grades every entry in
+`components` (a `source` and `metric` with `warn` and `crit` thresholds, same
+`direction` rule as other monitors) as Good, Warning or Critical. Critical maps
+to a failed check, Warning to a warning, and Good to OK, so the usual
+`failures_to_down` and `recoveries_to_up` confirmation applies before anything
+pages. `require_sources` names sources that must be available; one that is not
+is a Warning. A null reading is skipped, never treated as zero. If no batch
+arrives within `stale_after` seconds (default three intervals), or none ever
+arrived, the check fails like an unreachable host. `group`, `depends_on` and
+`critical` work as for any monitor, so a host appears in its group's rollup,
+is suppressed when a parent switch is down, and raises alerts. `/metrics` gains
+`watchpost_host_age_seconds` and `watchpost_host_component_state` (0 good, 1
+warning, 2 critical) for pushed hosts, alongside the usual state, effective
+state and group lines. Per-host hardware pages are a later slice.
 
 Ingest keys are managed from the command line until the admin screen exists.
 `python -m watchpost --config watchpost.yaml --ingest-key-create HOST` prints a

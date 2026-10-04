@@ -8,6 +8,7 @@ from ..config import Config
 from .apps import HomeAssistantCheck, TechnitiumCheck, UniFiNetworkCheck, UniFiProtectCheck
 from .base import Check, CheckResult, Result
 from .mqtt import MqttCheck
+from .host import PushedHostCheck
 from .net import DnsCheck, HttpCheck, PingCheck, TcpCheck, TlsCertCheck
 from .platforms import ProxmoxCheck, TrueNASCheck, VSphereCheck
 from .snmp import SnmpCheck
@@ -33,11 +34,15 @@ REGISTRY: dict[str, type[Check]] = {
     "unifi_network": UniFiNetworkCheck,
     "unifi_protect": UniFiProtectCheck,
     "technitium": TechnitiumCheck,
+    "pushed_host": PushedHostCheck,
 }
 
 
-def build_check(monitor: Any, config: Config) -> Check:
-    return REGISTRY[monitor.type](monitor, config)
+def build_check(monitor: Any, config: Config, store: Any = None) -> Check:
+    cls = REGISTRY[monitor.type]
+    if cls is PushedHostCheck:
+        return PushedHostCheck(monitor, config, store)
+    return cls(monitor, config)
 
 
 __all__ = ["Check", "CheckResult", "Result", "REGISTRY", "build_check"]

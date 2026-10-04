@@ -114,12 +114,20 @@ is a later slice.
 
 ## Status integration
 
-A confirmed pushed host becomes a monitor of type `pushed` that takes its
-state from freshness and readings rather than from a poll. Missing pushes for
-longer than the configured interval produce FAIL through the same state
-machine, so confirmation counts, dependencies, groups, alerts, and
-`/metrics` all work unchanged. Unconfirmed hosts never alert. The grouped
-summary is adapted from hostwatch's `integrations/summary.py`.
+A pushed host becomes a monitor of type `pushed_host` when it is listed in the
+YAML. Listing it is the confirmation; the `hosts.confirmed` column is reserved
+for the admin screen's confirm action in a later slice. The check
+(`watchpost/checks/host.py`) takes its state from freshness and readings
+rather than from a poll. It reads the newest sample per source, metric and
+label set through `Store.latest_host`, grades each configured component Good,
+Warning or Critical, and returns OK, WARN or FAIL for the worst one. Those go
+through `MonitorState.observe` like any other result, so `failures_to_down`
+confirmation applies before a host is DOWN or pages. No batch within
+`stale_after` seconds (default three intervals), or none ever, is FAIL.
+Because the result is an ordinary check result, `group`, `depends_on`,
+`critical`, rollup, alerts and `/metrics` work unchanged, and `/metrics` adds
+`watchpost_host_age_seconds` and `watchpost_host_component_state`. The grouped
+summary adapted from hostwatch's `integrations/summary.py` is a later slice.
 
 ## Host views
 

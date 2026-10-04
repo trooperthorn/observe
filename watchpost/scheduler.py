@@ -44,7 +44,7 @@ class Scheduler:
         self.alerter = alerter
         self.monitors = [m for m in config.monitors if m.enabled]
         self.by_slug = {m.slug: m for m in self.monitors}
-        self.checks = {m.slug: build_check(m, config) for m in self.monitors}
+        self.checks = {m.slug: build_check(m, config, store) for m in self.monitors}
         self.states = {
             m.slug: MonitorState(config.effective(m, "failures_to_down"),
                                  config.effective(m, "recoveries_to_up"))

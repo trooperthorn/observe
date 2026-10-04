@@ -79,4 +79,4 @@ def test_example_config_validates(monkeypatch):
     assert {m.type for m in cfg.monitors} == {
         "ping", "tcp", "http", "dns", "tls_cert", "snmp", "winrm", "wmi", "mqtt", "linux",
         "docker", "truenas", "proxmox", "vsphere", "homeassistant", "unifi_network",
-        "unifi_protect", "technitium"}
+        "unifi_protect", "technitium", "pushed_host"}

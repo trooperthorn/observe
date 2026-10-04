@@ -281,6 +281,37 @@ class Store:
         return await asyncio.to_thread(
             self._ingest_sync, batch, boots, time.time() if now is None else now)
 
+    def _latest_host_sync(self, host: str, since: float) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT last_seen, platform, agent_version, clean_shutdown FROM hosts WHERE host=?",
+                (host,)).fetchone()
+            if row is None:
+                return None
+            # Newest row per series; rowid breaks a tie between equal timestamps, so the
+            # row inserted last wins instead of an arbitrary one.
+            samples = self._db.execute(
+                "SELECT source, metric, labels, value, unit, ts FROM ("
+                "SELECT source, metric, labels, value, unit, ts, ROW_NUMBER() OVER ("
+                "PARTITION BY source, metric, labels ORDER BY ts DESC, rowid DESC) AS n "
+                "FROM host_samples WHERE host=? AND ts>=?) WHERE n=1", (host, since)).fetchall()
+            sources = self._db.execute(
+                "SELECT source, available, reason FROM host_sources WHERE host=?",
+                (host,)).fetchall()
+        return {
+            "last_seen": row[0], "platform": row[1], "agent_version": row[2],
+            "clean_shutdown": row[3],
+            "samples": [{"source": r[0], "metric": r[1], "labels": json.loads(r[2]),
+                         "value": r[3], "unit": r[4], "ts": r[5]} for r in samples],
+            "sources": {r[0]: {"available": bool(r[1]), "reason": r[2]} for r in sources},
+        }
+
+    async def latest_host(self, host: str, since: float = 0.0) -> dict[str, Any] | None:
+        """The newest reading per source, metric and label set for a pushed host
+        (samples older than `since` are left out), its source availability, and
+        when a batch last arrived. None when the host has never pushed."""
+        return await asyncio.to_thread(self._latest_host_sync, host, since)
+
     def _audit_sync(self, row: tuple[Any, ...]) -> None:
         with self._lock, self._db:
             self._db.execute(

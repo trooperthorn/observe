@@ -30,7 +30,8 @@ from .store import Store
 
 STATIC = Path(__file__).parent / "static"
 _STATE_NUM = {"pending": -1, "up": 0, "warn": 1, "down": 2}
-_EFF_NUM = {**_STATE_NUM, "unreachable": 3}
+_COMPONENT_NUM = {"good": 0, "warning": 1, "critical": 2}
+_EFF_NUM ={**_STATE_NUM, "unreachable": 3}
 
 
 def _label(value: str) -> str:
@@ -187,6 +188,20 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                "# TYPE watchpost_group_state gauge"]
         for g, info in sorted(scheduler.rollup.group_states().items()):
             grp.append(f'watchpost_group_state{{group="{_label(g)}"}} {_EFF_NUM[info["state"]]}')
-        return "\n".join(lines + values + eff + fcl + grp) + "\n"
+        age = ["# HELP watchpost_host_age_seconds Seconds since the last batch from a pushed host.",
+               "# TYPE watchpost_host_age_seconds gauge"]
+        comp = ["# HELP watchpost_host_component_state Pushed host component: 0 good, "
+                "1 warning, 2 critical.", "# TYPE watchpost_host_component_state gauge"]
+        for m in scheduler.monitors:
+            last = scheduler.states[m.slug].last
+            if m.type != "pushed_host" or last is None:
+                continue
+            labels = f'monitor="{m.slug}",group="{_label(m.group)}",host="{_label(m.host)}"'
+            if "age_seconds" in last.detail:
+                age.append(f"watchpost_host_age_seconds{{{labels}}} {last.detail['age_seconds']:.0f}")
+            for name, level in sorted(last.detail.get("components", {}).items()):
+                comp.append(f'watchpost_host_component_state{{{labels},component="{_label(name)}"}} '
+                            f"{_COMPONENT_NUM[level]}")
+        return "\n".join(lines + values + eff + fcl + grp + age + comp) + "\n"
 
     return app
