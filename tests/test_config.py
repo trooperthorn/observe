@@ -15,9 +15,11 @@ def test_env_and_file_refs(tmp_path, monkeypatch):
     secret = tmp_path / "comm"
     secret.write_text("from-file\n")
     monkeypatch.setenv("WP_PW", "from-env")
+    # Forward slashes keep a Windows path free of backslashes, which a
+    # double-quoted YAML scalar would read as escape sequences.
     cfg = load_config(_write(tmp_path, f"""
 credentials:
-  a: {{type: snmpv2c, community: "${{file:{secret}}}"}}
+  a: {{type: snmpv2c, community: "${{file:{secret.as_posix()}}}"}}
   b: {{type: mqtt, username: u, password: "${{WP_PW}}"}}
 """))
     assert cfg.credentials["a"].community == "from-file"

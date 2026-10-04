@@ -68,6 +68,12 @@ from .directory import DirectoryComputer, fetch_computers_async
 
 log = logging.getLogger("watchpost.discovery")
 
+# A name that resolves to several addresses (localhost is ::1 and 127.0.0.1) must
+# not spend the whole probe timeout on an address that never answers or, as on
+# Windows, takes about two seconds to refuse. Start the next address after the
+# RFC 8305 recommended delay instead of waiting for the first one to fail.
+HAPPY_EYEBALLS_DELAY = 0.25
+
 SYS_DESCR = ".1.3.6.1.2.1.1.1.0"
 SYS_OBJECT_ID = ".1.3.6.1.2.1.1.2.0"
 SYS_NAME = ".1.3.6.1.2.1.1.5.0"
@@ -333,7 +339,8 @@ class Discoverer:
 
     async def _tcp(self, f: HostFinding, port: int) -> None:
         try:
-            _, w = await asyncio.wait_for(asyncio.open_connection(f.address, port),
+            _, w = await asyncio.wait_for(asyncio.open_connection(f.address, port,
+                                                                  happy_eyeballs_delay=HAPPY_EYEBALLS_DELAY),
                                           self.s.timeout)
         except (OSError, asyncio.TimeoutError):
             return
@@ -399,7 +406,8 @@ class Discoverer:
         loose.verify_mode = ssl.CERT_NONE
         try:
             _, w = await asyncio.wait_for(
-                asyncio.open_connection(host, port, ssl=loose, server_hostname=sni),
+                asyncio.open_connection(host, port, ssl=loose, server_hostname=sni,
+                                        happy_eyeballs_delay=HAPPY_EYEBALLS_DELAY),
                 self.s.timeout + 1)
         except (OSError, asyncio.TimeoutError, ssl.SSLError):
             return None
@@ -422,7 +430,8 @@ class Discoverer:
         strict = api_ssl_context(True, self.s.ca_bundle)
         try:
             _, w = await asyncio.wait_for(
-                asyncio.open_connection(host, port, ssl=strict, server_hostname=sni),
+                asyncio.open_connection(host, port, ssl=strict, server_hostname=sni,
+                                        happy_eyeballs_delay=HAPPY_EYEBALLS_DELAY),
                 self.s.timeout + 1)
             w.close()
             info.update(valid=True, reason="chain and hostname validate")
@@ -459,7 +468,8 @@ class Discoverer:
 
     async def _ssh_banner(self, f: HostFinding) -> None:
         try:
-            r, w = await asyncio.wait_for(asyncio.open_connection(f.address, 22),
+            r, w = await asyncio.wait_for(asyncio.open_connection(f.address, 22,
+                                                                  happy_eyeballs_delay=HAPPY_EYEBALLS_DELAY),
                                           self.s.timeout)
             banner = await asyncio.wait_for(r.readline(), self.s.timeout)
             w.close()

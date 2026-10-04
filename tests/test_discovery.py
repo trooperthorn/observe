@@ -165,3 +165,21 @@ async def test_wrong_winrm_password_is_retired_before_lockout(https_server, monk
     await asyncio.gather(*(d._winrm(f) for f in findings))
     assert attempts == 3
     assert d.auth_failures["win"] == 3
+
+
+async def test_tcp_probe_races_address_families(monkeypatch):
+    """A name such as localhost resolves to ::1 and 127.0.0.1. The probe must
+    start the next address after a short delay rather than spend its whole
+    timeout on a first address that is filtered or slow to refuse."""
+    import watchpost.discovery as discovery_mod
+    seen = {}
+
+    async def fake_open(host, port, **kw):
+        seen.update(kw)
+        raise OSError("refused")
+
+    monkeypatch.setattr(discovery_mod.asyncio, "open_connection", fake_open)
+    f = HostFinding("localhost")
+    await Discoverer(cfg(credentials=[]))._tcp(f, 1)
+    assert f.open_ports == []
+    assert 0 < seen["happy_eyeballs_delay"] < 1
