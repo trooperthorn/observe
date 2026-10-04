@@ -7,6 +7,11 @@ row changes.
 As of 2026-09-23, 125 tests pass on Python 3.12 (Ubuntu 24.04, net-snmp
 5.9.4, Mosquitto from the Ubuntu archive).
 
+The owner reversed the earlier decision that watchpost is read-only by
+design (see `docs/ARCHITECTURE.md`). Ingest, logins, the admin role, the
+audit log, and the control channel are designed but have no verification
+yet; rows for them are added here as they are built and exercised.
+
 ## Verified against real services
 
 | Area | How |

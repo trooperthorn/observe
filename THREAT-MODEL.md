@@ -19,7 +19,7 @@ on how you deploy).
 
 | Control | Status | Notes |
 |---|---|---|
-| No write endpoints in the web surface | enforced | Monitors, alerts, and credentials can only change by editing YAML and restarting. A dashboard compromise can read inventory, not mute alerts. |
+| No write endpoints for monitors, alerts, or credentials | enforced | Monitors, alerts, and credentials can only change by editing YAML and restarting. A dashboard compromise can read inventory, not mute alerts. The earlier blanket rule is superseded: the login, admin, and ingest surfaces below do write, and are listed separately. |
 | Unresolved secret reference fails startup | enforced | Prevents silently running with an empty community or password. |
 | Unknown config keys rejected | enforced | Typos such as `verfy_tls: false` fail loudly instead of being ignored. |
 | Credential type must match monitor type | enforced | A WinRM secret can not be sent as an SNMP community by mistake. |
@@ -32,6 +32,25 @@ on how you deploy).
 | Dashboard basic auth | advisory | Off unless configured. Constant-time comparison. Basic auth over plain HTTP is readable on the wire; put a TLS reverse proxy in front or bind to a management VLAN. |
 | Dependency suppression can hide a real outage | advisory | A wrong `depends_on` (a server marked behind a switch it does not use) suppresses that server's alerts whenever the switch is down. Suppression is always recorded in the event log with the blocking monitor's name, and cycles and unknown parents are rejected at load. Review dependencies like firewall rules. |
 | Network exposure of 8080 | advisory | Compose publishes on all interfaces by default; bind to one address if needed. |
+
+## Ingest, logins, and control
+
+These rows describe the hostwatch ingest and login work in
+`docs/ARCHITECTURE.md`. **planned** means the design is decided and the
+control is not yet verified or, for the control channel, not built at all.
+The owner reversed the earlier read-only-by-design decision, so these
+surfaces write.
+
+| Control | Status | Notes |
+|---|---|---|
+| Ingest keys bound to one host | planned | A key is valid only for the host name it was created for, shown once, stored hashed, revocable. A stolen key can impersonate only its own host. |
+| Ingest input validated | planned | Strict schema, unknown fields rejected, body size capped, nothing stored from a failed request. |
+| Unconfirmed pushed hosts never alert | planned | A new host stays pending until an admin confirms it, so an unknown sender cannot create alerts. |
+| Sessions | planned | Random identifiers stored hashed, HttpOnly, Secure, SameSite=Strict cookie, idle and absolute expiry, Argon2id passwords, login rate limiting. |
+| CSRF protection | planned | A per-session token is required on every state-changing request, in addition to SameSite. |
+| Admin role | planned | Only admins manage users and keys and confirm hosts. Viewers are read-only. The role is checked on the server for each request. |
+| Audit log | planned | Append-only from the application's side; records logins, failures, key and user changes, confirmations, and rejected ingest. Secrets are never written. Anyone who can edit the database file can still alter it, so protect `./data`. |
+| Future control channel | planned, not built | Agent-side allowlist, actions signed by watchpost, admin only, per-action confirmation, typed host name for reboot, all audited. A compromised watchpost could request any allowlisted action on every host, which is why the allowlist lives on the agent and the signing key is separate from ingest keys. No action that changes a host is built in the current phase. |
 
 ## Discovery
 

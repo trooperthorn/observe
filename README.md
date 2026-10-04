@@ -333,12 +333,23 @@ binary sensor. Each target has `notify_on` (default `[down, up]`) and each
 monitor can restrict itself to named targets with `alerts:`. Failed deliveries
 are retried once, then shown in the dashboard footer.
 
+## Direction: no longer read-only
+
+The owner reversed the earlier decision that watchpost is read-only by
+design. It is becoming the single monitoring UI and, in a later phase, the
+control plane, replacing the hostwatch hub and web view. The first phase adds
+ingest from hostwatch agents, logins, an admin role, and an audit log, and
+builds no action that changes a host. The design and its limits are in
+`docs/ARCHITECTURE.md`, and the new risks are in `THREAT-MODEL.md`. Parts of
+this README describe the read-only behavior of the current release; they are
+updated as each phase lands.
+
 ## Not implemented
 
 Network discovery, automated remediation actions, maps, native DCOM WMI,
 Holt-Winters seasonal forecasting, alerts on forecasts,
-SNMP traps, maintenance windows, and editing monitors from the UI (by design:
-the YAML is the source of truth). See `docs/VERIFICATION.md` for what has and
+SNMP traps, maintenance windows, and editing monitors from the UI (the YAML stays the
+source of truth for polled monitors). See `docs/VERIFICATION.md` for what has and
 has not been tested against real systems.
 
 ## Development
