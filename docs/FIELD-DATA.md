@@ -1,6 +1,6 @@
 # Field data from the Pockethernet app
 
-Status: design, not built. This document describes how test results from the
+Status: design, not built. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
 Pockethernet Android app (repo `pocketethernet-app`) become properties of switch
 ports in watchpost, and how the mapping data in those results builds an
 infrastructure map with live availability and health.
@@ -95,14 +95,11 @@ except a new `scope` column on `ingest_keys`.
   - Reports go into a queue on the phone that survives restarts.
   - The queue is sent when the phone is on Wi-Fi or a VPN, with backoff between retries.
   - Nothing is queued unless you tap "Send to watchpost", or turn on automatic queueing in settings.
-- **Privacy defaults.** These are left out unless you opt in:
-  - location;
-  - Wi-Fi SSID and BSSID;
-  - survey and BLE data;
-  - the phone's own addresses;
-  - the lists of LAN hosts it discovered.
-
-  SSH transcripts and script values are never sent. Tester serial and LLDP, CDP and DHCP data are always sent.
+- **Privacy defaults.**
+  - Location and Wi-Fi SSID and BSSID are sent by default (owner decision). Each can be turned off in the app.
+  - Left out unless you opt in: survey and BLE data, the phone's own addresses, and the lists of LAN hosts it discovered.
+  - SSH transcripts and script values are never sent.
+  - Tester serial and LLDP, CDP and DHCP data are always sent.
 
 ## Threat model additions
 
@@ -113,6 +110,15 @@ except a new `scope` column on `ingest_keys`.
   - automatic dependency edges need LLDP confirmation, or an admin's acceptance.
 - **Plain HTTP on the LAN.** Accepted only for private addresses. TLS with certificate pinning is recommended.
 - **Stored cross-site scripting.** Every string from a report is escaped on output.
+
+## Owner decisions (2026-10-04)
+
+- Inferred dependencies apply automatically when confirmed by LLDP or CDP within `map.stale_days` (90). Weaker edges wait for an admin to accept them.
+- Upload is manual ("Send to watchpost"); automatic queueing of every saved report is an opt-in setting.
+- Field findings are shown on the dashboard, port page and map only. They do not send alerts.
+- Location and Wi-Fi names are sent with reports by default.
+- A switch seen in the field that matches no monitor is created as an unlinked switch and queued for an admin to link.
+- A gzip body is accepted only with a capped inflated size and compression ratio.
 
 ## Build order
 
@@ -126,7 +132,7 @@ except a new `scope` column on `ingest_keys`.
 7. Monitor matching.
 8. Map data and inferred dependencies.
 9. Views.
-10. Alerts.
+10. Findings on the dashboard (no alerts).
 11. LLDP-MIB polling for uplinks.
 
 **Then the app.**
