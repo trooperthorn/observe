@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from watchpost.alerts import Alerter
@@ -257,3 +259,82 @@ async def test_older_replayed_batch_leaves_newer_host_row_and_sources():
     assert srcs["hwmon"]["available"] is False and srcs["hwmon"]["reason"] == "newer"
     data = await env.store.latest_host("nas01")
     assert data["agent_version"] == "t"
+
+
+def _boot_batch(host, kind, severity, ts, boot_id="b1"):
+    return Batch.model_validate({
+        "schema_version": 1, "agent_version": "t", "host": host, "platform": "linux",
+        "sent_at": ts, "sources": [{"source": "hwmon", "available": True}], "samples": [],
+        "events": [{"kind": kind, "severity": severity, "source": "boot", "ts": ts,
+                    "title": "boot", "dedup_key": f"boot:{boot_id}", "boot_id": boot_id}]})
+
+
+async def _push_boot(env, kind, boot_id, severity="critical"):
+    from watchpost.ingest.boot import classify_events
+    b = _boot_batch("nas01", kind, severity, env.clock.now, boot_id)
+    await env.store.ingest_batch(b, classify_events(b.events), now=env.clock.now)
+    await env.push(temp=50)
+
+
+async def test_crash_boot_raises_alert_and_clears_after_hold():
+    env = Env([host_mon(crash_hold_s=600)], f2d=2)
+    await _push_boot(env, "boot.kernel_panic", "b1")
+    res = await env.poll()
+    assert res.result.value == "warn" and "crash" in res.message
+    await env.poll()
+    assert env.state() == "warn" and env.sent[-1] == ("nas01", "warn")
+    env.clock.now += 601
+    await env.push(temp=50)
+    assert (await env.poll()).result.value == "ok"
+
+
+async def test_crash_result_fail_goes_down():
+    env = Env([host_mon(crash_result="fail")], f2d=1)
+    await _push_boot(env, "boot.power_loss", "b1")
+    assert (await env.poll()).result.value == "fail"
+    assert env.state() == "down"
+
+
+async def test_clean_reboot_and_unknown_boot_do_not_alert():
+    env = Env([host_mon()], f2d=1)
+    await _push_boot(env, "boot.clean_shutdown", "b1", severity="info")
+    assert (await env.poll()).result.value == "ok"
+    await _push_boot(env, "boot.agent_stopped", "b2", severity="info")
+    assert (await env.poll()).result.value == "ok"
+    assert env.sent == []
+
+
+async def test_later_clean_boot_clears_crash():
+    env = Env([host_mon()], f2d=1)
+    await _push_boot(env, "boot.unknown_unclean", "b1")
+    assert (await env.poll()).result.value == "warn"
+    env.clock.now += 10
+    await _push_boot(env, "boot.clean_shutdown", "b2", severity="info")
+    assert (await env.poll()).result.value == "ok"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Critical", "critical"), ("CRITICAL", "critical"), ("fatal", "critical"),
+    ("Error", "critical"), ("emerg", "critical"), ("Warning", "warning"),
+    ("INFO", "info"), (" info ", "info"), ("weird", "warning")])
+def test_normalize_severity(raw, expected):
+    from watchpost.ingest.schema import normalize_severity
+    assert normalize_severity(raw) == expected
+
+
+async def test_stored_severity_normalized_and_raw_kept():
+    from watchpost.hostview import _alerts
+    store = Store(":memory:")
+    b = Batch.model_validate({
+        "schema_version": 1, "agent_version": "t", "host": "h", "platform": "linux",
+        "sent_at": T0, "sources": [], "samples": [],
+        "events": [{"kind": "x.y", "severity": sev, "source": "s", "ts": T0, "title": "t",
+                    "dedup_key": sev} for sev in ("Critical", "fatal", "info", "odd")]})
+    await store.ingest_batch(b, {}, now=T0)
+    events = await store.host_events("h")
+    by_key = {e["detail"].get("severity_raw", e["severity"]): e for e in events}
+    assert by_key["Critical"]["severity"] == "critical"
+    assert by_key["fatal"]["severity"] == "critical"
+    assert by_key["info"]["severity"] == "info" and "severity_raw" not in by_key["info"]["detail"]
+    assert by_key["odd"]["severity"] == "warning"
+    assert _alerts(events, T0)["status"] == "critical"

@@ -374,6 +374,13 @@ classification is stored in the event detail, and the host row records the
 current boot id and whether the previous boot ended cleanly. An unrecognised
 boot kind is unknown, never clean.
 
+Event severity is normalized without regard to case to info, warning or
+critical. `fatal`, `error` and `emerg` count as critical, and an unknown value
+counts as warning, with the original kept as `severity_raw`. A crash boot (panic,
+watchdog reset, power loss, unknown unclean) turns the `pushed_host` monitor to
+WARN, or DOWN when `crash_result: fail`, for `crash_hold_s` seconds (default
+3600), and alerts through the normal confirmation. A clean reboot does not.
+
 A pushed host becomes a monitor when you list it in the YAML with
 `type: pushed_host` and the `host` name its agent sends. Listing it is the
 confirmation: a host that pushes but is not listed is stored and never alerts.

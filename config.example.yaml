@@ -507,5 +507,8 @@ monitors:
     host: nas01
     depends_on: [Core switch]
     require_sources: [mdraid]
+    # A crash boot warns for this long (default 3600). crash_result: fail makes it DOWN.
+    crash_hold_s: 3600
+    crash_result: warn
     components:
       - {source: hwmon, metric: cpu_temp_c, direction: above, warn: 75, crit: 90}

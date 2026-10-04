@@ -263,6 +263,12 @@ class PushedHostMonitor(MonitorBase):
     # Sources that must be available. An unavailable one is a Warning. Other
     # unavailable sources are ignored, because a host without a GPU is normal.
     require_sources: list[str] = Field(default_factory=list)
+    # A boot classified as a crash (panic, watchdog reset, power loss, unknown
+    # unclean) makes the monitor WARN, or DOWN when crash_result is "fail", for
+    # crash_hold_s seconds after the boot event. Both go through the normal
+    # failures_to_down confirmation. A later clean boot clears it at once.
+    crash_hold_s: float = Field(default=3600, gt=0)
+    crash_result: Literal["warn", "fail"] = "warn"
 
 
 class PingMonitor(MonitorBase):

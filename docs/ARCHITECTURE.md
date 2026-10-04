@@ -119,7 +119,17 @@ including `agent_stopped` and kinds this version has not seen). It never
 upgrades unknown to clean. The result is stored in the event detail as
 `classification`, and the host row keeps the newest boot id and a
 `clean_shutdown` flag (1 clean, 0 crash, null unknown). An older event never
-overwrites a newer one. Showing events in the event log and on the host view
+overwrites a newer one.
+
+Event severity is normalized when the batch is stored, ignoring case: `info`,
+`warning` and `critical` are kept, `fatal`, `error`, `emerg`, `alert`, `panic`
+and similar map to `critical`, and an unknown value maps to `warning`. The value
+the agent sent is kept as `severity_raw` in the event detail whenever it
+differs. A crash boot makes its `pushed_host` monitor WARN (or DOWN with
+`crash_result: fail`) from the boot event time until `crash_hold_s` (default
+3600 seconds) has passed, and the result goes through the ordinary
+`failures_to_down` confirmation and alerting. A clean boot, an unknown boot or
+a later clean boot does not alert. Showing events in the event log and on the host view
 is a later slice.
 
 ## Status integration

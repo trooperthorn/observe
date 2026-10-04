@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .checks.base import CheckResult
-from .ingest.schema import Batch
+from .ingest.schema import Batch, normalize_severity
 from .state import Transition
 
 # Schema versioning uses a schema_version table. Databases created before it
@@ -283,11 +283,14 @@ class Store:
                 detail = dict(ev.detail)
                 if i in boots:
                     detail["classification"] = boots[i][0]
+                severity = normalize_severity(ev.severity)
+                if severity != ev.severity:
+                    detail["severity_raw"] = ev.severity
                 cur = self._db.execute(
                     "INSERT INTO host_events (host, ts, kind, severity, source, title, detail, "
                     "dedup_key, boot_id) VALUES (?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(host, dedup_key) DO NOTHING",
-                    (batch.host, ev_ts, ev.kind, ev.severity, ev.source, ev.title,
+                    (batch.host, ev_ts, ev.kind, severity, ev.source, ev.title,
                      json.dumps(detail, sort_keys=True), ev.dedup_key, ev.boot_id))
                 if cur.rowcount == 0:
                     continue
@@ -312,7 +315,7 @@ class Store:
     def _latest_host_sync(self, host: str, since: float) -> dict[str, Any] | None:
         with self._lock:
             row = self._db.execute(
-                "SELECT last_seen, platform, agent_version, clean_shutdown FROM hosts WHERE host=?",
+                "SELECT last_seen, platform, agent_version, clean_shutdown, boot_ts FROM hosts WHERE host=?",
                 (host,)).fetchone()
             if row is None:
                 return None
@@ -328,7 +331,7 @@ class Store:
                 (host,)).fetchall()
         return {
             "last_seen": row[0], "platform": row[1], "agent_version": row[2],
-            "clean_shutdown": row[3],
+            "clean_shutdown": row[3], "boot_ts": row[4],
             "samples": [{"source": r[0], "metric": r[1], "labels": json.loads(r[2]),
                          "value": r[3], "unit": r[4], "ts": r[5]} for r in samples],
             "sources": {r[0]: {"available": bool(r[1]), "reason": r[2]} for r in sources},

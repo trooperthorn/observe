@@ -37,6 +37,22 @@ MAX_NAME = 128
 MAX_TEXT = 1024
 
 
+INFO, WARNING, CRITICAL = "info", "warning", "critical"
+_SEVERITY_ALIASES = {
+    "info": INFO, "information": INFO, "informational": INFO, "notice": INFO, "debug": INFO,
+    "warning": WARNING, "warn": WARNING,
+    "critical": CRITICAL, "crit": CRITICAL, "fatal": CRITICAL, "error": CRITICAL, "err": CRITICAL,
+    "emerg": CRITICAL, "emergency": CRITICAL, "alert": CRITICAL, "panic": CRITICAL,
+}
+
+
+def normalize_severity(raw: str) -> str:
+    """Map an agent severity to info, warning or critical, ignoring case and
+    surrounding space. fatal, error, emerg and similar are critical. An unknown
+    value is warning, so it is never dropped and never hidden as info."""
+    return _SEVERITY_ALIASES.get(raw.strip().lower(), WARNING)
+
+
 class _Wire(BaseModel):
     model_config = ConfigDict(extra="ignore")
 

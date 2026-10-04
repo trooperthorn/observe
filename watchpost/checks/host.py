@@ -92,6 +92,12 @@ class PushedHostCheck(Check):
             else:
                 components.setdefault(src, GOOD)
 
+        boot_ts = data.get("boot_ts")
+        if data.get("clean_shutdown") == 0 and boot_ts is not None                 and 0 <= now - boot_ts <= m.crash_hold_s:
+            mark("boot", CRITICAL if m.crash_result == "fail" else WARNING,
+                 f"previous boot ended in a crash {now - boot_ts:.0f}s ago "
+                 f"(held for {m.crash_hold_s:.0f}s)")
+
         worst = max(components.values(), key=_RANK.__getitem__, default=GOOD)
         detail = {"age_seconds": age, "components": components}
         if worst == GOOD:
