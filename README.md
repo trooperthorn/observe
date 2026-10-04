@@ -385,7 +385,7 @@ to a failed check, Warning to a warning, and Good to OK, so the usual
 pages. `require_sources` names sources that must be available; one that is not
 is a Warning. A null reading is skipped, never treated as zero. If no batch
 arrives within `stale_after` seconds (default three intervals), or none ever
-arrived, the check fails like an unreachable host. `group`, `depends_on` and
+arrived, the check fails like an unreachable host. A component whose newest reading is older than `stale_after` is graded stale and also fails, even when a recent batch arrived. Timestamps more than 300 seconds ahead of receive time are clamped to receive time, and a replayed batch older than the stored one (by `sent_at`) does not overwrite the host row or source status. `group`, `depends_on` and
 `critical` work as for any monitor, so a host appears in its group's rollup,
 is suppressed when a parent switch is down, and raises alerts. `/metrics` gains
 `watchpost_host_age_seconds` and `watchpost_host_component_state` (0 good, 1

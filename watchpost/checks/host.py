@@ -9,6 +9,8 @@ alerts and /metrics apply with no special cases.
 
 Mapping: Critical is FAIL (DOWN once confirmed), Warning is WARN, Good is OK.
 No batch within `stale_after` seconds is FAIL, the same as an unreachable host.
+A component whose newest sample is older than `stale_after` is stale, also FAIL, even
+when a recent batch arrived (an outbox replay or a lagging agent clock).
 """
 
 from __future__ import annotations
@@ -20,8 +22,8 @@ from typing import Any
 from ..config import Config, Thresholds
 from .base import Check, CheckResult, Result
 
-GOOD, WARNING, CRITICAL = "good", "warning", "critical"
-_RANK = {GOOD: 0, WARNING: 1, CRITICAL: 2}
+GOOD, WARNING, CRITICAL, STALE = "good", "warning", "critical", "stale"
+_RANK = {GOOD: 0, WARNING: 1, CRITICAL: 2, STALE: 2}
 
 
 def grade(value: float, th: Thresholds) -> str:
@@ -50,7 +52,7 @@ class PushedHostCheck(Check):
     async def probe(self) -> CheckResult:
         m = self.monitor
         now = self.clock()
-        data = await self.store.latest_host(m.host, now - self.stale_after)
+        data = await self.store.latest_host(m.host)
         if data is None:
             return CheckResult.fail(f"no batch ever received from {m.host}",
                                     detail={"components": {}})
@@ -74,6 +76,10 @@ class PushedHostCheck(Check):
             for s in data["samples"]:
                 if s["source"] != th.source or s["metric"] != th.metric or s["value"] is None:
                     continue  # a null value is unavailable, never zero
+                if now - s["ts"] > self.stale_after:
+                    mark(name, STALE, f"last reading {now - s['ts']:.0f}s old "
+                                      f"(limit {self.stale_after:.0f}s)")
+                    continue
                 level = grade(s["value"], th)
                 if level != GOOD:
                     limit = th.crit if level == CRITICAL else th.warn
@@ -93,6 +99,6 @@ class PushedHostCheck(Check):
                                   detail=detail)
         bad = "; ".join(f"{n}: {reasons[n]}" for n in sorted(components)
                         if components[n] == worst)
-        result = Result.FAIL if worst == CRITICAL else Result.WARN
+        result = Result.FAIL if worst in (CRITICAL, STALE) else Result.WARN
         return CheckResult(result, f"{m.host}: {worst}, {bad}", value=age, unit="s",
                            detail=detail)

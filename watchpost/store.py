@@ -108,6 +108,11 @@ BATCH_TABLES = (
 # Stored as the reason when an agent says a source does not exist on the host.
 ABSENT_REASON = "not present on this host"
 
+# Agent clocks may run a little ahead. A timestamp further ahead of receive time
+# than this is clamped to receive time, so it can not mask later readings or
+# freeze boot state.
+MAX_FUTURE_SKEW_S = 300.0
+
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: BASELINE,
     2: HOST_TABLES,
@@ -239,6 +244,10 @@ class Store:
         with self._lock, self._db:
             # A batch without batch_id is identified by a hash of its content, so a
             # resend of the same batch is not stored twice.
+            def clamp(ts: float) -> float:
+                return now if ts > now + MAX_FUTURE_SKEW_S else ts
+
+            sent = clamp(batch.sent_at)
             batch_key = batch.batch_id if batch.batch_id is not None else content_key(batch)
             cur = self._db.execute(
                 "INSERT INTO ingest_batches (host, batch_id, ts) VALUES (?,?,?) "
@@ -247,24 +256,30 @@ class Store:
                 return 0, 0, True
             self._db.execute(
                 "INSERT INTO hosts (host, platform, agent_version, first_seen, last_seen, heartbeat_ts) "
-                "VALUES (?,?,?,?,?,?) ON CONFLICT(host) DO UPDATE SET platform=excluded.platform, "
-                "agent_version=excluded.agent_version, last_seen=excluded.last_seen, "
-                "heartbeat_ts=excluded.heartbeat_ts",
-                (batch.host, batch.platform, batch.agent_version, now, now, batch.sent_at))
+                "VALUES (?,?,?,?,?,?) ON CONFLICT(host) DO UPDATE SET "
+                "last_seen=MAX(hosts.last_seen, excluded.last_seen), "
+                "platform=CASE WHEN excluded.heartbeat_ts >= COALESCE(hosts.heartbeat_ts, 0) "
+                "THEN excluded.platform ELSE hosts.platform END, "
+                "agent_version=CASE WHEN excluded.heartbeat_ts >= COALESCE(hosts.heartbeat_ts, 0) "
+                "THEN excluded.agent_version ELSE hosts.agent_version END, "
+                "heartbeat_ts=MAX(COALESCE(hosts.heartbeat_ts, 0), excluded.heartbeat_ts)",
+                (batch.host, batch.platform, batch.agent_version, now, now, sent))
             self._db.executemany(
                 "INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
                 "VALUES (?,?,?,?,?,?,?)",
-                [(s.ts, batch.host, s.source, s.metric, json.dumps(s.labels, sort_keys=True),
+                [(clamp(s.ts), batch.host, s.source, s.metric, json.dumps(s.labels, sort_keys=True),
                   s.value, s.unit) for s in batch.samples])
             self._db.executemany(
                 "INSERT INTO host_sources (host, source, available, reason, updated) VALUES (?,?,?,?,?) "
                 "ON CONFLICT(host, source) DO UPDATE SET available=excluded.available, "
-                "reason=excluded.reason, updated=excluded.updated",
+                "reason=excluded.reason, updated=excluded.updated "
+                "WHERE excluded.updated >= host_sources.updated",
                 [(batch.host, st.source, int(st.available and st.present),
-                  st.reason or ("" if st.present else ABSENT_REASON), now)
+                  st.reason or ("" if st.present else ABSENT_REASON), sent)
                  for st in batch.sources])
             stored = 0
             for i, ev in enumerate(batch.events):
+                ev_ts = clamp(ev.ts)
                 detail = dict(ev.detail)
                 if i in boots:
                     detail["classification"] = boots[i][0]
@@ -272,7 +287,7 @@ class Store:
                     "INSERT INTO host_events (host, ts, kind, severity, source, title, detail, "
                     "dedup_key, boot_id) VALUES (?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(host, dedup_key) DO NOTHING",
-                    (batch.host, ev.ts, ev.kind, ev.severity, ev.source, ev.title,
+                    (batch.host, ev_ts, ev.kind, ev.severity, ev.source, ev.title,
                      json.dumps(detail, sort_keys=True), ev.dedup_key, ev.boot_id))
                 if cur.rowcount == 0:
                     continue
@@ -282,7 +297,7 @@ class Store:
                     self._db.execute(
                         "UPDATE hosts SET boot_id=?, boot_ts=?, clean_shutdown=? "
                         "WHERE host=? AND (boot_ts IS NULL OR boot_ts <= ?)",
-                        (ev.boot_id, ev.ts, clean, batch.host, ev.ts))
+                        (ev.boot_id, ev_ts, clean, batch.host, ev_ts))
             return len(batch.samples), stored, False
 
     async def ingest_batch(self, batch: Batch, boots: dict[int, tuple[str, int | None]],

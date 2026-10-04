@@ -222,3 +222,38 @@ async def test_metrics_lines():
     assert ('watchpost_host_component_state{monitor="nas01",group="storage",host="nas01",'
             'component="hwmon.cpu_temp_c"} 1') in text
     assert 'watchpost_host_age_seconds{monitor="nas01",group="storage",host="nas01"} 0' in text
+
+
+async def test_future_dated_sample_does_not_mask_later_reading():
+    env = Env([host_mon()], f2d=1)
+    far = env.clock.now + 10_000_000
+    await env.store.ingest_batch(batch(temp=10.0, ts=far), {}, now=env.clock.now)
+    env.clock.now += 60
+    await env.push(temp=95)
+    res = await env.poll()
+    assert res.result.value == "fail"
+    assert res.detail["components"]["hwmon.cpu_temp_c"] == "critical"
+
+
+async def test_samples_older_than_stale_window_grade_stale_and_fail():
+    env = Env([host_mon()], f2d=1)
+    old = env.clock.now - 1200
+    await env.store.ingest_batch(batch(temp=50.0, ts=old), {}, now=env.clock.now)
+    res = await env.poll()
+    assert res.result.value == "fail"
+    assert res.detail["components"]["hwmon.cpu_temp_c"] == "stale"
+    assert env.state() == "down"
+
+
+async def test_older_replayed_batch_leaves_newer_host_row_and_sources():
+    env = Env([host_mon()], f2d=1)
+    new_src = [{"source": "hwmon", "available": False, "reason": "newer"}]
+    old_src = [{"source": "hwmon", "available": True}]
+    await env.store.ingest_batch(batch(ts=T0, sources=new_src), {}, now=T0)
+    older = batch(ts=T0 - 500, sources=old_src)
+    older.agent_version = "old"
+    await env.store.ingest_batch(older, {}, now=T0 + 1)
+    srcs = await env.store.host_sources("nas01")
+    assert srcs["hwmon"]["available"] is False and srcs["hwmon"]["reason"] == "newer"
+    data = await env.store.latest_host("nas01")
+    assert data["agent_version"] == "t"

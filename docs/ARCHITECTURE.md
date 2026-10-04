@@ -52,6 +52,12 @@ second time. A batch without `batch_id` is identified by a SHA-256 of its
 content, so a resend is acknowledged the same way. Events are kept once per host and `dedup_key`. A source reported
 with `present: false` is stored as unavailable with the reason "not present on
 this host", because the version 2 table has no separate present column.
+Time and order are guarded in `Store.ingest_batch`. Any sample, event or batch
+`sent_at` more than `MAX_FUTURE_SKEW_S` (300 seconds) ahead of receive time is clamped to
+receive time, so a bad agent clock can not mask later readings or freeze `boot_id` and
+`clean_shutdown`. The host row's platform, agent version and heartbeat, and each source's
+status, are only replaced by a batch whose `sent_at` is not older than the stored one, so a
+replayed older batch leaves newer state alone.
 
 Denied requests are written to the audit log as `ingest_denied`, through an
 aggregator adapted from hostwatch's hub: at most one row per peer per minute,
@@ -127,7 +133,7 @@ label set through `Store.latest_host`, grades each configured component Good,
 Warning or Critical, and returns OK, WARN or FAIL for the worst one. Those go
 through `MonitorState.observe` like any other result, so `failures_to_down`
 confirmation applies before a host is DOWN or pages. No batch within
-`stale_after` seconds (default three intervals), or none ever, is FAIL.
+`stale_after` seconds (default three intervals), or none ever, is FAIL. A component whose newest sample is older than `stale_after` is graded stale and is also FAIL, so an outbox replay or a lagging agent clock can not read as healthy.
 Because the result is an ordinary check result, `group`, `depends_on`,
 `critical`, rollup, alerts and `/metrics` work unchanged, and `/metrics` adds
 `watchpost_host_age_seconds` and `watchpost_host_component_state`. The grouped

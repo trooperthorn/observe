@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -366,3 +367,23 @@ def test_invalid_batch_is_422_and_logged(env, caplog):
         r = agent_post(env, body, key)
     assert r.status_code == 422
     assert "samples" in caplog.text
+
+
+def test_future_dated_boot_event_does_not_freeze_boot_state(env):
+    key = env.key("nas01")
+    future = {"kind": "boot.clean_shutdown", "severity": "info", "source": "boot",
+              "ts": 4_000_000_000.0, "title": "bad clock", "dedup_key": "boot:future",
+              "boot_id": "ffff"}
+    first = fixture("batch_minimal")
+    first["events"] = [future]
+    first["batch_id"] = "future-batch"
+    assert env.post(first, key).status_code == 200
+    real = fixture("batch_minimal")
+    real["sent_at"] = real["sent_at"] + 1
+    real["batch_id"] = "real-batch"
+    real["events"] = [{"kind": "boot.kernel_panic", "severity": "critical", "source": "boot",
+                       "ts": time.time() + 1, "title": "real", "dedup_key": "boot:real",
+                       "boot_id": "rrrr"}]
+    assert env.post(real, key).status_code == 200
+    assert env.rows("SELECT boot_id, clean_shutdown FROM hosts") == [("rrrr", 0)]
+    assert env.rows("SELECT MAX(ts) FROM host_events")[0][0] < 4_000_000_000.0
