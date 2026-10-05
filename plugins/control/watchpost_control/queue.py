@@ -334,12 +334,14 @@ def _expired_after(store: Store, now: float) -> list[str]:
         return _expire_sync(store, now)
 
 
-def _list_sync(store: Store, now: float, limit: int) -> tuple[list[dict[str, Any]], list[str]]:
+def _list_sync(store: Store, now: float, limit: int,
+               host: str | None) -> tuple[list[dict[str, Any]], list[str]]:
     with store._lock, store._db:
         expired = _expire_sync(store, now)
+        where, args = ("WHERE host=? ", (host,)) if host else ("", ())
         rows = store._db.execute(
-            f"SELECT {_COLUMNS}, state, signature FROM control_commands "
-            "ORDER BY issued_at DESC, seq DESC LIMIT ?", (limit,)).fetchall()
+            f"SELECT {_COLUMNS}, state, signature FROM control_commands {where}"
+            "ORDER BY issued_at DESC, seq DESC LIMIT ?", (*args, limit)).fetchall()
         out = []
         for r in rows:
             item = _command_object(r[:8])
@@ -355,8 +357,50 @@ def _list_sync(store: Store, now: float, limit: int) -> tuple[list[dict[str, Any
     return out, expired
 
 
-async def list_commands(store: Store, now: float, limit: int = 100) -> list[dict[str, Any]]:
-    """Recent commands, newest first, with their state and latest result. Expires first."""
-    items, expired = await asyncio.to_thread(_list_sync, store, now, max(1, min(limit, 500)))
+async def list_commands(store: Store, now: float, limit: int = 100,
+                        host: str | None = None) -> list[dict[str, Any]]:
+    """Recent commands, newest first, with their state and latest result. Expires first.
+    `host` limits the list to one host."""
+    items, expired = await asyncio.to_thread(_list_sync, store, now, max(1, min(limit, 500)),
+                                             host)
     await _audit_expired(store, expired)
     return items
+
+
+def _cancel_sync(store: Store, command_id: str, now: float) -> tuple[str, str, list[str]]:
+    """Returns (host, refusal reason or empty, ids expired). Raises nothing inside the
+    transaction, so the expiry it wrote is kept even when the cancel is refused."""
+    with store._lock, store._db:
+        expired = _expire_sync(store, now)
+        row = store._db.execute("SELECT host, action, state FROM control_commands WHERE id=?",
+                                (command_id,)).fetchone()
+        if row is None:
+            return "", "no such command", expired
+        if row[1] != REBOOT:
+            return row[0], "only a scheduled reboot can be cancelled", expired
+        # One guarded UPDATE, so a result that lands at the same moment cannot be overwritten.
+        changed = store._db.execute(
+            "UPDATE control_commands SET state='cancelled' WHERE id=? AND state='scheduled'",
+            (command_id,)).rowcount
+        if not changed:
+            return row[0], (f"the command is {row[2]}, and only a scheduled one can be "
+                            "cancelled"), expired
+    return row[0], "", expired
+
+
+async def cancel_command(store: Store, command_id: str, requested_by: str,
+                         now: float) -> dict[str, Any]:
+    """Cancel a scheduled reboot, or raise QueueError (404 unknown, 409 not scheduled).
+
+    The command leaves the pull list, which is how the daemon learns to cancel. Audited.
+    """
+    host, reason, expired = await asyncio.to_thread(_cancel_sync, store, command_id, now)
+    await _audit_expired(store, expired)
+    if reason:
+        status = 404 if reason == "no such command" else 409
+        await audit.record(store, "control_cancel_refused", actor=requested_by, status=status,
+                           detail={"command_id": command_id[:64], "reason": reason})
+        raise QueueError(reason, status)
+    await audit.record(store, "control_cancelled", actor=requested_by,
+                       detail={"command_id": command_id, "host": host})
+    return {"id": command_id, "host": host, "state": "cancelled"}

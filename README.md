@@ -444,8 +444,11 @@ with `plugin_settings.control.signing_key_file`. The plugin also keeps the signe
 queue: `GET /api/v1/control/commands` returns a host's own unexpired, unfinished commands and
 `POST /api/v1/control/results` records the outcome, with output redacted and truncated. A command
 that expires without a result is shown as `unknown`, and each host is limited to one pending
-command per action, 10 commands per hour and one reboot per 15 minutes. There is no screen or
-action catalogue yet, so nothing creates commands. The signing format and a test vector are in `docs/CONTROL.md`.
+command per action, 10 commands per hour and one reboot per 15 minutes. An admin requests an action from the
+Control section of the host page (`fan.set_floor`, `fan.set_mode`, `service.restart` or `host.reboot`): the page
+validates the parameters against what the host last reported, asks for confirmation in a dialog, and for a reboot
+requires the host name typed exactly. The same section lists the host's command history with each state and a
+Cancel button while a reboot is scheduled. The admin routes need an admin session and the CSRF token. The signing format and a test vector are in `docs/CONTROL.md`.
 
 Logins use Argon2id password hashes and server-side sessions. Create the first
 admin with `python -m watchpost --config watchpost.yaml --create-admin NAME`; it
