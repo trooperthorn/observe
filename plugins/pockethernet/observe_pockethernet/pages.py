@@ -44,6 +44,13 @@ def _ports_of(db: Any, report_id: str) -> list[dict[str, str]]:
         "WHERE source=? AND report_id=? ORDER BY switch_id, port_key", (SOURCE, report_id))]
 
 
+def _verdict_of(db: Any, report_id: str) -> str | None:
+    row = db.execute(
+        "SELECT value FROM port_properties WHERE source=? AND report_id=? AND name='cable_verdict' "
+        "ORDER BY id DESC LIMIT 1", (SOURCE, report_id)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
 def _list_sync(store: Store, limit: int, offset: int) -> dict[str, Any]:
     with store._lock:
         db = store._db
@@ -52,7 +59,8 @@ def _list_sync(store: Store, limit: int, offset: int) -> dict[str, Any]:
             f"SELECT {_SUMMARY} FROM field_reports "
             "ORDER BY updated_at DESC, source, report_id LIMIT ? OFFSET ?",
             (limit, offset)).fetchall()
-        reports = [{**_summary(r), "ports": _ports_of(db, r[1])} for r in rows]
+        reports = [{**_summary(r), "ports": _ports_of(db, r[1]), "verdict": _verdict_of(db, r[1])}
+                   for r in rows]
     return {"total": total, "reports": reports}
 
 

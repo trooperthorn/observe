@@ -584,7 +584,9 @@ The Pockethernet plugin adds pages that need a login: `/plugins/pockethernet` li
 reports, `/plugins/pockethernet/report?source=...&report_id=...` shows one report with its
 typed sections first and then the raw steps and tool results, and
 `/plugins/pockethernet/jack?key=...` shows a jack, the ports it has been patched to over time and
-its reports. The dashboard links to the list as "Field reports" and shows a "Field findings"
+its reports. These pages use the shared console shell, sortable tables and result chips (Pass, Fail,
+Warn, each an icon and a word). The report and jack pages draw the wiremap as SVG with each pair
+labelled by number and colour name, and the list has a filter box. The dashboard links to the list as "Field reports" and shows a "Field findings"
 list; a warning that nobody has acknowledged turns a port that passes its live check to
 Warning on the port page and the map.
 

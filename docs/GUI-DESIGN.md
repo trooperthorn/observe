@@ -400,6 +400,7 @@ The filter bar has Actor, Kind, Status (chips as toggles) and a time range. The 
 ### 3.9 Pockethernet pages (`plugins/pockethernet/.../pages/*.html`, `static/pockethernet.js`)
 
 The plugin pages load the core `tokens.css`, `base.css`, `components.css` and `shell.js`, so they inherit the shell. The plugin registers its nav entry through a declared list.
+- Status (S8): built as written. Deviations: the Fails column shows one chip per report because a report covers one jack, the report KPI row counts that one jack plus its warning steps, and the wiremap draws the four pairs straight with a state from the pair length and fault text because the report has no per-wire data. The plugin adds `static/pockethernet.css` for the wiremap, served beside its script.
 - **Reports list:** a sortable table (Date | Site | Jacks | Fails chip | Uploaded by) and a search box.
 - **Report:** a KPI row (Jacks tested / Pass / Fail / Warn), then a table per jack with result chips (Pass ✓ / Fail ✕ / Warn !), each linking to the jack page.
 - **Jack:** pair-length table, wiremap as SVG (pairs labelled by number and colour name, never colour alone), history of tests for this jack, and a link to the port when it is matched.

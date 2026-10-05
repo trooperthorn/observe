@@ -1,0 +1,14 @@
+/* Pockethernet pages: the labelled wiremap and the pair list. Tokens only, no colour literals.
+   Every wire carries its pair number and colour name as text, so colour is never the only cue. */
+.wiremap { width: 100%; max-width: 520px; height: auto; display: block; }
+.wiremap .pin { fill: var(--o-surface-subtle); stroke: var(--o-border); stroke-width: 1; }
+.wiremap .wire { fill: none; stroke-width: 3; stroke-linecap: round; }
+.wiremap .wire.s-up { stroke: var(--o-up); }
+.wiremap .wire.s-down { stroke: var(--o-down); stroke-dasharray: 2 6; }
+.wiremap .wire.s-pending { stroke: var(--o-pending); stroke-dasharray: 8 4; }
+.wiremap text { fill: var(--o-text); font-size: 11px; font-family: var(--o-font); }
+.wiremap text.end { fill: var(--o-text-muted); }
+.search-box { display: flex; gap: var(--o-s2); align-items: center; margin: 0 0 var(--o-s3); }
+.search-box input { border: 1px solid var(--o-border); border-radius: 6px; background: var(--o-surface);
+  color: var(--o-text); padding: 0 var(--o-s2); min-height: 32px; font: inherit; min-width: 220px; }
+.crumbs { color: var(--o-text-muted); font-size: var(--o-fs-sm); margin: 0; }

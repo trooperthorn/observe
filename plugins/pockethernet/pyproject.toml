@@ -11,7 +11,7 @@ pockethernet = "observe_pockethernet:plugin"
 packages = ["observe_pockethernet"]
 
 [tool.setuptools.package-data]
-observe_pockethernet = ["pages/*.html", "static/*.js"]
+observe_pockethernet = ["pages/*.html", "static/*.js", "static/*.css"]
 
 [tool.setuptools.dynamic]
 version = {attr = "observe_pockethernet.__version__"}

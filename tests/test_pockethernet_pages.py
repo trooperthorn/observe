@@ -255,3 +255,34 @@ def test_second_report_with_a_worse_value_raises_the_finding_and_no_alert(
         "switch_id": found[0]["switch_id"], "port": "Gi1/0/5"}).json()
     assert [f["kind"] for f in port["findings"]] == [kind]
     assert env.alerter.status == {}
+
+
+def test_pages_use_the_shared_components_and_the_plugin_stylesheet():
+    for name in ("reports", "report", "jack"):
+        html = (PKG / "pages" / f"{name}.html").read_text(encoding="utf-8")
+        for href in ("/static/css/components.css", "/static/css/admin.css",
+                     "/plugins/pockethernet/static/pockethernet.css"):
+            assert f'href="{href}"' in html
+        assert 'class="admin-main"' in html and "/static/js/shell.js" in html
+    js = (PKG / "static" / "pockethernet.js").read_text(encoding="utf-8")
+    for needed in ("sortableTable", "statusChip", "wiremap(", "kpi-row", "Uploaded by"):
+        assert needed in js
+    css = (PKG / "static" / "pockethernet.css").read_text(encoding="utf-8")
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(", css)
+    assert "static/*.css" in (PKG.parent / "pyproject.toml").read_text(encoding="utf-8")
+
+
+def test_wiremap_labels_every_pair_by_number_and_colour_name():
+    js = (PKG / "static" / "pockethernet.js").read_text(encoding="utf-8")
+    for pair, colour in (("1-2", "orange"), ("3-6", "green"), ("4-5", "blue"), ("7-8", "brown")):
+        assert f'pair: "{pair}"' in js and f'colour: "{colour}"' in js
+    assert "Pair ${p.pair} ${p.colour}" in js
+
+
+def test_report_list_carries_the_cable_verdict_for_the_fails_column(env):
+    env.upload(FIXTURE)
+    env.clock.now += 60
+    env.upload(report("failing-report", cable_verdict="fail"))
+    env.login()
+    got = {r["report_id"]: r["verdict"] for r in env.client.get(API + "/reports").json()["reports"]}
+    assert got == {FIXTURE["report_id"]: "pass", "failing-report": "fail"}

@@ -357,6 +357,8 @@ now)` hook lets a plugin apply its own retention; a scheduler hook calls it for
 each listed plugin about once an hour. The key scope itself is built: see "Ingest
 keys".
 
+The Pockethernet pages load the core `components.css`, `admin.css`, the shared table and chip modules and their own `static/pockethernet.css`; the report list route also returns each report's cable verdict, read from the report's `cable_verdict` property row.
+
 ### Pockethernet upload
 
 `plugins/pockethernet/observe_pockethernet/upload.py` serves
