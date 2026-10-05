@@ -1,7 +1,7 @@
 // Field report list, report detail and jack pages. Every string came from a phone, so it is
 // written with textContent only, never as markup. Helpers (el, when, whoami, portHref) come
-// from /static/infra-common.js.
-"use strict";
+// from the /static/infra-common.js module, which this file loads as a module script.
+import { el, when, whoami, portHref } from "/static/infra-common.js";
 
 const page = document.getElementById("page");
 const footer = document.getElementById("footer");

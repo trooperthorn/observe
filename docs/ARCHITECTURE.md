@@ -406,7 +406,7 @@ property rows that carry its report id, and a jack to its history through its `j
 rows. The plugin's `pages()` hook registers three static files from `pages/` at
 `/plugins/pockethernet`, `/report` and `/jack`, `nav_entries()` registers "Field reports", and
 `static_dir()` serves `static/pockethernet.js` at `/plugins/pockethernet/static`. The script
-shares the `infra-common.js` module (which builds on `js/dom.js` and `js/api.js`) with the other map pages and writes every string with `textContent`.
+is loaded as a module on each page and imports its helpers from the `infra-common.js` module (which builds on `js/dom.js` and `js/api.js`). It writes every string with `textContent`.
 `index.html` and `app.js` read `GET /api/plugins` for the navigation links.
 
 ## Infrastructure map core

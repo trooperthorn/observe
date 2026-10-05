@@ -219,6 +219,17 @@ def test_map_and_helpers_are_es_modules_with_one_shared_dom_helper():
         assert len(scripts) == 1 and 'type="module"' in scripts[0], name
     common = (STATIC / "infra-common.js").read_text(encoding="utf-8")
     assert 'from "/static/js/dom.js"' in common and "function el(" not in common
-    for name in ("js/dom.js", "js/api.js", "infra-common.js", "pages/map.js"):
-        assert "export " in (STATIC / name).read_text(encoding="utf-8") or name == "pages/map.js"
+    for name in ("js/dom.js", "js/api.js", "infra-common.js"):
+        assert "export " in (STATIC / name).read_text(encoding="utf-8"), name
+    dom = (STATIC / "js" / "dom.js").read_text(encoding="utf-8")
+    assert "export function clear(" in dom and "export function svg(" in dom
+    mapjs = (STATIC / "pages" / "map.js").read_text(encoding="utf-8")
+    assert "SVG_NS" not in mapjs and "svgEl(" in mapjs
+    # The plugin pages load the helpers as a module too, never as a classic script.
+    plugin = STATIC.parent.parent / "plugins" / "pockethernet" / "observe_pockethernet"
+    for name in ("jack", "report", "reports"):
+        html = (plugin / "pages" / f"{name}.html").read_text(encoding="utf-8")
+        assert "infra-common.js" not in html and 'type="module"' in html, name
+    plug = (plugin / "static" / "pockethernet.js").read_text(encoding="utf-8")
+    assert 'from "/static/infra-common.js"' in plug
     assert not (STATIC / "map.js").exists()

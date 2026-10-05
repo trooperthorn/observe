@@ -1,12 +1,12 @@
 // Infrastructure map: core, distribution, access, jacks and endpoints, drawn from
 // /api/infra/map. Every node shows its state in words, so colour is never the only signal.
 import { el, stateText, portHref, api, STATE_WORDS } from "/static/infra-common.js";
+import { svg as svgEl } from "/static/js/dom.js";
 
 const LAYER_TITLES = [
   ["core", "Core"], ["distribution", "Distribution"], ["access", "Access"],
   ["jack", "Jacks"], ["endpoint", "Endpoints"],
 ];
-const SVG_NS = "http://www.w3.org/2000/svg";
 const layersEl = document.getElementById("layers");
 const msg = document.getElementById("msg");
 const siteSel = document.getElementById("site");
@@ -98,9 +98,7 @@ function draw(data) {
     }
   }
   const frag = document.createDocumentFragment();
-  const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("class", "edges");
-  svg.setAttribute("aria-hidden", "true");
+  const svg = svgEl("svg", { class: "edges", "aria-hidden": "true" });
   frag.append(svg);
   let any = false;
   for (const [key, title] of LAYER_TITLES) {
@@ -128,12 +126,11 @@ function drawEdges(svg, edges, boxOf) {
     let ra = x.getBoundingClientRect(), rb = y.getBoundingClientRect();
     if (ra.top > rb.top) [ra, rb] = [rb, ra];
     if (Math.abs(ra.top - rb.top) < 2) continue; // same layer; the table lists it
-    const line = document.createElementNS(SVG_NS, "line");
-    line.setAttribute("x1", String(ra.left + ra.width / 2 - base.left));
-    line.setAttribute("y1", String(ra.bottom - base.top));
-    line.setAttribute("x2", String(rb.left + rb.width / 2 - base.left));
-    line.setAttribute("y2", String(rb.top - base.top));
-    line.setAttribute("class", `edge ${e.state}`);
+    const line = svgEl("line", {
+      x1: ra.left + ra.width / 2 - base.left, y1: ra.bottom - base.top,
+      x2: rb.left + rb.width / 2 - base.left, y2: rb.top - base.top,
+      class: `edge ${e.state}`,
+    });
     svg.append(line);
   }
 }
