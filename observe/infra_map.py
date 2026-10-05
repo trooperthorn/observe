@@ -264,6 +264,29 @@ class MapService:
             return {"state": "unknown", "blocked_by": None}
         return {"state": got[0], "blocked_by": got[1]}
 
+    @staticmethod
+    def _flag_anchors(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
+        """Mark the top-level switches with `anchor`, which the graph view pulls to the centre.
+
+        A switch is an anchor when it has a switch-to-switch link and none of those links is
+        through its own uplink port. Switches with no such link are not anchors.
+        """
+        ports = {n["id"]: n for n in nodes if n["kind"] == "port"}
+        linked: set[str] = set()
+        below: set[str] = set()
+        for e in edges:
+            a, b = ports.get(e["a"]), ports.get(e["b"])
+            if not a or not b or a["parent"] == b["parent"]:
+                continue
+            linked.update((a["parent"], b["parent"]))
+            if a["role"] == "uplink" and b["role"] != "uplink":
+                below.add(a["parent"])
+            elif b["role"] == "uplink" and a["role"] != "uplink":
+                below.add(b["parent"])
+        for n in nodes:
+            if n["kind"] == "switch":
+                n["anchor"] = n["id"] in linked and n["id"] not in below
+
     async def map_data(self, site: str | None = None, building: str | None = None,
                        live: LiveReader | None = None, now: float | None = None) -> dict[str, Any]:
         """Nodes and edges with live state, optionally limited to a site and building.
@@ -396,5 +419,6 @@ class MapService:
                           **self._state(slug)})
         shown = {n["id"] for n in nodes}
         edges = [e for e in edges if e["a"] in shown and e["b"] in shown]
+        self._flag_anchors(nodes, edges)
         return {"nodes": nodes, "edges": edges, "stale_days": stale_days,
                 "filter": {"site": site, "building": building}}

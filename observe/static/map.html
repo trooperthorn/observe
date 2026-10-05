@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/static/css/base.css">
 <link rel="stylesheet" href="/static/css/shell.css">
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/css/graph.css">
 </head>
 <body>
 <header id="shell-header" class="shell-head">
@@ -19,8 +20,32 @@
 <main class="mappage">
   <p id="msg" role="alert"></p>
   <p class="note">Each box shows its state in words as well as colour. Dashed lines are links not confirmed for a while.</p>
+  <div class="graph-toolbar" role="group" aria-label="View">
+    <span>View:</span>
+    <button type="button" class="viewbtn" data-view="graph" aria-pressed="false">Graph</button>
+    <button type="button" class="viewbtn" data-view="tiers" aria-pressed="false">Tiers</button>
+    <button type="button" class="viewbtn" data-view="table" aria-pressed="false">Table</button>
+  </div>
+  <div id="graphview" class="graphview" hidden>
+    <p id="graphnote" class="graph-note" hidden></p>
+    <div class="graphcols">
+      <div>
+        <div class="graph-toolbar">
+          <button type="button" id="zoomin" aria-label="Zoom in">+</button>
+          <button type="button" id="zoomout" aria-label="Zoom out">-</button>
+          <button type="button" id="zoomfit" aria-label="Fit the graph">Fit</button>
+          <span>Arrow keys move between devices, Enter opens one, plus and minus zoom, 0 fits.</span>
+        </div>
+        <div class="graph-wrap"><canvas id="graphcanvas"></canvas></div>
+        <div class="graph-legend" id="graphlegend">
+          <span>&#10003; up</span><span>&#10005; down</span><span>! warning</span><span>Dashed line: link not confirmed for a while</span>
+        </div>
+      </div>
+      <aside id="selected" class="selectedcard" aria-live="polite"><h2>Selected</h2><p class="note">Select a device to see its links.</p></aside>
+    </div>
+  </div>
   <div id="layers" class="layers"></div>
-  <section>
+  <section id="linkstable">
     <h2>Links</h2>
     <table id="links" class="items"><thead><tr><th>From</th><th>To</th><th>Source</th><th>Seen</th><th>State</th></tr></thead><tbody></tbody></table>
   </section>

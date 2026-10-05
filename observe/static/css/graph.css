@@ -11,3 +11,8 @@
 .graph-legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
   margin-right: var(--o-s1); background: var(--cat-other); }
 .graph-note { color: var(--o-text-muted); font-size: var(--o-fs-sm); margin: var(--o-s2) 0; }
+.graphcols { display: grid; grid-template-columns: minmax(0, 1fr) 18rem; gap: var(--o-s3); align-items: start; }
+.selectedcard { border: 1px solid var(--o-border); border-radius: var(--o-radius); padding: var(--o-s3); }
+.selectedcard h2 { margin-top: 0; }
+.viewbtn[aria-pressed="true"] { font-weight: 700; text-decoration: underline; }
+@media (max-width: 900px) { .graphcols { grid-template-columns: minmax(0, 1fr); } }

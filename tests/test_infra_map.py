@@ -198,6 +198,8 @@ async def test_map_json_shape_with_live_state(w):
     assert ep["monitor"] == "server" and ep["state"] == "pending"
     assert by_id["jack:hq/b1/r1/p1/05"]["building"] == "b1"
     assert {e["source"] for e in m["edges"]} == {"lldp", "field_report"}
+    # The uplinked edge switch sits below the core, so only the core is an anchor.
+    assert core["anchor"] is True and edge["anchor"] is False
     assert {x for e in m["edges"] for x in (e["a"], e["b"])} <= set(by_id)
     # Without a matched monitor the state is spelled "unknown", never guessed.
     assert by_id[f"port:{EDGE}|gi1/0/5"]["state"] == "unknown"

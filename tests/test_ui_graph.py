@@ -144,10 +144,11 @@ def test_graph_css_uses_only_tokens():
     assert ".graph-wrap canvas" in css and "focus-visible" in css
 
 
-def test_no_page_loads_the_graph_yet():
+def test_only_the_map_page_loads_the_graph():
     for page in list(STATIC.glob("*.html")) + list((STATIC / "pages").glob("*.js")):
         text = page.read_text(encoding="utf-8")
-        assert "js/graph/" not in text and "graph.css" not in text, page.name
+        uses = "js/graph/" in text or "graph.css" in text
+        assert uses == (page.name in ("map.html", "map.js")), page.name
 
 
 def test_the_graph_files_are_served_with_the_csp_header(tmp_path):
@@ -170,3 +171,16 @@ def test_the_new_files_use_lf_line_endings():
     for rel in ["observe/static/js/graph/" + n for n in FILES] + [
             "observe/static/css/graph.css", "tests/js/graph.test.mjs", "tests/test_ui_graph.py"]:
         assert carriage_return not in (ROOT / rel).read_bytes(), rel
+
+
+def test_map_page_has_the_view_toggle_canvas_and_side_card():
+    html = (STATIC / "map.html").read_text(encoding="utf-8")
+    for view in ("graph", "tiers", "table"):
+        assert f'data-view="{view}"' in html
+    assert 'id="graphcanvas"' in html and 'id="selected"' in html and 'id="linkstable"' in html
+    js = (STATIC / "pages" / "map.js").read_text(encoding="utf-8")
+    assert "viewFromHash" in js and "createGraphView" in js and "layoutForce" in js
+    assert "role" in (STATIC / "js" / "graph" / "view.js").read_text(encoding="utf-8")
+    infra = (STATIC / "js" / "graph" / "infra.js").read_text(encoding="utf-8")
+    assert 'narrow || nodeCount > FORCE_NODE_LIMIT ? "tiers" : "graph"' in infra
+    assert "d3" not in infra

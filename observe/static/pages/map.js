@@ -3,6 +3,9 @@
 import { el, stateText, portHref, api, STATE_WORDS } from "/static/infra-common.js";
 import { svg as svgEl } from "/static/js/dom.js";
 import "/static/js/theme.js";
+import { layoutForce } from "/static/js/graph/force.js";
+import { createGraphView } from "/static/js/graph/view.js";
+import { GROUPS, buildGraph, defaultView, viewFromHash } from "/static/js/graph/infra.js";
 
 const LAYER_TITLES = [
   ["core", "Core"], ["distribution", "Distribution"], ["access", "Access"],
@@ -13,6 +16,89 @@ const msg = document.getElementById("msg");
 const siteSel = document.getElementById("site");
 const buildingSel = document.getElementById("building");
 let lastData = null;
+let view = null;
+let graphView = null;
+let graph = null;
+const graphEl = document.getElementById("graphview");
+const selectedEl = document.getElementById("selected");
+const narrow = () => window.matchMedia("(max-width: 600px)").matches;
+
+function currentView(nodeCount) {
+  return viewFromHash(location.hash) || view || defaultView(nodeCount, narrow());
+}
+
+function showSelected(id) {
+  const h2 = el("h2", null, "Selected");
+  if (!graph || !id || !graph.byId.has(id)) {
+    selectedEl.replaceChildren(h2, el("p", "note", "Select a device to see its links."));
+    return;
+  }
+  const sw = graph.byId.get(id), d = graph.details.get(id);
+  const sid = id.slice("switch:".length);
+  const list = el("ul", "chips");
+  for (const l of d.links) {
+    const other = graph.byId.get(l.other);
+    const li = el("li");
+    const a = el("a", `chip ${l.stale ? "pending" : "up"}`,
+      `${l.own[0]} to ${other ? other.label : l.other}${l.stale ? " (stale)" : ""}`);
+    a.href = portHref(sid, l.own[0]);
+    li.append(a);
+    list.append(li);
+  }
+  selectedEl.replaceChildren(h2, el("div", "node-title", sw.label),
+    el("div", "node-state", stateText(sw)),
+    el("div", "note", `Switch, ${d.ports.length} mapped port${d.ports.length === 1 ? "" : "s"}, ${d.endpoints} endpoint${d.endpoints === 1 ? "" : "s"}`),
+    el("div", "note", sw.monitor ? `monitor ${sw.monitor}` : "no monitor linked"),
+    d.links.length ? list : el("p", "note", "No switch links mapped."));
+}
+
+function drawGraph(data) {
+  graph = buildGraph(data);
+  const note = document.getElementById("graphnote");
+  if (!graphView) {
+    graphView = createGraphView(document.getElementById("graphcanvas"), {
+      onSelect: showSelected,
+      onOpen: (id) => {
+        const d = graph && graph.details.get(id);
+        if (d && d.links.length) location.href = portHref(id.slice("switch:".length), d.links[0].own[0]);
+      },
+    });
+  }
+  const box = graphView.state;
+  const layout = layoutForce({ entities: graph.entities, relations: graph.relations, groups: GROUPS,
+    anchors: graph.anchors, width: Math.max(box.w, 600), height: Math.max(box.h, 400) });
+  graphView.setData(layout, graph.entities);
+  note.hidden = !layout.limited;
+  note.textContent = layout.limited
+    ? "The graph is limited to 300 devices. Use the tiers or the table for this view." : "";
+  showSelected(graphView.state.selected);
+}
+
+function applyView(data) {
+  const count = data.nodes.filter((n) => n.kind === "switch").length;
+  const v = currentView(count);
+  const forced = v === "graph" && count > 300 ? "tiers" : v;
+  for (const b of document.querySelectorAll(".viewbtn")) {
+    b.setAttribute("aria-pressed", String(b.dataset.view === forced));
+  }
+  graphEl.hidden = forced !== "graph";
+  layersEl.hidden = forced !== "tiers";
+  document.getElementById("linkstable").hidden = false;
+  if (forced === "graph") drawGraph(data);
+  else if (forced === "tiers") draw(data);
+}
+
+for (const b of document.querySelectorAll(".viewbtn")) {
+  b.addEventListener("click", () => {
+    view = b.dataset.view;
+    try { history.replaceState(null, "", `#${view}`); } catch (e) { location.hash = view; }
+    if (lastData) applyView(lastData);
+  });
+}
+window.addEventListener("hashchange", () => { if (lastData) applyView(lastData); });
+document.getElementById("zoomin").addEventListener("click", () => graphView && graphView.zoomBy(1.25));
+document.getElementById("zoomout").addEventListener("click", () => graphView && graphView.zoomBy(0.8));
+document.getElementById("zoomfit").addEventListener("click", () => graphView && graphView.fit());
 
 function switchTiers(nodes, edges) {
   const switches = nodes.filter((n) => n.kind === "switch");
@@ -114,7 +200,6 @@ function draw(data) {
   if (!any) frag.append(el("p", "note", "Nothing is mapped yet for this view."));
   layersEl.replaceChildren(frag);
   drawEdges(svg, edges, boxOf);
-  fillLinks(edges, nodes);
 }
 
 function drawEdges(svg, edges, boxOf) {
@@ -195,7 +280,8 @@ async function refresh() {
     lastData = data;
     msg.textContent = "";
     summarize(data.nodes);
-    draw(data);
+    fillLinks(data.edges, data.nodes);
+    applyView(data);
     document.getElementById("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;
   } catch (e) {
     if (e.message !== "not signed in") {
@@ -206,6 +292,6 @@ async function refresh() {
 
 siteSel.addEventListener("change", refresh);
 buildingSel.addEventListener("change", refresh);
-window.addEventListener("resize", () => { if (lastData) draw(lastData); });
+window.addEventListener("resize", () => { if (lastData && !layersEl.hidden) draw(lastData); });
 refresh();
 setInterval(refresh, 15000);

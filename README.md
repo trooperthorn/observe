@@ -629,5 +629,5 @@ The force-directed graph engine for the infrastructure map is in `observe/static
 (`force.js`, `render.js`, `view.js`) with `css/graph.css`. It has no dependencies, runs the layout
 once (at most 360 steps, and only up to 300 nodes), paints to a canvas in the theme's colours and
 shows each node's state as a ring and a glyph, not by colour alone. It is ported from
-relationship-maps via ha_Int_soc (both MIT) and is not wired to a page yet. `tests/test_ui_graph.py`
+relationship-maps via ha_Int_soc (both MIT) and is used by the Network map page (graph, tiers and table views, chosen with `#graph`, `#tiers` or `#table`; tiers is the default on phones and above 300 devices). `tests/test_ui_graph.py`
 checks it, and `tests/js/graph.test.mjs` holds the layout tests for CI.

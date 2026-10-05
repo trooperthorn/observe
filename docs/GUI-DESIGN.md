@@ -542,6 +542,14 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 - Tests: `tests/test_ui_graph.py` checks the sources, the header, the absence of d3, the token names, the constants and the CSP headers on the served files. `tests/js/graph.test.mjs` holds the layout tests (determinism, anchor near the centre, fixed nodes, tick budget, picking, view helpers) for `node --test tests/js` in CI. Per Q6, Node is not required locally.
 - Deviations: nothing was measured on a Pi 3, so the 300 ms layout and 16 ms paint targets are not yet confirmed. A link is highlighted only when both of its ends are in the focus set.
 
+### S10 notes (done)
+
+- `/api/infra/map` switch nodes carry `anchor`: true for a switch with a switch link that is not through its own uplink port. `js/graph/infra.js` builds entities, relations and anchors from the payload and holds the default-view rule.
+- `map.html` and `pages/map.js` have a Graph, Tiers and Table toggle kept in the URL hash. Graph sits beside Tiers (Q1). Tiers is the default on screens up to 600px and above 300 switches, with a note when the graph is limited. The Links table is always shown.
+- The side card lists the selected switch, its state in words and its links as real links to port pages. Keyboard support comes from `view.js`, and Enter opens the first linked port page.
+- Tests: `tests/test_ui_graph.py`, `tests/test_infra_map.py` (anchor flag) and `tests/js/infra.test.mjs`.
+- Deviations: endpoints and jacks are not graph nodes (endpoints are a count badge). Layout positions are not cached in sessionStorage yet.
+
 ### S7 notes (done)
 
 - `admin.html`, `audit.html`, `infra-admin.html` and `port.html` load `components.css` and `css/admin.css` (tokens only) after `app.css`, with one entry module and then `shell.js`. `admin.js`, `audit.js`, `infra-admin.js` and `port.js` use `sortableTable`, `statusChip`, `confirmDialog` and `toast`; the shared builders are in `js/admin-ui.js`.
