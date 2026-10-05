@@ -17,11 +17,18 @@ What a report yields:
   creates starts as `access`.
 - Each allowlisted property in the report is appended to the port with provenance: the report
   id, the key (prefix and device label) as `recorded_by`, and the tester serial as a property.
-  A value equal to the newest one only moves `last_verified`.
+  A value equal to the current one only moves `last_verified`.
+- A report whose status is `cancelled` or `aborted` derives nothing at all: no switch, port,
+  jack, link or property, because a partial run can carry zero speeds and half-read values. It
+  stays stored as evidence, and the report page still lists it. Only `complete` reports derive.
 
-The time used as `now` is the time the report was received, which the report store keeps as
-`updated_at`. Live accept and rebuild use the same value, so a rebuild reproduces the same rows
-apart from their autoincrement ids.
+Order. Every time written to the map (last_seen, link confirmation, ageing, the jack patch,
+`observed_at`, `last_verified`, `last_tested_at`) is the report's corrected observation time,
+after clock-skew correction, never the time it was received. The core treats the newest
+observation as current, so a late or resent older report adds history but does not replace a
+newer current value, does not move the jack patch, and does not refresh a link. The receive
+time only fills `recorded_at`. Live accept and rebuild use the same values, so a rebuild
+reproduces the same rows apart from their autoincrement ids.
 """
 
 from __future__ import annotations
@@ -121,6 +128,9 @@ def _neighbor(report: Report) -> tuple[Neighbor, tuple[str, str, list[str], str,
     return None
 
 
+DERIVING_STATUS = "complete"
+
+
 def _properties(report: Report, taken_ms: int, jack: str) -> list[tuple[str, Any]]:
     """The (name, value) pairs to append, in a fixed order, with fallbacks from the report."""
     values = {k: v for k, v in report.properties.model_dump().items() if v is not None}
@@ -132,7 +142,12 @@ def _properties(report: Report, taken_ms: int, jack: str) -> list[tuple[str, Any
             values[name] = _clean(fallback)
     if "tester_serial" not in values:
         values["tester_serial"] = report.device.serial
-    values.setdefault("last_tested_at_ms", taken_ms)
+    if "last_tested_at_ms" in values:
+        # The phone's own test time shifts by the same skew as the report time.
+        values["last_tested_at_ms"] = max(
+            0, values["last_tested_at_ms"] + (taken_ms - report.taken_at_ms))
+    else:
+        values["last_tested_at_ms"] = taken_ms
     out: list[tuple[str, Any]] = []
     for name, value in values.items():
         if name == "last_tested_at_ms":
@@ -147,6 +162,9 @@ async def derive_report(infra: InfraService, report: Report, *, key_prefix: str,
                         taken_ms: int, now: float) -> Derived:
     """Write the switch, port, jack, link and properties one report implies. Idempotent."""
     result = Derived()
+    if report.status != DERIVING_STATUS:
+        result.skipped = f"report status is {report.status}"
+        return result
     found = _neighbor(report)
     if found is None:
         result.skipped = "no neighbour with a switch and a port"
@@ -156,25 +174,25 @@ async def derive_report(infra: InfraService, report: Report, *, key_prefix: str,
     jack = _clean(site.port_id if site else "") or _clean(report.location_label) \
         or _clean(report.properties.jack_label)
     recorded_by = f"{key_prefix}:{device}"[:64]
-    seen = taken_ms / 1000.0
+    seen = taken_ms / 1000.0  # the corrected observation time; `now` is only recorded_at
 
     # Field data never overwrites what live sources know: a switch or port that already exists
     # keeps its name, addresses, vendor, platform and role, and only has its last-seen moved.
     if await infra.switch_exists(sid):
-        await infra.upsert_switch(sid, now=now)
+        await infra.upsert_switch(sid, now=seen)
     else:
         await infra.upsert_switch(sid, name=name, mgmt_addresses=addrs[:16], vendor=vendor,
-                                  platform=platform, now=now)
+                                  platform=platform, now=seen)
     role = "unknown" if await infra.port_exists(sid, key) else "access"
-    await infra.upsert_port(sid, key, raw_port_id=raw_port, role=role, now=now)
+    await infra.upsert_port(sid, key, raw_port_id=raw_port, role=role, now=seen)
     result.switch, result.port = sid, key
     if jack:
         await infra.upsert_jack(jack, room=_clean(site.room if site else ""),
                                 site=_clean(site.site if site else ""), switch=sid, port=key,
-                                now=now)
+                                now=seen)
         await infra.upsert_link(infra.jack_ref(jack), infra.port_ref(sid, key),
                                 source=LINK_SOURCE, confidence=LINK_CONFIDENCE[n.protocol],
-                                now=now)
+                                now=seen)
         result.jack = jack
     for pname, value in _properties(report, taken_ms, jack):
         added = await infra.append_property(
@@ -213,7 +231,7 @@ def _clear_sync(store: Store) -> tuple[list[tuple[Any, ...]], int]:
             return [], int(pruned)
         rows = store._db.execute(
             "SELECT source, report_id, key_prefix, taken_at_ms, updated_at, body "
-            "FROM field_reports ORDER BY updated_at, source, report_id").fetchall()
+            "FROM field_reports ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
         store._db.execute("DELETE FROM port_properties WHERE source=?", (SOURCE,))
         jacks = [r[0] for r in store._db.execute(
             "SELECT a_ref FROM infra_links WHERE source=? AND a_kind='jack'", (LINK_SOURCE,))]
@@ -229,7 +247,7 @@ async def rebuild(store: Store) -> RebuildResult:
 
     Switches, ports and jacks stay (other sources may share them, and upserts are idempotent);
     this plugin's properties and `field_report` links are deleted and replayed in the order the
-    reports arrived. Refused with a nonzero `pruned` when retention dropped any body.
+    reports were observed. Refused with a nonzero `pruned` when retention dropped any body.
     """
     out = RebuildResult()
     rows, out.pruned = await asyncio.to_thread(_clear_sync, store)

@@ -28,7 +28,7 @@ from typing import Any
 
 from . import audit
 from .config import Config
-from .infra import InfraError, InfraService
+from .infra import InfraError, InfraService, current_ids_sql
 from .infra_match import LiveReader, Matcher
 
 DAY = 86400.0
@@ -294,8 +294,7 @@ class MapService:
                     "last_seen, closed_at FROM infra_links ORDER BY id").fetchall(),
                 "sites": db.execute(
                     "SELECT switch_id, port_key, value FROM port_properties WHERE id IN ("
-                    "SELECT MAX(id) FROM port_properties WHERE name='site' "
-                    "GROUP BY switch_id, port_key)").fetchall(),
+                    + current_ids_sql("WHERE name='site'") + ")").fetchall(),
             }
         d = await self._infra._run(go)
 

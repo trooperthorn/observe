@@ -136,7 +136,7 @@ def test_property_history_appends_and_identical_value_only_bumps(infra):
     history = run(infra.property_history(SW, "gi1/0/5", "link_speed_mbps"))
     assert [h["value"] for h in history] == [100, 1000]  # newest first, two rows not three
     assert history[1]["report_id"] == "r1"
-    assert history[1]["last_verified"] == 201.0  # bumped by the identical report
+    assert history[1]["last_verified"] == 200.0  # moved to the identical report's observation time
     assert history[1]["observed_at"] == 100.0  # the original observation is kept
     current = run(infra.current_properties(SW, "Gi1/0/5"))
     assert current["link_speed_mbps"]["value"] == 100

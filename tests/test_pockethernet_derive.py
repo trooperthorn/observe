@@ -76,11 +76,12 @@ def test_second_report_on_another_port_repatches_the_jack(env):
     env.clock.now += 1
     env.post(FIXTURE)
     env.clock.now += 60
-    assert env.post(second_port(env, "r-2")).json()["result"] == "accepted"
+    later = FIXTURE["taken_at_ms"] + 60_000
+    assert env.post(second_port(env, "r-2", taken_at_ms=later)).json()["result"] == "accepted"
     (jack,) = env.rows("SELECT switch_id, port_key FROM infra_jacks")
     assert jack == (SID, "gi1/0/6")
     links = env.rows("SELECT b_ref, closed_at FROM infra_links ORDER BY b_ref")
-    assert links == [(f"{SID}|gi1/0/5", env.clock.now), (f"{SID}|gi1/0/6", None)]
+    assert links == [(f"{SID}|gi1/0/5", later / 1000), (f"{SID}|gi1/0/6", None)]
     # The old port keeps its history; the new port starts one.
     assert {r[0] for r in env.rows("SELECT port_key FROM port_properties")} == {
         "gi1/0/5", "gi1/0/6"}
@@ -99,9 +100,10 @@ def test_identical_values_bump_last_verified_without_new_rows(env):
     assert changed == {"last_tested_at"}  # the only value that differs
     speed = env.rows("SELECT last_verified, observed_at, report_id FROM port_properties "
                      "WHERE name='link_speed_mbps'")
-    assert speed == [(env.clock.now, FIXTURE["taken_at_ms"] / 1000, FIXTURE["report_id"])]
+    assert speed == [(again["taken_at_ms"] / 1000, FIXTURE["taken_at_ms"] / 1000,
+                      FIXTURE["report_id"])]
     (links,) = [env.rows("SELECT COUNT(*), MAX(last_seen) FROM infra_links")]
-    assert links == [(1, env.clock.now)]
+    assert links == [(1, again["taken_at_ms"] / 1000)]
 
 
 def test_replaced_revision_derives_again_and_duplicate_does_not(env):
@@ -239,7 +241,8 @@ def test_field_report_never_overwrites_what_live_sources_know(env):
     db.commit()
     db.close()
     env.clock.now += 60
-    env.post(second_port(env, "r-live", port="Gi1/0/5"))
+    env.post(second_port(env, "r-live", port="Gi1/0/5",
+                         taken_at_ms=FIXTURE["taken_at_ms"] + 60_000))
     assert env.rows("SELECT role FROM infra_ports") == [("uplink",)]
     assert env.rows("SELECT name, vendor, platform, mgmt_addresses FROM infra_switches") == [
         ("core-sw", "Live Vendor", "live-os", '["192.0.2.1"]')]
@@ -287,3 +290,108 @@ def test_migration_2_upgrades_a_version_1_database_with_rows(tmp_path):
     assert db.execute("SELECT report_id, key_prefix, body FROM field_reports").fetchall() == [
         ("old-1", "", b"{}")]
     db.close()
+
+
+def _speed(env: Env, port: str) -> list[tuple[Any, ...]]:
+    return env.rows("SELECT value, observed_at, last_verified, report_id FROM port_properties "
+                    "WHERE name='link_speed_mbps' AND port_key=? ORDER BY observed_at", port)
+
+
+def _newer_then_older(env: Env) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A report taken a minute later on port 6, received first, then the older one on port 5."""
+    newer = second_port(env, "r-new", taken_at_ms=FIXTURE["taken_at_ms"] + 60_000)
+    newer["properties"] = {**FIXTURE["properties"], "link_speed_mbps": 100}
+    older = env.report(report_id="r-old")
+    env.clock.now += 120
+    assert env.post(newer).json()["result"] == "accepted"
+    env.clock.now += 3600
+    assert env.post(older).json()["result"] == "accepted"
+    return newer, older
+
+
+def test_older_report_received_later_adds_history_but_changes_nothing_current(env):
+    newer, _ = _newer_then_older(env)
+    new_t = newer["taken_at_ms"] / 1000
+    # The jack stays on the newer port, and only the newer link is open.
+    assert env.rows("SELECT switch_id, port_key FROM infra_jacks") == [(SID, "gi1/0/6")]
+    links = env.rows("SELECT b_ref, closed_at, last_seen FROM infra_links ORDER BY b_ref")
+    assert links[1] == (f"{SID}|gi1/0/6", None, new_t)
+    assert links[0][1] is not None  # the older port's link is closed at once
+    # The older report is in the history of its own port, and nothing there is current for 6.
+    assert [r[0] for r in _speed(env, "gi1/0/5")] == ["1000"]
+    assert [r[0] for r in _speed(env, "gi1/0/6")] == ["100"]
+    assert _speed(env, "gi1/0/6")[0][2] == new_t  # last_verified is not refreshed
+
+
+def test_older_report_on_the_same_port_never_overrides_the_current_value(env):
+    newer = env.report(report_id="r-new", taken_at_ms=FIXTURE["taken_at_ms"] + 60_000)
+    newer["properties"] = {**FIXTURE["properties"], "link_speed_mbps": 100}
+    env.clock.now += 120
+    env.post(newer)
+    env.clock.now += 3600
+    env.post(env.report(report_id="r-old"))  # speed 1000, observed a minute before
+    infra = __import__("watchpost.infra", fromlist=["InfraService"]).InfraService(env.store)
+    current = run(infra.current_properties(SID, "gi1/0/5"))
+    assert current["link_speed_mbps"]["value"] == 100
+    assert current["link_speed_mbps"]["report_id"] == "r-new"
+    history = run(infra.property_history(SID, "gi1/0/5", "link_speed_mbps"))
+    assert [h["value"] for h in history] == [100, 1000]
+    # A rebuild reproduces the same current value regardless of arrival order.
+    headers = admin_headers(env)
+    assert env.client.post("/api/plugins/pockethernet/rebuild", headers=headers).status_code == 200
+    after = run(infra.current_properties(SID, "gi1/0/5"))
+    assert after["link_speed_mbps"]["value"] == 100
+
+
+def test_resent_old_report_does_not_refresh_link_verification_or_ageing(env):
+    first = env.report(report_id="r-1")
+    env.post(first)
+    later = FIXTURE["taken_at_ms"] + 3_600_000
+    env.clock.now += 7200
+    env.post(env.report(report_id="r-2", taken_at_ms=later))
+    before = (env.rows("SELECT last_seen, closed_at FROM infra_links"), env.rows(PROPS))
+    env.clock.now += 86_400
+    # The first report is resent under a new id, with identical values and the old time.
+    assert env.post(env.report(report_id="r-1-resent")).json()["result"] == "accepted"
+    assert env.rows("SELECT last_seen, closed_at FROM infra_links") == before[0]
+    assert before[0] == [(later / 1000, None)]
+    speed = env.rows("SELECT observed_at, last_verified FROM port_properties "
+                     "WHERE name='link_speed_mbps'")
+    assert speed == [(FIXTURE["taken_at_ms"] / 1000, later / 1000)]  # no new row, no refresh
+    # The same revision of the same report is a duplicate and derives nothing at all.
+    assert env.post(first).json()["result"] == "duplicate"
+
+
+def test_last_tested_at_is_the_corrected_time_when_the_phone_clock_is_slow(env):
+    skew = 3 * 3600
+    now = env.clock.now
+    phone_ms = int(now * 1000) - skew * 1000
+    body = env.report(report_id="r-slow", taken_at_ms=phone_ms)
+    body["properties"] = {**FIXTURE["properties"], "last_tested_at_ms": phone_ms}
+    res = env.post(body, headers={"X-Report-Sent-Ms": str(phone_ms)}).json()
+    assert res["clock_corrected"] is True
+    (tested,) = env.rows("SELECT value, observed_at FROM port_properties "
+                         "WHERE name='last_tested_at'")
+    assert abs(float(tested[0]) - res["taken_at_ms"] / 1000) < 0.001
+    assert float(tested[0]) == tested[1]
+    assert abs(float(tested[0]) - now) < 1.0
+
+
+@pytest.mark.parametrize("status", ["cancelled", "aborted"])
+def test_cancelled_and_aborted_reports_are_evidence_only(env, status):
+    body = env.report(report_id=f"r-{status}", status=status)
+    body["properties"] = {**FIXTURE["properties"], "link_speed_mbps": 0, "vlan": 1}
+    res = env.post(body)
+    assert res.json()["result"] == "accepted"
+    assert env.rows("SELECT status FROM field_reports") == [(status,)]
+    for table in ("infra_switches", "infra_ports", "infra_jacks", "infra_links",
+                  "port_properties"):
+        assert env.rows(f"SELECT COUNT(*) FROM {table}") == [(0,)], table
+    audit = env.rows("SELECT detail FROM audit WHERE kind='plugin_request' "
+                     "ORDER BY id DESC LIMIT 1")
+    assert "report status is" in audit[0][0]
+    # A rebuild skips it too.
+    headers = admin_headers(env)
+    out = env.client.post("/api/plugins/pockethernet/rebuild", headers=headers).json()
+    assert out["skipped"] == 1 and out["derived"] == 0
+    assert env.rows("SELECT COUNT(*) FROM port_properties") == [(0,)]

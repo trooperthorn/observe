@@ -81,7 +81,7 @@ def _jack_sync(store: Store, key: str) -> dict[str, Any] | None:
             for s, p, rid, obs, rec, by, src in db.execute(
                 "SELECT switch_id, port_key, report_id, observed_at, recorded_at, recorded_by, "
                 "source FROM port_properties WHERE name='jack_label' AND value=? "
-                "ORDER BY id DESC LIMIT 200", (json.dumps(key, sort_keys=True),))]
+                "ORDER BY observed_at DESC, id DESC LIMIT 200", (json.dumps(key, sort_keys=True),))]
         ids = {h["report_id"] for h in history if h["report_id"]}
         marks = ",".join("?" * len(ids))
         reports = db.execute(

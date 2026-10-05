@@ -29,7 +29,7 @@ from typing import Any
 
 from . import audit
 from .config import Config
-from .infra import InfraError, InfraService
+from .infra import InfraError, InfraService, current_ids_sql
 from .infra_changes import TRACKED, port_changes
 from .portkey import mac_digits, port_key
 
@@ -242,16 +242,16 @@ class Matcher:
             ).fetchall()
             props = db.execute(
                 "SELECT switch_id, port_key, name, value FROM port_properties WHERE id IN ("
-                "SELECT MAX(id) FROM port_properties GROUP BY switch_id, port_key, name)"
+                + current_ids_sql() + ")"
             ).fetchall()
             labels = db.execute(
                 "SELECT id, switch_id, port_key, value FROM port_properties "
-                "WHERE name='jack_label' ORDER BY id").fetchall()
+                "WHERE name='jack_label' ORDER BY observed_at, id").fetchall()
             marks = ",".join("?" * len(TRACKED))
             last_two = db.execute(
                 "SELECT switch_id, port_key, name, value, rn FROM ("
                 "SELECT switch_id, port_key, name, value, id, ROW_NUMBER() OVER ("
-                "PARTITION BY switch_id, port_key, name ORDER BY id DESC) AS rn "
+                "PARTITION BY switch_id, port_key, name ORDER BY observed_at DESC, id DESC) AS rn "
                 f"FROM port_properties WHERE name IN ({marks})) WHERE rn <= 2", TRACKED
             ).fetchall()
             return ports, props, labels, last_two

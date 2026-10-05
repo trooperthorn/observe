@@ -4,9 +4,11 @@ Plugins and core code call this to upsert switches, ports, jacks, links and endp
 append typed port properties. Port names are normalised by watchpost/portkey.py first, so the
 callers may pass whatever spelling they have. Switch ids come from portkey.switch_id().
 
-Port properties are append-only. The current value of a property is its newest row. Writing
-a value identical to the newest one adds no row; it moves that row's last_verified forward,
-so the page can say "confirmed again on ...". Only allowlisted names are accepted, plus
+Port properties are append-only. The current value of a property is the row with the newest
+`observed_at` (the later row id breaks a tie), never the row written last, so a late or resent
+older observation adds history but cannot replace a newer current value. Writing a value
+identical to the current one adds no row; it moves that row's last_verified forward to the
+observation time, so the page can say "confirmed again on ...". Only allowlisted names are accepted, plus
 `custom.<name>` for hand-entered properties; a custom write needs an actor and is written to
 the audit log. Values are checked for type and length. A property can only be written for a
 port that exists, and nothing here creates or changes a monitor.
@@ -25,7 +27,7 @@ from typing import Any
 from .portkey import lldp_port_key, port_key, switch_id
 from .store import Store
 
-__all__ = ["InfraError", "InfraService", "PROPERTY_TYPES", "UnknownPropertyError",
+__all__ = ["current_ids_sql", "InfraError", "InfraService", "PROPERTY_TYPES", "UnknownPropertyError",
            "lldp_port_key", "port_key", "switch_id"]
 
 ROLES = ("access", "uplink", "unknown")
@@ -50,6 +52,15 @@ PROPERTY_TYPES: dict[str, type] = {
 
 class InfraError(ValueError):
     """A request the infrastructure service refuses; the message never holds a secret."""
+
+
+def current_ids_sql(where: str = "") -> str:
+    """SQL selecting the ids of the current row of every (switch, port, name): the newest
+    observation, with the later id breaking a tie. Every reader of "the current value" uses
+    this, never MAX(id)."""
+    return ("SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY switch_id, port_key, "
+            "name ORDER BY observed_at DESC, id DESC) AS rn FROM port_properties "
+            f"{where}) WHERE rn=1")
 
 
 class UnknownPropertyError(InfraError):
@@ -182,7 +193,8 @@ class InfraService:
     async def upsert_jack(self, jack_key: str, *, room: str = "", site: str = "",
                           switch: str | None = None, port: str | None = None,
                           now: float | None = None) -> str:
-        """Create or refresh a jack, optionally patched to an existing port."""
+        """Create or refresh a jack, optionally patched to an existing port. An observation older
+        than the jack's last_seen never moves an existing patch."""
         jack = _text(jack_key, "jack_key", 128)
         if not jack:
             raise InfraError("jack_key is empty")
@@ -201,10 +213,14 @@ class InfraService:
             db.execute(
                 "INSERT INTO infra_jacks (jack_key, room, site, switch_id, port_key, first_seen, "
                 "last_seen) VALUES (?,?,?,?,?,?,?) ON CONFLICT(jack_key) DO UPDATE SET "
-                "room=CASE WHEN excluded.room != '' THEN excluded.room ELSE room END, "
-                "site=CASE WHEN excluded.site != '' THEN excluded.site ELSE site END, "
-                "switch_id=COALESCE(excluded.switch_id, switch_id), "
-                "port_key=COALESCE(excluded.port_key, port_key), "
+                "room=CASE WHEN excluded.room != '' AND (excluded.last_seen >= last_seen "
+                "OR room = '') THEN excluded.room ELSE room END, "
+                "site=CASE WHEN excluded.site != '' AND (excluded.last_seen >= last_seen "
+                "OR site = '') THEN excluded.site ELSE site END, "
+                "switch_id=CASE WHEN excluded.last_seen >= last_seen OR switch_id IS NULL "
+                "THEN COALESCE(excluded.switch_id, switch_id) ELSE switch_id END, "
+                "port_key=CASE WHEN excluded.last_seen >= last_seen OR switch_id IS NULL "
+                "THEN COALESCE(excluded.port_key, port_key) ELSE port_key END, "
                 "last_seen=MAX(last_seen, excluded.last_seen)",
                 (jack, room, site, sid, key, ts, ts))
         await self._run(go)
@@ -248,7 +264,9 @@ class InfraService:
     async def upsert_link(self, end_a: tuple[str, str], end_b: tuple[str, str], *, source: str,
                           confidence: float = 1.0, now: float | None = None) -> int:
         """Create or confirm an edge between two existing ends, built with port_ref, jack_ref or
-        endpoint_ref. Confirming an edge reopens it and moves last_seen forward. Returns its id."""
+        endpoint_ref. Confirming an edge reopens it and moves last_seen forward, unless the edge was
+        closed after the time given, in which case an older confirmation changes nothing.
+        Returns its id."""
         if source not in LINK_SOURCES:
             raise InfraError("unknown link source")
         if (isinstance(confidence, bool) or not isinstance(confidence, (int, float))
@@ -280,7 +298,10 @@ class InfraService:
                 "INSERT INTO infra_links (a_kind, a_ref, b_kind, b_ref, source, confidence, "
                 "first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(a_kind, a_ref, b_kind, b_ref, source) DO UPDATE SET "
-                "confidence=excluded.confidence, closed_at=NULL, "
+                "confidence=CASE WHEN excluded.last_seen >= last_seen THEN excluded.confidence "
+                "ELSE confidence END, "
+                "closed_at=CASE WHEN closed_at IS NOT NULL AND closed_at > excluded.last_seen "
+                "THEN closed_at ELSE NULL END, "
                 "last_seen=MAX(last_seen, excluded.last_seen)",
                 (*ends[0], *ends[1], source, float(confidence), ts, ts))
             self._close_contradicted(db, ends, source, ts)
@@ -304,12 +325,20 @@ class InfraService:
             if kinds == {"jack", "port"} and end[0] != "jack":
                 continue
             rows = db.execute(
-                "SELECT id, a_kind, a_ref, b_kind, b_ref FROM infra_links WHERE closed_at IS NULL "
+                "SELECT id, a_kind, a_ref, b_kind, b_ref, last_seen FROM infra_links "
+                "WHERE closed_at IS NULL "
                 "AND source != 'config' AND ((a_kind=? AND a_ref=?) OR (b_kind=? AND b_ref=?))",
                 (*end, *end)).fetchall()
-            for lid, ak, ar, bk, br in rows:
+            for lid, ak, ar, bk, br, last_seen in rows:
                 pair = {(ak, ar), (bk, br)}
                 if pair == mine or {ak, bk} != kinds:
+                    continue
+                if last_seen > ts:
+                    # The other link was confirmed after this observation, so this one is the
+                    # stale side: it is closed at once and the newer link stays open.
+                    db.execute("UPDATE infra_links SET closed_at=? WHERE a_kind=? AND a_ref=? "
+                               "AND b_kind=? AND b_ref=? AND source=? AND closed_at IS NULL",
+                               (ts, *ends[0], *ends[1], source))
                     continue
                 db.execute("UPDATE infra_links SET closed_at=? WHERE id=?", (ts, lid))
 
@@ -319,7 +348,8 @@ class InfraService:
                               source: str, report_id: str = "", observed_at: float | None = None,
                               recorded_by: str = "", now: float | None = None) -> bool:
         """Record a property of a port. Returns True when a new history row was added and False
-        when the value equalled the newest one and only last_verified moved."""
+        when the value equalled the current one and only last_verified moved. An observation
+        older than the current row is added to the history and leaves the current row alone."""
         if not isinstance(name, str) or (name not in PROPERTY_TYPES
                                          and not CUSTOM_NAME.match(name)):
             raise UnknownPropertyError("unknown property name")
@@ -342,18 +372,25 @@ class InfraService:
                           (sid, key)).fetchone() is None:
                 raise InfraError("unknown port")
             last = db.execute(
-                "SELECT id, value, unit FROM port_properties WHERE switch_id=? AND port_key=? "
-                "AND name=? ORDER BY id DESC LIMIT 1", (sid, key, name)).fetchone()
-            if last is not None and last[1] == text and last[2] == unit:
-                db.execute("UPDATE port_properties SET last_verified=MAX(last_verified, ?) "
-                           "WHERE id=?", (max(ts, seen), last[0]))
-                return False
+                "SELECT id, value, unit, observed_at FROM port_properties WHERE switch_id=? AND port_key=? "
+                "AND name=? ORDER BY observed_at DESC, id DESC LIMIT 1",
+                (sid, key, name)).fetchone()
+            if last is not None and last[3] <= seen:
+                if last[1] == text and last[2] == unit:
+                    db.execute("UPDATE port_properties SET last_verified=MAX(last_verified, ?) "
+                               "WHERE id=?", (seen, last[0]))
+                    return False
+            elif last is not None and db.execute(
+                    "SELECT 1 FROM port_properties WHERE switch_id=? AND port_key=? AND name=? "
+                    "AND observed_at=? AND value=? AND unit=?",
+                    (sid, key, name, seen, text, unit)).fetchone() is not None:
+                return False  # this older observation is already in the history
             db.execute(
                 "INSERT INTO port_properties (switch_id, port_key, name, value, unit, source, "
                 "report_id, observed_at, recorded_at, recorded_by, last_verified) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (sid, key, name, text, unit, source, report_id, seen, ts, recorded_by,
-                 max(ts, seen)))
+                 seen))
             return True
 
         added = bool(await self._run(go))
@@ -364,15 +401,15 @@ class InfraService:
         return added
 
     async def current_properties(self, sid: str, port: str) -> dict[str, dict[str, Any]]:
-        """The newest row for each property name of a port."""
+        """The row with the newest observation for each property name of a port."""
         sid, key = _norm_switch(sid), _key(port)
 
         def go(db: Any) -> list[tuple[Any, ...]]:
             return db.execute(
                 "SELECT name, value, unit, source, report_id, observed_at, recorded_at, "
                 "recorded_by, last_verified FROM port_properties WHERE id IN ("
-                "SELECT MAX(id) FROM port_properties WHERE switch_id=? AND port_key=? "
-                "GROUP BY name) ORDER BY name", (sid, key)).fetchall()
+                + current_ids_sql("WHERE switch_id=? AND port_key=?") + ") ORDER BY name",
+                (sid, key)).fetchall()
         return {r[0]: self._row(r) for r in await self._run(go)}
 
     async def property_history(self, sid: str, port: str, name: str,
@@ -385,7 +422,7 @@ class InfraService:
             return db.execute(
                 "SELECT name, value, unit, source, report_id, observed_at, recorded_at, "
                 "recorded_by, last_verified FROM port_properties WHERE switch_id=? AND port_key=? "
-                "AND name=? ORDER BY id DESC LIMIT ?", (sid, key, name, limit)).fetchall()
+                "AND name=? ORDER BY observed_at DESC, id DESC LIMIT ?", (sid, key, name, limit)).fetchall()
         return [self._row(r) for r in await self._run(go)]
 
     @staticmethod
