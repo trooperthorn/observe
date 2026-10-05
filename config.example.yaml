@@ -522,7 +522,9 @@ monitors:
       - {source: hwmon, metric: cpu_temp_c, direction: above, warn: 75, crit: 90}
 
 # Plugins (watchpost/plugins.py). Only names listed here are loaded.
-# plugins: [pockethernet]
+# plugins: [pockethernet, control]
 # plugin_settings:
 #   pockethernet:
 #     evidence_retention_days: 365  # how long a report body is kept
+#   control:
+#     signing_key_file: /run/secrets/watchpost_control_key   # from --control-keygen
