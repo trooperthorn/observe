@@ -1,6 +1,7 @@
 // Shared helpers for the map, port and map admin pages. Every string came from a field
 // report, a switch or a monitor name, so it is written with textContent only, never as markup.
 import { el } from "/static/js/dom.js";
+import { statusChip } from "/static/js/chips.js";
 
 export { el };
 export { api, whoami } from "/static/js/api.js";
@@ -15,8 +16,9 @@ export function stateText(node) {
   return node.state === "unreachable" && node.blocked_by ? `${word}, behind ${node.blocked_by}` : word;
 }
 
-export function statePill(node) {
-  return el("span", `pill ${node.state || "pending"}`, stateText(node));
+// A status chip with an icon and the state word, never colour alone.
+export function stateChip(node) {
+  return statusChip(node.state || "pending", stateText(node));
 }
 
 export function when(ts) {

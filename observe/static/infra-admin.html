@@ -3,32 +3,38 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>map admin - observe</title>
+<title>Map admin - Observe</title>
 <link rel="stylesheet" href="/static/css/tokens.css">
 <link rel="stylesheet" href="/static/css/base.css">
 <link rel="stylesheet" href="/static/css/shell.css">
+<link rel="stylesheet" href="/static/css/components.css">
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/css/admin.css">
 </head>
 <body>
 <header id="shell-header" class="shell-head">
   <div id="summary" aria-live="polite"></div>
 </header>
 <nav id="shell-nav" aria-label="Main"></nav>
-<main class="adminpage">
-  <p id="msg" role="alert"></p>
-  <section>
-    <h2>Unlinked switches</h2>
-    <p class="note">Switches seen in the field that match no monitor. Linking never creates a monitor.</p>
-    <table id="unlinked"><thead><tr><th>Switch</th><th>Name</th><th>Addresses</th><th>Last seen</th><th>Link to monitor</th></tr></thead><tbody></tbody></table>
+<main class="admin-main" id="page">
+  <div class="admin-title">
+    <p class="crumbs muted">Network / Map admin</p>
+    <h1>Map admin</h1>
+  </div>
+  <p id="msg" class="msg-line" role="alert"></p>
+  <section class="card" id="unlinked-card" aria-labelledby="unlinked-h">
+    <h3 id="unlinked-h">Unlinked switches</h3>
+    <p class="card-sub">Switches seen in the field that match no monitor. Linking never creates a monitor.</p>
+    <div id="unlinked"></div>
   </section>
-  <section>
-    <h2>Pending dependency proposals</h2>
-    <p class="note">Weaker links wait here until an admin accepts or rejects them.</p>
-    <table id="pending"><thead><tr><th>Depends</th><th>On</th><th>Source</th><th>Seen</th><th></th></tr></thead><tbody></tbody></table>
+  <section class="card" id="pending-card" aria-labelledby="pending-h">
+    <h3 id="pending-h">Pending dependency proposals</h3>
+    <p class="card-sub">Weaker links wait here until an admin accepts or rejects them.</p>
+    <div id="pending"></div>
   </section>
-  <section>
-    <h2>Decided and refused</h2>
-    <table id="decided"><thead><tr><th>Depends</th><th>On</th><th>Outcome</th><th>Reason</th><th></th></tr></thead><tbody></tbody></table>
+  <section class="card" id="decided-card" aria-labelledby="decided-h">
+    <h3 id="decided-h">Decided and refused</h3>
+    <div id="decided"></div>
   </section>
 </main>
 <script type="module" src="/static/infra-admin.js"></script>

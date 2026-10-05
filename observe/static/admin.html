@@ -3,55 +3,68 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>admin - observe</title>
+<title>Users and keys - Observe</title>
 <link rel="stylesheet" href="/static/css/tokens.css">
 <link rel="stylesheet" href="/static/css/base.css">
 <link rel="stylesheet" href="/static/css/shell.css">
+<link rel="stylesheet" href="/static/css/components.css">
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/css/admin.css">
 </head>
 <body>
 <header id="shell-header" class="shell-head">
   <div id="summary" aria-live="polite"></div>
-  <span id="who"></span>
-  <button type="button" id="logout">Sign out</button>
+  <button type="button" id="logout" class="btn ghost">Sign out</button>
 </header>
 <nav id="shell-nav" aria-label="Main"></nav>
-<main class="adminpage">
-  <p id="msg" role="alert"></p>
+<main class="admin-main" id="page">
+  <div class="admin-title">
+    <p class="crumbs muted">Admin / Users and keys</p>
+    <h1>Users and keys</h1>
+  </div>
+  <p id="msg" class="msg-line" role="alert"></p>
 
-  <section id="newkey" hidden>
-    <h2>New ingest key</h2>
-    <p>Copy this key now. It is shown once and cannot be shown again.</p>
-    <p><code id="newkey-value"></code></p>
-    <p><button type="button" id="newkey-dismiss">I have copied it</button></p>
+  <section class="card notice accent" id="newkey" aria-labelledby="newkey-h" hidden>
+    <h3 id="newkey-h">New ingest key</h3>
+    <p>This is shown only once. Copy it now; it cannot be shown again.</p>
+    <div class="key-line">
+      <input id="newkey-value" type="text" readonly aria-label="New ingest key">
+      <button type="button" class="btn primary" id="newkey-copy">Copy</button>
+      <button type="button" class="btn" id="newkey-dismiss">I have copied it</button>
+    </div>
   </section>
 
-  <section>
-    <h2>Ingest keys</h2>
-    <form id="key-form">
-      <label>Host name <input name="host" required maxlength="128"></label>
-      <button type="submit">Create key</button>
-    </form>
-    <table id="keys"><thead><tr><th>Id</th><th>Host</th><th>State</th><th>Created by</th><th>Last used</th><th></th></tr></thead><tbody></tbody></table>
-  </section>
+  <div class="admin-cols">
+    <section class="card" id="keys-card" aria-labelledby="keys-h">
+      <h3 id="keys-h">Ingest keys</h3>
+      <p class="card-sub">One key per host agent. The key text is shown once, when it is created.</p>
+      <form id="key-form" class="admin-form">
+        <label>Host name <input name="host" required maxlength="128"></label>
+        <button type="submit" class="btn primary">Create key</button>
+      </form>
+      <div id="keys"></div>
+    </section>
 
-  <section>
-    <h2>Users</h2>
-    <form id="user-form" autocomplete="off">
-      <label>Username <input name="username" required maxlength="64" autocomplete="off"></label>
-      <label>Password <input name="password" type="password" required minlength="12" maxlength="256" autocomplete="new-password"></label>
-      <label><input name="is_admin" type="checkbox"> admin</label>
-      <button type="submit">Create user</button>
-    </form>
-    <table id="users"><thead><tr><th>Id</th><th>Username</th><th>Role</th><th>State</th><th></th></tr></thead><tbody></tbody></table>
-  </section>
+    <section class="card" id="users-card" aria-labelledby="users-h">
+      <h3 id="users-h">Users</h3>
+      <p class="card-sub">Console accounts. Disabling an account stops it signing in.</p>
+      <form id="user-form" class="admin-form" autocomplete="off">
+        <label>Username <input name="username" required maxlength="64" autocomplete="off"></label>
+        <label>Password <input name="password" type="password" required minlength="12" maxlength="256" autocomplete="new-password"></label>
+        <label class="inline"><input name="is_admin" type="checkbox"> Admin</label>
+        <button type="submit" class="btn primary">Create user</button>
+      </form>
+      <div id="users"></div>
+    </section>
+  </div>
 
-  <section>
-    <h2>Audit log</h2>
-    <table id="audit"><thead><tr><th>Time</th><th>Actor</th><th>Kind</th><th>Status</th><th>Detail</th></tr></thead><tbody></tbody></table>
+  <section class="card" aria-labelledby="audit-link-h">
+    <h3 id="audit-link-h">Audit log</h3>
+    <p class="card-sub">Who did what, from where, and whether it worked.</p>
+    <p><a id="audit-link" href="/audit">Open the audit log</a></p>
   </section>
 </main>
-<script src="/static/admin.js"></script>
+<script type="module" src="/static/admin.js"></script>
 <script type="module" src="/static/js/shell.js"></script>
 </body>
 </html>

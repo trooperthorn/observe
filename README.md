@@ -472,9 +472,10 @@ action that changes a host exists yet.
 
 The admin screen is at `/admin`. It lists ingest keys and users, creates a key
 bound to one host name, revokes a key, creates a user, disables or enables a
-user, grants or removes the admin role, and shows the latest audit rows. A new
+user, grants or removes the admin role, and links to the audit log. Revoking a key
+and disabling a user ask for confirmation in a dialog. A new
 key is shown once, in the response to the create request, and cannot be shown
-again; only its hash is stored. Disabling a user ends their sessions at once.
+again, in a read-only field with a Copy button; only its hash is stored. Disabling a user ends their sessions at once.
 The last active admin cannot be disabled or demoted. Every change is a
 request carrying the CSRF token and is written to the audit log. The page
 itself is a static file with no data and sends a visitor without a session to
@@ -486,7 +487,9 @@ fails partway, such as a refused user, a login that cannot create a session, a
 failed key action or a batch the store could not write, a separate `*_failed`
 or `*_error` row says so. Passwords, tokens and keys are never written, paths
 are sanitized, and `GET /api/audit` (admin session only; parameters `limit`,
-`kind` and `before`) returns the rows newest first.
+`kind` and `before`) returns the rows newest first. The audit page at `/audit` (Admin menu,
+admin only) shows the newest 500 rows in a sortable table with filters for actor, kind, status
+(OK, Refused, Failed) and time range, and pages of 25 or 100.
 
 ## Plugins
 
@@ -572,7 +575,10 @@ state from its matched monitors, current properties, property history, findings 
 matched monitors. An admin can acknowledge a finding there (`POST /api/admin/infra/findings/ack`,
 audited); an acknowledgement covers that finding's current message only, so a changed finding
 shows as new again, and it never sends an alert. `/admin/infra` lists the unlinked switch queue
-with a monitor choice for each, and the pending dependency proposals with Accept and Reject.
+with a monitor choice for each, and the pending dependency proposals with Accept and Reject
+(each asks for confirmation, then a toast reports the result and the row moves to Decided
+without a page reload). The admin, audit, map admin and port pages use the shared cards,
+sortable tables, status chips, dialogs and toasts.
 
 The Pockethernet plugin adds pages that need a login: `/plugins/pockethernet` lists field
 reports, `/plugins/pockethernet/report?source=...&report_id=...` shows one report with its

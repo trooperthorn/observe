@@ -264,8 +264,8 @@ session only, so basic auth never reaches it. It takes `limit` (1 to 500),
 
 A single admin-only page, `/admin` (`static/admin.html` and `admin.js`), lists
 users and ingest keys, creates and revokes keys, creates users, disables or
-enables them, grants or removes the admin role, and shows the latest audit
-rows. It is the first write surface in Observe's web UI, which is why every
+enables them, grants or removes the admin role, and links to the audit page.
+It is the first write surface in Observe's web UI, which is why every
 route behind it sits behind the login, role, and CSRF dependencies.
 
 The page is a static file with no data, so a visitor without a session is sent
@@ -276,6 +276,14 @@ created key is returned once in the create response and is never listed. The
 last active admin cannot be disabled or demoted, enforced in one SQL
 statement. Rendering uses `textContent` only. Host confirmation is not on the
 screen yet, and no control changes a host.
+
+`admin.js`, `audit.js`, `infra-admin.js` and `port.js` are ES modules that use the shared
+`table.js`, `chips.js`, `dialog.js` and `toast.js` modules, plus `js/admin-ui.js` (card, button,
+copy-to-clipboard and the "admin account needed" card) and `css/admin.css` (tokens only). The audit
+log has its own static page, `/audit` (`audit.html`, `audit.js`), listed under Admin in the
+navigation for admins. It uses the same `GET /api/audit` route, loads the newest 500 rows and
+filters them in the browser by actor, kind, status group and time range. The page serves no data,
+and a viewer who opens it sees an "admin account needed" notice while the API answers 403.
 
 ## Plugin host
 
@@ -506,7 +514,7 @@ route is `POST /api/admin/infra/findings/ack` (admin session and CSRF token, aud
 `infra_finding_acknowledged` and `infra_finding_ack_failed`). The pages `/map`, `/port` and
 `/admin/infra` are static files like `/host`: they hold no data and their scripts send a
 visitor without a session to `/login`; `infra-admin.js` also needs an admin session for all of
-its data. They load as ES modules (`<script type="module">`, allowed by `default-src 'self'`), share `infra-common.js` and write every string with `textContent`. The map
+its data, and the port page shows state as status chips (`stateChip` in `infra-common.js`). They load as ES modules (`<script type="module">`, allowed by `default-src 'self'`), share `infra-common.js` and write every string with `textContent`. The map
 places each switch by its uplink depth (core, distribution, access), draws edges in an SVG
 overlay with stale links dashed, and repeats the links as a table so the picture is never the
 only source. Colour is paired with a word for every state.

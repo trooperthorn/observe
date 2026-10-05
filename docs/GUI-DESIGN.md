@@ -532,6 +532,15 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 | S14 | Customise dashboard (optional) | `/api/ui/layout/{view}` per user, `tiles.js` with up/down and hide. | TestClient: per-user isolation, stale IDs dropped, unknown view rejected, size cap. |
 | S15 | Cleanup and rename | Remove legacy aliases and `app.css`, change the old name to "Observe" in titles and brand. | Static scan: no `var(--bg)` and similar remain, every `<title>` ends with "- Observe". |
 
+### S7 notes (done)
+
+- `admin.html`, `audit.html`, `infra-admin.html` and `port.html` load `components.css` and `css/admin.css` (tokens only) after `app.css`, with one entry module and then `shell.js`. `admin.js`, `audit.js`, `infra-admin.js` and `port.js` use `sortableTable`, `statusChip`, `confirmDialog` and `toast`; the shared builders are in `js/admin-ui.js`.
+- Users and keys: two cards side by side (stacked below 900px), a one-time key notice with a read-only field and a Copy button (with a select fallback), and Revoke and Disable behind a confirm dialog. Audit has its own page, `/audit`, with the Admin nav entry (Q5); the admin page links to it. The API is unchanged.
+- Audit filters: actor text, kind select, status toggle chips (OK below 400, Refused 401 and 403, Failed otherwise) and a time range; sortable columns and page sizes 25 and 100. Filtering is in the browser over the newest 500 rows, so no API change was needed.
+- Map admin: three cards with sortable tables. Accept and Reject ask for confirmation, a toast reports the result, and the row moves to Decided without a reload. The port page has a breadcrumb, a state chip, and cards for live state, findings, properties and history; the old `statePill` is now `stateChip`.
+- Deviations: the key form still takes a host name only (the API has no key name or scope field), and the Users table shows Id, Role and State instead of "Last login" because the API does not return it. The port page does not yet show a Neighbour or Cable test card; the data is not in its API (Pockethernet comes in S8).
+- Tests: `tests/test_ui_admin.py` checks markup, stylesheet order, modules, IDs, the viewer 403s and the no-pill and no-innerHTML rules.
+
 ### S5 notes (done)
 
 - The dashboard (`index.html`, `app.js`, `css/dashboard.css`) now follows section 3.2: a KPI row (Monitors, Down, Warnings, Capacity), a tinted availability tile row with an icon and a word per state, a state filter and search, collapsible group cards with a count chip per state, and `details.card` panels for the capacity outlook, field findings and recent state changes. The page loads `components.css` after `shell.css`, and `dashboard.css` after `app.css`.

@@ -1,0 +1,35 @@
+/* Admin, audit, map admin and port pages. Tokens only, no colour literals. Loaded after
+   components.css and app.css, so these rules win over the legacy ones. */
+.admin-main { max-width: var(--o-maxw); margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4); }
+.admin-main h1 { font-size: var(--o-fs-h); margin: 0; }
+.admin-title { display: grid; gap: var(--o-s1); }
+.admin-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--o-s4); }
+.admin-cols > .card { min-width: 0; }
+@media (max-width: 900px) { .admin-cols { grid-template-columns: minmax(0, 1fr); } }
+.admin-main table.data { overflow-wrap: anywhere; }
+.admin-form { display: flex; flex-wrap: wrap; gap: var(--o-s2) var(--o-s3); align-items: flex-end; margin: var(--o-s3) 0; }
+.admin-form label { display: flex; flex-direction: column; gap: var(--o-s1); font-size: var(--o-fs-sm); }
+.admin-form label.inline { flex-direction: row; align-items: center; gap: var(--o-s2); }
+.admin-form input:not([type="checkbox"]), .admin-form select, .filter-bar input, .filter-bar select {
+  border: 1px solid var(--o-border); border-radius: 6px; background: var(--o-surface);
+  color: var(--o-text); padding: 0 var(--o-s2); min-height: 32px; font: inherit; }
+.row-actions { display: flex; flex-wrap: wrap; gap: var(--o-s2); }
+.card.notice.accent { background: var(--o-accent-tint); border-color: var(--o-accent-line); }
+.card.notice.accent h3 { color: var(--o-accent); }
+.key-line { display: flex; flex-wrap: wrap; gap: var(--o-s2); align-items: center; }
+.key-line input { flex: 1 1 18rem; font-family: var(--o-mono); min-height: 32px; border: 1px solid var(--o-border);
+                  border-radius: 6px; background: var(--o-surface); color: var(--o-text); padding: 0 var(--o-s2); }
+.msg-line { min-height: 1.2em; color: var(--o-down); margin: 0; }
+.filter-bar { display: flex; flex-wrap: wrap; gap: var(--o-s3); align-items: flex-end; margin: var(--o-s3) 0; }
+.filter-bar label { display: flex; flex-direction: column; gap: var(--o-s1); font-size: var(--o-fs-sm); }
+.filter-bar fieldset { border: 0; padding: 0; margin: 0; display: flex; gap: var(--o-s2); align-items: center; }
+.filter-bar legend { font-size: var(--o-fs-sm); padding: 0; margin-bottom: var(--o-s1); }
+.toggle-chip { border: 1px solid var(--o-border); background: var(--o-surface); color: var(--o-text);
+               border-radius: var(--o-radius-pill); padding: 0 var(--o-s3); min-height: 32px; }
+.toggle-chip[aria-pressed="true"] { background: var(--o-accent-tint); border-color: var(--o-accent); color: var(--o-accent); }
+.detail-mono { font-family: var(--o-mono); font-size: var(--o-fs-sm); overflow-wrap: anywhere; }
+.port-title h1 { display: flex; flex-wrap: wrap; align-items: center; gap: var(--o-s2); }
+.crumbs { margin: 0; font-size: var(--o-fs-sm); }
+.finding-list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--o-s2); }
+.finding-list li { display: flex; flex-wrap: wrap; gap: var(--o-s2); align-items: center; }
+.admin-note { color: var(--o-text-muted); font-size: var(--o-fs-sm); margin: var(--o-s1) 0 0; }

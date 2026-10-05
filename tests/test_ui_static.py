@@ -127,7 +127,7 @@ def test_every_page_route_carries_the_csp_header(tmp_path):
         r.path for r in app.routes
         if isinstance(r, APIRoute) and "GET" in r.methods and "{" not in r.path
         and not r.path.startswith("/api/") and r.path != "/metrics")
-    assert {"/", "/login", "/host", "/map", "/port", "/admin", "/admin/infra"} <= set(pages)
+    assert {"/", "/login", "/host", "/map", "/port", "/admin", "/admin/infra", "/audit"} <= set(pages)
     client = TestClient(app, base_url="https://testserver")
     for path in pages + ["/static/app.js", "/static/app.css", "/no-such-page"]:
         resp = client.get(path, follow_redirects=False)

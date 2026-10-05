@@ -674,6 +674,11 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         # session to /login.
         return FileResponse(STATIC / "admin.html")
 
+    @app.get("/audit", include_in_schema=False)
+    async def audit_page() -> FileResponse:
+        # The page holds no data; audit.js needs an admin session for everything it shows.
+        return FileResponse(STATIC / "audit.html")
+
     @app.get("/api/audit", include_in_schema=False)
     async def audit_log(limit: int = 100, kind: str | None = None, before: int | None = None,
                         _: authmod.Session = Depends(guards.admin)) -> list[dict[str, Any]]:
