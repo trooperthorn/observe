@@ -1,0 +1,13 @@
+/* Graph container, toolbar and legend. The canvas itself is painted in JS from the --g-* and
+   --cat-* tokens. Tokens only, no colour literals. Not linked by any page until slice S10. */
+.graph-wrap { position: relative; background: var(--g-bg); border: 1px solid var(--o-border);
+  border-radius: var(--o-radius); overflow: hidden; min-height: 320px; height: 60vh; }
+.graph-wrap canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.graph-wrap canvas:focus-visible { outline: 2px solid var(--o-focus); outline-offset: -2px; }
+.graph-toolbar { display: flex; flex-wrap: wrap; gap: var(--o-s2); align-items: center;
+  margin-bottom: var(--o-s2); color: var(--o-text-muted); font-size: var(--o-fs-sm); }
+.graph-legend { display: flex; flex-wrap: wrap; gap: var(--o-s3); margin-top: var(--o-s2);
+  color: var(--o-text-muted); font-size: var(--o-fs-sm); }
+.graph-legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+  margin-right: var(--o-s1); background: var(--cat-other); }
+.graph-note { color: var(--o-text-muted); font-size: var(--o-fs-sm); margin: var(--o-s2) 0; }

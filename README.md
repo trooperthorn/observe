@@ -624,3 +624,10 @@ ring) in light and dark. The console theme (Auto, Light or Dark) is a per-browse
 and `js/toast.js` are the shared building blocks for status chips (icon plus word), cards, KPI
 tiles, sortable tables, confirm dialogs and toasts. `tests/test_ui_components.py` checks them,
 and `node --test tests/js` runs the pure sort and chip tests where Node is available (CI only).
+
+The force-directed graph engine for the infrastructure map is in `observe/static/js/graph/`
+(`force.js`, `render.js`, `view.js`) with `css/graph.css`. It has no dependencies, runs the layout
+once (at most 360 steps, and only up to 300 nodes), paints to a canvas in the theme's colours and
+shows each node's state as a ring and a glyph, not by colour alone. It is ported from
+relationship-maps via ha_Int_soc (both MIT) and is not wired to a page yet. `tests/test_ui_graph.py`
+checks it, and `tests/js/graph.test.mjs` holds the layout tests for CI.

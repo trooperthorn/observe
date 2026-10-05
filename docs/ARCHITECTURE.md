@@ -437,6 +437,12 @@ goes in through `textContent`. Status is an icon and a word, never colour alone.
 sits in `js/table-core.js`, `js/chip-states.js` and `js/dialog-logic.js` so it can be tested
 without a browser. No page loads them yet.
 
+The graph engine (slice S9) lives in `js/graph/`: `force.js` (a d3-free force layout, run once
+and deterministic, limited to 300 nodes), `render.js` (canvas painter reading colours from the CSS
+tokens, with a status ring and glyph on each node) and `view.js` (camera, input, resize and
+repaint scheduling), with `css/graph.css`. The code is ported from relationship-maps (commit
+0c4d268) via ha_Int_soc, both MIT and the same owner. No page loads it yet.
+
 ## Infrastructure map core
 
 Schema version 6 (and 7, below) adds `infra_switches`, `infra_ports`, `infra_jacks`, `infra_links`,
