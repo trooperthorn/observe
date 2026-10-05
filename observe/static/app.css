@@ -1,19 +1,6 @@
-:root {
-  --bg: #f6f7f9; --card: #ffffff; --fg: #1c2230; --muted: #667085; --line: #e3e6eb;
-  --up: #1f9d55; --warn: #d69e00; --down: #d64545; --pending: #98a2b3; --unreach: #7a5af8;
-  color-scheme: light dark;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1218; --card: #181c24; --fg: #e6e9ef; --muted: #98a2b3; --line: #2a303b;
-    --up: #34c77b; --warn: #f0b429; --down: #f06060; --pending: #667085; --unreach: #9b8afb;
-  }
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0; background: var(--bg); color: var(--fg);
-  font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-}
+/* Legacy component rules for pages not yet moved to components.css. The colour tokens and the
+   legacy variable aliases (--bg, --card, --fg, --muted, --line, --up, --warn, --down, --pending,
+   --unreach) live in css/tokens.css. Load tokens.css and base.css before this file. */
 header {
   position: sticky; top: 0; z-index: 1; background: var(--bg);
   display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center;
@@ -23,8 +10,8 @@ h1 { font-size: 1.1rem; margin: 0; letter-spacing: .02em; }
 h2 { font-size: .95rem; margin: 1.25rem 0 .5rem; color: var(--muted); font-weight: 600; }
 #summary { display: flex; gap: .5rem; flex-wrap: wrap; }
 .pill { padding: .1rem .55rem; border-radius: 999px; font-size: .8rem; font-weight: 600;
-        color: #fff; }
-.pill.up { background: var(--up); } .pill.warn { background: var(--warn); color: #1c2230; }
+        color: var(--o-page); }
+.pill.up { background: var(--up); } .pill.warn { background: var(--warn); color: var(--o-ink); }
 .pill.down { background: var(--down); } .pill.pending { background: var(--pending); }
 .pill.unreachable { background: var(--unreach); }
 .filter { margin-left: auto; font-size: .85rem; color: var(--muted); }
@@ -71,7 +58,7 @@ a.hostlink { margin-left: .5rem; font-size: .8rem; color: var(--muted); }
        padding: .5rem .8rem; margin: .75rem 0; }
 .sec h2 { display: flex; gap: .5rem; align-items: center; margin: .25rem 0; }
 .sec .note { color: var(--muted); font-size: .85rem; }
-.pill.good { background: var(--up); } .pill.warning { background: var(--warn); color: #1c2230; }
+.pill.good { background: var(--up); } .pill.warning { background: var(--warn); color: var(--o-ink); }
 .pill.critical { background: var(--down); }
 .pill.stale, .pill.unavailable, .pill.absent, .pill.not_reported { background: var(--pending); }
 table.items { width: 100%; border-collapse: collapse; font-size: .88rem; }
@@ -109,5 +96,5 @@ ul.findings li { padding: .3rem 0; border-top: 1px solid var(--line); overflow-w
 .ctl { max-width: 60rem; margin: 1rem auto; }
 .ctl-field { display: flex; flex-direction: column; gap: .2rem; margin: .5rem 0; }
 .ctl-buttons { display: flex; gap: .5rem; justify-content: flex-end; margin-top: .75rem; }
-.ctl-error { color: #b00020; }
+.ctl-error { color: var(--o-down); }
 .ctl-dialog { max-width: 28rem; }

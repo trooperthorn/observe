@@ -604,3 +604,9 @@ rather than a skip; CI does this.
 `observe/static` or a plugin adds inline script or style, `style=` or `on*=`
 attributes, `innerHTML` and its relatives, `eval`, or an off-origin URL, or if a
 page route loses its Content-Security-Policy header.
+
+`tests/test_ui_tokens.py` checks the colour tokens in `observe/static/css/tokens.css`: every
+token is present in the light block and both dark blocks, the two dark blocks match, and the
+text, status and focus colours meet WCAG contrast (4.5:1 for text, 3:1 for dots and the focus
+ring) in light and dark. The console theme (Auto, Light or Dark) is a per-browser choice kept in
+`localStorage` under `observe.theme`; the server never stores it.

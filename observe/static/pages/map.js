@@ -2,6 +2,7 @@
 // /api/infra/map. Every node shows its state in words, so colour is never the only signal.
 import { el, stateText, portHref, api, STATE_WORDS } from "/static/infra-common.js";
 import { svg as svgEl } from "/static/js/dom.js";
+import "/static/js/theme.js";
 
 const LAYER_TITLES = [
   ["core", "Core"], ["distribution", "Distribution"], ["access", "Access"],

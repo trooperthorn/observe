@@ -303,7 +303,7 @@ session like the other pages (or the admin role when `admin_only` is set); the
 page holds no data and its script reads the plugin's API. `static_dir` is a
 folder inside the plugin package, served read-only at `/plugins/<name>/static`
 like the core's own `/static`. Both go through the core's security-headers
-middleware, so they carry the same CSP, which forbids inline script. `tests/test_ui_static.py` enforces the rules of docs/GUI-DESIGN.md section 4.2 over every such file and asserts the header on every page route.
+middleware, so they carry the same CSP, which forbids inline script. `tests/test_ui_static.py` enforces the rules of docs/GUI-DESIGN.md section 4.2 over every such file and asserts the header on every page route. Every page loads `/static/css/tokens.css`, `/static/css/base.css` and then `/static/app.css`. The tokens define light, system dark and manual dark colours as custom properties, and `js/theme.js` stores the Auto, Light or Dark choice in the browser's `localStorage`, never on the server. `tests/test_ui_tokens.py` checks the token blocks and the WCAG contrast.
 Monitor type names must start with the plugin name and a dot, and key scope
 markers are three to eight lower-case letters that may not be `wpi`.
 

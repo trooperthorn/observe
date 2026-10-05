@@ -1,0 +1,75 @@
+/* Observe design tokens. Light is the default, dark follows the system unless the page is set to
+   light, and data-theme="dark" forces dark. The two dark blocks must stay identical; a test
+   checks that. Colour values are re-expressed from ha_Int_soc (MIT, same owner). */
+:root {
+  color-scheme: light dark;
+  /* surfaces */
+  --o-page: #f4f5f7; --o-surface: #ffffff; --o-surface-subtle: rgba(28, 34, 48, .035);
+  --o-border: #e3e6eb; --o-text: #1c2230; --o-text-muted: #5d6676; --o-accent: #1d63b8;
+  --o-accent-tint: rgba(42, 120, 214, .10); --o-accent-line: rgba(42, 120, 214, .24);
+  --o-focus: #1d63b8;
+  /* shape and space */
+  --o-radius: 12px; --o-radius-sm: 8px; --o-radius-pill: 999px;
+  --o-s1: 4px; --o-s2: 8px; --o-s3: 12px; --o-s4: 16px; --o-s5: 24px; --o-s6: 32px;
+  --o-maxw: 1400px;
+  /* type */
+  --o-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --o-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --o-fs-xs: 11px; --o-fs-sm: 12.5px; --o-fs-base: 14px; --o-fs-title: 15px; --o-fs-h: 17px;
+  --o-fs-kpi: 32px;
+  /* status roles, never used as series colours */
+  --o-up: #0c7a0c; --o-up-bg: #e6f4e6;
+  --o-warn: #8a5d00; --o-warn-bg: #fdf1d6;
+  --o-serious: #a94718; --o-serious-bg: #fbe9e0;
+  --o-down: #c22f2f; --o-down-bg: #fbe5e5;
+  --o-pending: #5d6676; --o-pending-bg: #eef0f3;
+  --o-unreach: #6a4ad8; --o-unreach-bg: #efeafd;
+  --o-dot-warn: #fab219; --o-ink: #1c2230;
+  /* categorical, never used to indicate state */
+  --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100;
+  --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #4a3aa7; --cat-8: #e34948; --cat-other: #9aa0a6;
+  /* graph canvas, read at paint time */
+  --g-bg: #f7f8fa; --g-node-stroke: #ffffff; --g-label-bg: rgba(255, 255, 255, .92);
+  --g-label-fg: #1c2230; --g-dim: .2;
+  /* motion */
+  --o-dur: 120ms;
+  /* legacy aliases for pages not yet migrated, removed in the final slice */
+  --bg: var(--o-page); --card: var(--o-surface); --fg: var(--o-text); --muted: var(--o-text-muted);
+  --line: var(--o-border); --up: var(--o-up); --warn: var(--o-dot-warn); --down: var(--o-down);
+  --pending: var(--o-pending); --unreach: var(--o-unreach);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --o-page: #0f1218; --o-surface: #181c24; --o-surface-subtle: rgba(230, 233, 239, .04);
+    --o-border: #2a303b; --o-text: #e6e9ef; --o-text-muted: #a3acba; --o-accent: #3987e5;
+    --o-accent-tint: rgba(57, 135, 229, .16); --o-accent-line: rgba(57, 135, 229, .34);
+    --o-focus: #6aa6ee;
+    --o-up: #4cc77f; --o-up-bg: rgba(76, 199, 127, .14);
+    --o-warn: #f0b429; --o-warn-bg: rgba(240, 180, 41, .14);
+    --o-serious: #f08a5d; --o-serious-bg: rgba(240, 138, 93, .14);
+    --o-down: #f06a6a; --o-down-bg: rgba(240, 106, 106, .14);
+    --o-pending: #98a2b3; --o-pending-bg: rgba(152, 162, 179, .12);
+    --o-unreach: #a99bfb; --o-unreach-bg: rgba(169, 155, 251, .14);
+    --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181;
+    --cat-7: #9085e9; --cat-8: #e66767; --cat-other: #7a807f;
+    --g-bg: #05070a; --g-node-stroke: rgba(5, 7, 10, .85); --g-label-bg: rgba(5, 7, 10, .82);
+    --g-label-fg: #e8eef6;
+  }
+}
+:root[data-theme="dark"] {
+  --o-page: #0f1218; --o-surface: #181c24; --o-surface-subtle: rgba(230, 233, 239, .04);
+  --o-border: #2a303b; --o-text: #e6e9ef; --o-text-muted: #a3acba; --o-accent: #3987e5;
+  --o-accent-tint: rgba(57, 135, 229, .16); --o-accent-line: rgba(57, 135, 229, .34);
+  --o-focus: #6aa6ee;
+  --o-up: #4cc77f; --o-up-bg: rgba(76, 199, 127, .14);
+  --o-warn: #f0b429; --o-warn-bg: rgba(240, 180, 41, .14);
+  --o-serious: #f08a5d; --o-serious-bg: rgba(240, 138, 93, .14);
+  --o-down: #f06a6a; --o-down-bg: rgba(240, 106, 106, .14);
+  --o-pending: #98a2b3; --o-pending-bg: rgba(152, 162, 179, .12);
+  --o-unreach: #a99bfb; --o-unreach-bg: rgba(169, 155, 251, .14);
+  --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181;
+  --cat-7: #9085e9; --cat-8: #e66767; --cat-other: #7a807f;
+  --g-bg: #05070a; --g-node-stroke: rgba(5, 7, 10, .85); --g-label-bg: rgba(5, 7, 10, .82);
+  --g-label-fg: #e8eef6;
+}
+@media (prefers-reduced-motion: reduce) { :root { --o-dur: 0ms; } }
