@@ -1,0 +1,129 @@
+// The Add host wizard's rules as pure functions, so they can be tested without a browser. They
+// mirror what the server accepts (observe/enrol.py); the server checks everything again.
+export const STEPS = ["host", "agent", "allowlist", "install", "live"];
+
+export const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+export const HEADER_RE = /^[A-Za-z0-9._-]{1,32}$/;
+export const SERVICE_RE = /^(?:docker:)?[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+export const POOL_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
+export const PLATFORM_LABELS = {
+  linux: "Linux server", truenas: "TrueNAS", windows: "Windows", "raspberry-pi": "Raspberry Pi",
+};
+
+// Why control cannot be chosen, or "" when it can. Text, so the reason is never only a grey box.
+export function controlBlock(platform) {
+  if (platform === "windows") {
+    return "Control is not available for Windows yet. It needs a Windows path in thermal-control first. The agent can still be installed.";
+  }
+  if (platform === "truenas") {
+    return "Control is not available for TrueNAS yet. The install script sets up the agent only.";
+  }
+  return "";
+}
+
+// Fan headers and services offered by default for a platform. Each is { name, on }.
+export function defaultFans(platform) {
+  const names = platform === "raspberry-pi" ? ["pwm-fan"] : ["fan1", "fan2", "fan3"];
+  return names.map((name) => ({ name, on: platform === "raspberry-pi" || name !== "fan3", limit: "" }));
+}
+
+export function defaultServices() {
+  return [{ name: "smbd", on: true }, { name: "nfs-server", on: false }];
+}
+
+export function platformNote(platform) {
+  if (platform === "truenas") {
+    return "TrueNAS: the agent runs as an app from a compose file kept on your pool, so it survives updates. The script prints the one step to finish in the TrueNAS Apps screen.";
+  }
+  if (platform === "windows") return "Windows: run the command in an elevated PowerShell on that machine.";
+  if (platform === "raspberry-pi") return "Raspberry Pi: the fan header pwm-fan is selected for you.";
+  return "";
+}
+
+export function validName(name) {
+  return typeof name === "string" && NAME_RE.test(name);
+}
+
+export function validHeader(name) {
+  return typeof name === "string" && HEADER_RE.test(name);
+}
+
+export function validService(name) {
+  return typeof name === "string" && SERVICE_RE.test(name) && !name.includes("..");
+}
+
+export function validPool(pool) {
+  return pool === "" || (POOL_RE.test(pool) && !pool.includes(".."));
+}
+
+// "" is no limit; otherwise a whole number 0 to 100. Returns the number, null for none, or
+// undefined when the text is not acceptable.
+export function parseLimit(text) {
+  const t = String(text ?? "").trim();
+  if (t === "") return null;
+  if (!/^\d{1,3}$/.test(t)) return undefined;
+  const n = Number(t);
+  return n <= 100 ? n : undefined;
+}
+
+// The create request body, or { error } for the first problem found.
+export function buildBody(state) {
+  if (!validName(state.name)) return { error: "The host name is not valid." };
+  if (!PLATFORM_LABELS[state.platform]) return { error: "Choose a platform." };
+  const control = !!state.control && !controlBlock(state.platform);
+  const body = { name: state.name, platform: state.platform, agent: true, control };
+  if (state.platform === "truenas" && state.pool) {
+    if (!validPool(state.pool)) return { error: "The pool name is not valid." };
+    body.pool = state.pool;
+  }
+  if (control) {
+    const fans = [];
+    for (const f of state.fans.filter((x) => x.on)) {
+      const limit = parseLimit(f.limit);
+      if (limit === undefined) return { error: `The lowest duty for ${f.name} must be a whole number from 0 to 100.` };
+      fans.push(limit === null ? f.name : { header: f.name, min_duty_limit: limit });
+    }
+    body.allowlist = {
+      fans, services: state.services.filter((x) => x.on).map((x) => x.name), reboot: !!state.reboot,
+    };
+  }
+  return { body };
+}
+
+// The step a URL hash asks for, held back to what the person has reached. The command exists
+// only in memory, so steps 4 and 5 need a created host.
+export function stepFromHash(hash, created) {
+  const want = String(hash || "").replace(/^#/, "");
+  const i = STEPS.indexOf(want);
+  if (i < 0) return "host";
+  if (i >= 3 && !created) return "host";
+  return STEPS[i];
+}
+
+// Progress step status to a chip state and word. Never colour alone: each has an icon and a word.
+export const PROGRESS_CHIPS = {
+  done: ["up", "Done"],
+  waiting: ["pending", "Waiting"],
+  skipped: ["pending", "Not chosen"],
+  expired: ["down", "Expired"],
+};
+
+export function progressChip(status) {
+  return PROGRESS_CHIPS[status] || ["pending", "Unknown"];
+}
+
+// Install report status to chip state and word.
+export const REPORT_CHIPS = {
+  ok: ["up", "OK"], skipped: ["pending", "Skipped"], failed: ["down", "Failed"],
+  refused: ["down", "Refused"],
+};
+
+export function reportChip(status) {
+  return REPORT_CHIPS[status] || ["pending", "Unknown"];
+}
+
+// The host page address for a host name.
+export function hostHref(name) {
+  return `/host?name=${encodeURIComponent(name)}`;
+}

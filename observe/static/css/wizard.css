@@ -1,0 +1,48 @@
+/* Add host wizard. Tokens only, no colour literals. Loaded after admin.css. The waiting pulse
+   is switched off by the reduced-motion rule in base.css. */
+.wizard-main { max-width: 880px; }
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--o-s2); }
+.steps li { display: flex; align-items: center; gap: var(--o-s2); padding: var(--o-s1) var(--o-s3);
+            border: 1px solid var(--o-border); border-radius: var(--o-radius-pill);
+            background: var(--o-surface); color: var(--o-text-muted); font-size: var(--o-fs-sm); }
+.steps .step-n { display: inline-grid; place-items: center; width: 22px; height: 22px;
+                 border-radius: var(--o-radius-pill); border: 1px solid var(--o-border);
+                 font-variant-numeric: tabular-nums; }
+.steps li.done { color: var(--o-text); }
+.steps li[aria-current="step"] { color: var(--o-accent); border-color: var(--o-accent);
+                                  background: var(--o-accent-tint); font-weight: 650; }
+.steps li[aria-current="step"] .step-n { border-color: var(--o-accent); }
+.wiz-form { display: grid; gap: var(--o-s3); justify-items: start; margin-top: var(--o-s3); }
+.wiz-field { display: flex; flex-direction: column; gap: var(--o-s1); font-size: var(--o-fs-sm); }
+.wiz-field input, .wiz-add input { border: 1px solid var(--o-border); border-radius: 6px;
+  background: var(--o-surface); color: var(--o-text); padding: 0 var(--o-s2); min-height: 32px; font: inherit; }
+.wiz-field input { min-width: min(24rem, 100%); }
+.wiz-fieldset { border: 1px solid var(--o-border); border-radius: var(--o-radius-sm);
+                padding: var(--o-s3); display: grid; gap: var(--o-s2); min-width: 0; max-width: 100%; }
+.wiz-form label.inline { display: flex; align-items: center; gap: var(--o-s2); }
+.wiz-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--o-s2); }
+.wiz-list li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--o-s2) var(--o-s3); }
+.wiz-limit { display: inline-flex; align-items: center; gap: var(--o-s1); font-size: var(--o-fs-sm);
+             color: var(--o-text-muted); }
+.wiz-limit input { width: 5rem; border: 1px solid var(--o-border); border-radius: 6px;
+  background: var(--o-surface); color: var(--o-text); padding: 0 var(--o-s2); min-height: 32px; font: inherit; }
+.wiz-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--o-s2); }
+.wiz-add label { display: flex; flex-direction: column; gap: var(--o-s1); font-size: var(--o-fs-sm); }
+.cmd-block { display: grid; gap: var(--o-s2); justify-items: start; margin-top: var(--o-s3); }
+pre.cmd { margin: 0; padding: var(--o-s3); width: 100%; box-sizing: border-box; overflow-x: auto;
+          background: var(--o-surface-subtle); border: 1px solid var(--o-border);
+          border-radius: var(--o-radius-sm); font-family: var(--o-mono); font-size: var(--o-fs-sm);
+          white-space: pre-wrap; overflow-wrap: anywhere; color: var(--o-text); }
+.progress { list-style: none; margin: var(--o-s3) 0 0; padding: 0; display: grid; gap: var(--o-s2); }
+.progress li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--o-s2) var(--o-s3);
+               padding: var(--o-s2) var(--o-s3); border: 1px solid var(--o-border);
+               border-radius: var(--o-radius-sm); }
+.progress .p-label { font-weight: 650; }
+.progress .p-time, .progress .p-note { color: var(--o-text-muted); font-size: var(--o-fs-sm);
+                                       overflow-wrap: anywhere; }
+.progress li.waiting .chip-icon { animation: wiz-pulse 1.4s ease-in-out infinite; }
+@keyframes wiz-pulse { 50% { opacity: .35; } }
+.notice-ok { margin-top: var(--o-s3); padding: var(--o-s3); border-radius: var(--o-radius-sm);
+             background: var(--o-up-bg); border: 1px solid var(--o-up); color: var(--o-text); }
+.notice-ok p { margin: 0 0 var(--o-s2); }
+a.btn { display: inline-flex; align-items: center; text-decoration: none; }

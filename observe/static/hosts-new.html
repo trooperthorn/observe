@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add host - Observe</title>
+<link rel="stylesheet" href="/static/css/tokens.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/shell.css">
+<link rel="stylesheet" href="/static/css/components.css">
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/css/admin.css">
+<link rel="stylesheet" href="/static/css/wizard.css">
+</head>
+<body>
+<header id="shell-header" class="shell-head">
+  <div id="summary" aria-live="polite"></div>
+</header>
+<nav id="shell-nav" aria-label="Main"></nav>
+<main class="admin-main wizard-main" id="page">
+  <div class="admin-title">
+    <p class="crumbs muted">Hosts / Add host</p>
+    <h1>Add host</h1>
+  </div>
+  <p id="msg" class="msg-line" role="alert"></p>
+  <ol class="steps" id="steps" aria-label="Add host steps">
+    <li data-step="host"><span class="step-n">1</span><span class="step-name">Host</span></li>
+    <li data-step="agent"><span class="step-n">2</span><span class="step-name">Agent and control</span></li>
+    <li data-step="allowlist"><span class="step-n">3</span><span class="step-name">Allowlist</span></li>
+    <li data-step="install"><span class="step-n">4</span><span class="step-name">Install</span></li>
+    <li data-step="live"><span class="step-n">5</span><span class="step-name">Live</span></li>
+  </ol>
+
+  <section class="card notice" id="expired" role="alert" aria-labelledby="expired-h" hidden>
+    <h3 id="expired-h">Command expired</h3>
+    <p>The install command was not used within its time limit and no longer works. Make a new one; the old one stays dead.</p>
+    <button type="button" class="btn primary" id="regen">Regenerate command</button>
+  </section>
+
+  <section class="card" id="step-host" aria-labelledby="step-host-h" hidden>
+    <h3 id="step-host-h">Step 1. Host</h3>
+    <form id="form-host" class="wiz-form" novalidate>
+      <label class="wiz-field">Host name
+        <input id="host-name" name="name" type="text" maxlength="63" autocomplete="off"
+               autocapitalize="none" spellcheck="false" required aria-describedby="name-hint name-status">
+      </label>
+      <p class="admin-note" id="name-hint">Lower-case letters, digits and dashes, starting and ending with a letter or digit. It must match the machine's own host name.</p>
+      <p class="admin-note" id="name-status" aria-live="polite"></p>
+      <fieldset class="wiz-fieldset" id="platform">
+        <legend>Platform</legend>
+        <label class="inline"><input type="radio" name="platform" value="linux" checked> Linux server</label>
+        <label class="inline"><input type="radio" name="platform" value="truenas"> TrueNAS</label>
+        <label class="inline"><input type="radio" name="platform" value="windows"> Windows</label>
+        <label class="inline"><input type="radio" name="platform" value="raspberry-pi"> Raspberry Pi</label>
+      </fieldset>
+      <label class="wiz-field" id="pool-field" hidden>TrueNAS pool
+        <input id="pool" name="pool" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Apps">
+      </label>
+      <p class="admin-note" id="platform-note"></p>
+      <div class="row-actions"><button type="submit" class="btn primary" id="host-next">Next</button></div>
+    </form>
+  </section>
+
+  <section class="card" id="step-agent" aria-labelledby="step-agent-h" hidden>
+    <h3 id="step-agent-h">Step 2. Agent and control</h3>
+    <form id="form-agent" class="wiz-form" novalidate>
+      <label class="inline"><input type="checkbox" id="agent-on" checked disabled> hostwatch agent (metrics), required</label>
+      <label class="inline"><input type="checkbox" id="control-on"> thermal-control (fans, services, reboot)</label>
+      <p class="admin-note" id="control-reason"></p>
+      <div class="row-actions">
+        <button type="button" class="btn" id="agent-back">Back</button>
+        <button type="submit" class="btn primary" id="agent-next">Next</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card" id="step-allowlist" aria-labelledby="step-allowlist-h" hidden>
+    <h3 id="step-allowlist-h">Step 3. Allowlist</h3>
+    <p class="card-sub">Only these fan headers and services can ever be changed from the console. The host enforces the same list.</p>
+    <form id="form-allow" class="wiz-form" novalidate>
+      <fieldset class="wiz-fieldset" id="fans">
+        <legend>Fan headers</legend>
+        <ul class="wiz-list" id="fan-list"></ul>
+        <div class="wiz-add">
+          <label>Add header <input id="fan-new" type="text" maxlength="32" autocomplete="off" spellcheck="false"></label>
+          <button type="button" class="btn" id="fan-add">Add</button>
+        </div>
+      </fieldset>
+      <fieldset class="wiz-fieldset" id="services">
+        <legend>Restartable services</legend>
+        <ul class="wiz-list" id="service-list"></ul>
+        <div class="wiz-add">
+          <label>Add service <input id="service-new" type="text" maxlength="128" autocomplete="off" spellcheck="false"></label>
+          <button type="button" class="btn" id="service-add">Add</button>
+        </div>
+      </fieldset>
+      <fieldset class="wiz-fieldset" id="reboot-set">
+        <legend>Reboot</legend>
+        <label class="inline"><input type="checkbox" id="reboot"> Allow reboot (always needs the host name typed to confirm)</label>
+      </fieldset>
+      <p class="admin-note" id="allow-error" role="alert"></p>
+      <div class="row-actions">
+        <button type="button" class="btn" id="allow-back">Back</button>
+        <button type="submit" class="btn primary" id="create">Create host</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card" id="step-install" aria-labelledby="step-install-h" hidden>
+    <h3 id="step-install-h">Step 4. Install</h3>
+    <p class="card-sub" id="install-sub"></p>
+    <div class="cmd-block">
+      <pre class="cmd" id="cmd" tabindex="0"></pre>
+      <button type="button" class="btn" id="copy">Copy</button>
+    </div>
+    <p class="admin-note" id="expiry"></p>
+    <p class="admin-note">The command works once. It names the host first so it is run on the right machine, and the script refuses to run anywhere else.</p>
+    <div class="row-actions"><button type="button" class="btn primary" id="ran">I have run it</button></div>
+  </section>
+
+  <section class="card" id="step-live" aria-labelledby="step-live-h" hidden>
+    <h3 id="step-live-h">Step 5. Live progress</h3>
+    <p class="card-sub" id="live-sub"></p>
+    <ol class="progress" id="progress" aria-live="polite"></ol>
+    <ul class="progress" id="reports" aria-live="polite"></ul>
+    <div class="notice-ok" id="done" role="status" hidden>
+      <p><strong>Ready.</strong> This host is reporting.</p>
+      <div class="row-actions">
+        <a class="btn primary" id="open-host" href="/">Open host page</a>
+        <button type="button" class="btn" id="again">Add another</button>
+      </div>
+    </div>
+  </section>
+</main>
+<script type="module" src="/static/hosts-new.js"></script>
+<script type="module" src="/static/js/shell.js"></script>
+</body>
+</html>

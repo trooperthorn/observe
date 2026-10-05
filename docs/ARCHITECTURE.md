@@ -340,7 +340,24 @@ or `expired`. A token that was never fetched reads as expired from 30 minutes
 after creation. The route is registered before `/api/hosts/{host:path}`, which
 would otherwise answer it.
 
-Audit kinds: `enrol_created`, `enrol_create_failed`, `enrol_fetched`,
+`POST /api/hosts/{name}/enrolment/regenerate` (admin session and CSRF, body
+`{"pool": ...}` for TrueNAS) is how the wizard recovers from an expired command.
+`enrol.regenerate_enrolment` replaces the token digest, the creation time and the expiry of
+an enrolment whose script has not been fetched, with one conditional `UPDATE`, and keeps
+the stored platform, choices and allowlist. The old token stops working at once because
+only the new digest is kept. It answers 404 for an unknown host or one whose script was
+already fetched, and the response is `no-store` like the create response. The expiry
+audit flag is reset, so a second expiry is audited again.
+
+The wizard is `static/hosts-new.html` (route `GET /hosts/new`, a static page like the
+other admin pages), `static/hosts-new.js` and the pure rules in `static/js/wizard-logic.js`,
+with `static/css/wizard.css`. The step is kept in the URL hash (`#host`, `#agent`,
+`#allowlist`, `#install`, `#live`). The install command and token are held in memory only:
+they are never put in the URL, storage or a toast, so a reload on step 4 or 5 returns to
+step 1. Progress is polled every 3 seconds while step 4 or 5 is showing and stops when the
+host is ready or the command has expired.
+
+Audit kinds: `enrol_created`, `enrol_create_failed`, `enrol_regenerated`, `enrol_regenerate_failed`, `enrol_fetched`,
 `enrol_fetch_failed`, `enrol_expired` (one row per enrolment, written when
 the expiry is first observed), `enrol_script_failed`, `enrol_step_refused` and
 `enrol_install_problem` (a step reported failed or refused). The rows name the host, the actor and the

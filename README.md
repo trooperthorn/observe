@@ -341,7 +341,10 @@ are retried once, then shown in the dashboard footer.
 
 ## Adding a host
 
-Admins add a host through the API that the console wizard will use. `POST /api/hosts`
+Admins add a host in the console at `/hosts/new` (Hosts, Add host in the navigation), a
+five-step wizard: host name and platform, agent and control, the control allowlist, the
+one-time install command with a Copy button, and live progress. The wizard uses this API.
+`POST /api/hosts`
 (admin session and CSRF) takes a host name, a platform (`linux`, `truenas`,
 `windows` or `raspberry-pi`), whether to enrol the agent and control, and a
 control allowlist. It returns an install command headed with the host name and
@@ -356,8 +359,12 @@ TrueNAS SCALE that writes `agent.env` and the compose file on the chosen pool (d
 `Apps`) and prints the one step you do in the TrueNAS web UI, and a PowerShell script
 for Windows that runs hostwatch's own installer with the key as a secure string (S11c).
 Each refuses to run on the wrong machine or on the Observe host before it changes
-anything, and reports each step back. The wizard page comes in a later slice
-(`docs/GUI-DESIGN.md` S12). See `docs/ARCHITECTURE.md`, "Host enrolment".
+anything, and reports each step back. The command block is headed with the host name and
+platform, so it cannot be mistaken for another machine's. If the token expires before
+the script is fetched, the wizard offers Regenerate command, which calls
+`POST /api/hosts/{name}/enrolment/regenerate` (admin session and CSRF) and replaces the
+token, so the old command stops working. Once the script has been fetched the token is
+spent and regenerate is refused. See `docs/ARCHITECTURE.md`, "Host enrolment".
 
 ## Direction: no longer read-only
 

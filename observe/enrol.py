@@ -194,6 +194,29 @@ async def create_enrolment(store: Store, spec: Spec, created_by: str, now: float
     return token
 
 
+async def regenerate_enrolment(store: Store, host: str, now: float) -> tuple[str, Spec] | None:
+    """Replace the token of an enrolment whose script has not been fetched, and return the new
+    plaintext token with the stored choices. The old token stops working at once, because only
+    the new digest is kept. None when there is no such enrolment, or when the script was already
+    fetched (the keys exist then, and a second enrolment would need them revoked first).
+
+    The conditional UPDATE means a fetch that wins the race leaves nothing to replace.
+    """
+    token = new_token()
+    rows = await store._run(
+        "UPDATE enrolments SET token_hash=?, created=?, expires_at=?, expiry_audited=0 "
+        "WHERE host=? AND fetched_at IS NULL RETURNING platform, agent, control, allowlist",
+        (_digest(token), now, now + TOKEN_TTL_S, host))
+    if not rows:
+        return None
+    platform, agent, control, allowlist = rows[0]
+    allow = json.loads(allowlist)
+    fans = tuple((f["header"], f.get("min_duty_limit")) for f in allow.get("fans", []))
+    spec = Spec(host, platform, bool(agent), bool(control), fans,
+                tuple(allow.get("services", [])), bool(allow.get("reboot", False)))
+    return token, spec
+
+
 @dataclass(frozen=True)
 class Redeemed:
     """What the install script fetch gets. The keys are plaintext and shown to the script once."""

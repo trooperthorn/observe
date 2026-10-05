@@ -14,6 +14,7 @@ export const WORKSPACES = [
 // Workspaces with no visible item are not drawn.
 export const NAV = [
   { workspace: "overview", label: "Dashboard", href: "/", also: ["/host"], admin: false },
+  { workspace: "hosts", label: "Add host", href: "/hosts/new", also: [], admin: true },
   { workspace: "network", label: "Map", href: "/map", also: ["/port"], admin: false },
   { workspace: "network", label: "Map admin", href: "/admin/infra", also: [], admin: true },
   { workspace: "admin", label: "Users and keys", href: "/admin", also: [], admin: true },

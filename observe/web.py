@@ -689,6 +689,11 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         # session to /login.
         return FileResponse(STATIC / "admin.html")
 
+    @app.get("/hosts/new", include_in_schema=False)
+    async def add_host_page() -> FileResponse:
+        # The page holds no data; hosts-new.js needs an admin session for everything it does.
+        return FileResponse(STATIC / "hosts-new.html")
+
     @app.get("/audit", include_in_schema=False)
     async def audit_page() -> FileResponse:
         # The page holds no data; audit.js needs an admin session for everything it shows.
@@ -800,6 +805,41 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                                remote=request.client.host if request.client else "",
                                detail={"host": host[:MAX_NAME]})
         return JSONResponse(state)
+
+    @app.post("/api/hosts/{host}/enrolment/regenerate", include_in_schema=False)
+    async def regenerate_enrolment(
+            host: str, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """A new install command for an enrolment whose script was not fetched yet, which is how
+        the wizard recovers from an expired token. The old token is revoked by being replaced.
+        Admin session and CSRF. Like create, the token is in this response only (no-store)."""
+        remote = request.client.host if request.client else ""
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        raw_pool = body.get("pool") if isinstance(body, dict) else None
+        now = auth_clock()
+        made = await enrol.regenerate_enrolment(store, host, now)
+        if made is None:
+            await audit.record(store, "enrol_regenerate_failed", actor=sess.username,
+                               method="POST", path="/api/hosts/[host]/enrolment/regenerate",
+                               status=404, remote=remote, detail={"host": host[:MAX_NAME]})
+            raise HTTPException(404, "no enrolment waiting for its script for this host")
+        token, spec = made
+        try:
+            pool = enrol.parse_pool(raw_pool, spec.platform)
+        except enrol.EnrolError:
+            pool = ""
+        await audit.record(store, "enrol_regenerated", actor=sess.username, method="POST",
+                           path="/api/hosts/[host]/enrolment/regenerate", status=200,
+                           remote=remote, detail={"host": spec.name, "platform": spec.platform})
+        return JSONResponse({
+            "host": spec.name, "platform": spec.platform,
+            "platform_label": enrol.PLATFORMS[spec.platform],
+            "expires_at": now + enrol.TOKEN_TTL_S, "ttl_s": enrol.TOKEN_TTL_S,
+            "command": enrol.command_text(spec.name, spec.platform, str(request.base_url),
+                                          token, pool)})
 
     enrol_limiter = RateLimiter(config.server.plugin_rate_per_minute, ingest_clock)
     app.state.observe_machine_id = scripts_machine_id()
