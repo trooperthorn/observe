@@ -93,7 +93,7 @@ Version 3 adds `ingest_keys`, `users`, `sessions` and `audit`, and version 4 add
 `ingest_batches`, version 5 adds `plugin_schema`, and version 6 adds the
 infrastructure tables (see "Infrastructure map core"). Version 9 adds the
 `scope` column to `ingest_keys`; existing keys get `wpi`. Version 10 adds
-`enrolments` (see "Host enrolment"). A migration step may
+`enrolments` (see "Host enrolment") and version 11 adds its `step_hash` and `reports` columns. A migration step may
 be a function as well as a statement, so an `ALTER TABLE` can check first and
 stay safe to run again. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
@@ -301,8 +301,24 @@ redemption (Q8). Only its SHA-256 digest is stored. Redeeming it, which is the
 install script fetch, claims the row with one conditional `UPDATE`, so two
 fetches cannot both win, and then mints the host-bound keys: a `wpi` key for
 the agent and a `wpc` key for control. Until then no key exists. The function
-is `enrol.redeem`; the `GET /i/{token}` route and the script body that use it
-are the next slice (S11b), so the command does not resolve yet.
+is `enrol.redeem`, called by `GET /i/{token}`. That route needs no session: the token
+is the credential. For `linux` and `raspberry-pi` it answers with the POSIX sh script
+rendered by `observe/scripts.py`; a second fetch, an expired token or garbage is 410.
+A platform with no script yet (TrueNAS and Windows, later slices) is 501, and control
+when no control plugin is loaded is 409, both before the token is spent. The fetch also
+mints a step key (`wps_`), stored as a digest, which authenticates the script's progress
+reports.
+
+The script (see `docs/GUI-DESIGN.md`, "S11b notes") checks that it runs as root, that
+the machine's short or fully qualified hostname equals the host name (printing both when
+it does not), and that it is not the Observe host (a machine-id comparison and a
+comparison of Observe's addresses, plus the address the console URL resolves to, against
+the local ones). Only then does it change anything: the agent container, and for control
+the `hostwatch-control` account, a venv install of `hostwatch[control]`, `control.toml`
+and `control.env`, a sudoers file rendered by hostwatch's `render_sudoers` and checked
+with `visudo -c`, and the systemd unit. Every value is validated server side and single
+quoted. `POST /api/enrol/step` (Bearer step key, valid two hours after the fetch) stores
+each step report, which `GET /api/hosts/{name}/enrolment` returns as `install`.
 
 `GET /api/hosts/{name}/enrolment` (admin session) returns the state machine:
 steps `script` (fetched), `data` (first batch, which is the `hosts` row),
@@ -314,10 +330,11 @@ after creation. The route is registered before `/api/hosts/{host:path}`, which
 would otherwise answer it.
 
 Audit kinds: `enrol_created`, `enrol_create_failed`, `enrol_fetched`,
-`enrol_fetch_failed` and `enrol_expired` (one row per enrolment, written when
-the expiry is first observed). The rows name the host, the actor and the
-choices, never the token or a key. The audit redactor also recognises `wpc_`
-and `wpe_` shapes.
+`enrol_fetch_failed`, `enrol_expired` (one row per enrolment, written when
+the expiry is first observed), `enrol_script_failed`, `enrol_step_refused` and
+`enrol_install_problem` (a step reported failed or refused). The rows name the host, the actor and the
+choices, never the token or a key. The audit redactor also recognises `wpc_`,
+`wpe_` and `wps_` shapes.
 
 `admin.js`, `audit.js`, `infra-admin.js` and `port.js` are ES modules that use the shared
 `table.js`, `chips.js`, `dialog.js` and `toast.js` modules, plus `js/admin-ui.js` (card, button,

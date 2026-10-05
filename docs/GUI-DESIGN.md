@@ -535,12 +535,22 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 
 ### S11a notes (done)
 
-- S11 is split. S11a is `POST /api/hosts`, `GET /api/hosts/{name}/enrolment`, the `enrolments` table (schema version 10) and `observe/enrol.py`, including `redeem`, which spends the token and mints the `wpi` and `wpc` keys. S11b is `GET /i/{token}` and the install scripts, which call `redeem`. Until S11b the printed command does not resolve.
+- S11 is split. S11a is `POST /api/hosts`, `GET /api/hosts/{name}/enrolment`, the `enrolments` table (schema version 10) and `observe/enrol.py`, including `redeem`, which spends the token and mints the `wpi` and `wpc` keys. S11b is `GET /i/{token}` and the install scripts, which call `redeem`; it is built for Linux and Raspberry Pi (see the S11b notes), and the TrueNAS and Windows scripts are S11c.
 - The create body is `name`, `platform`, `agent`, `control` and `allowlist` (`fans`, `services`, `reboot`). A fan entry is a name or `{"header", "min_duty_limit"}`, so thermalctl gets a floor limit per header. Windows with control is a 422 with the reason (Q10). The response has `command` (two lines, the first a comment naming the host and platform), `expires_at` and `ttl_s`. The token is only in that response.
 - The progress response has `state` (`waiting`, `script_fetched`, `first_data`, `control_pulled`, `ready`, `expired`), `ready`, `expired` and a `steps` list of `{id, label, status, at}` for `script`, `data`, `control` and `ready`, which is what the step 5 chip rows (S12) draw. A step is `done`, `waiting`, `skipped` or `expired`.
 - Audit kinds are `enrol_created`, `enrol_create_failed`, `enrol_fetched`, `enrol_fetch_failed` and `enrol_expired`.
 - Tests: `tests/test_enrol_api.py`. The control pull is simulated by an authenticated `wpc` key check, because the control plugin is not loaded in these tests.
 - Deviations: the `GET /i/{token}` route is not part of this slice (see S11b above). Regenerate (S13) is not built, so an expired enrolment cannot be replaced yet.
+
+### S11b notes (done, Linux and Raspberry Pi)
+
+- `observe/scripts.py` renders the script for `linux` and `raspberry-pi`; `GET /i/{token}` in `observe/web.py` serves it as `text/x-shellscript` with `no-store`. The fetch spends the token. A used, expired or unknown token is 410. A platform with no script (TrueNAS, Windows) is 501, and control without a loaded control plugin is 409, both before the token is spent.
+- Order inside the script: root check, hostname guard (short, fully qualified or plain hostname, case-insensitive, printing both names on refusal), Observe-host guard (machine-id, then Observe's listen and request addresses, then what the console URL resolves to, against the local addresses), rerun detection, and only then changes. Each refusal changes nothing and is reported.
+- Agent: needs Docker, writes `/etc/hostwatch/agent.env` (0600) with the ingest key and `HOSTWATCH_HOST_NAME`, replaces the `hostwatch-agent` container with the same hardening as hostwatch's `deploy/agent/docker-compose.yml`, and mounts `/run/thermalctl` read only when it exists. Control: account, venv install of `hostwatch[control]` from github.com/trooperthorn/hostwatch, `control.toml` and `control.env`, sudoers checked with `visudo -c`, unit started.
+- Progress: `POST /api/enrol/step` with `Authorization: Bearer wps_...` (the step key minted at the fetch, digest stored, valid two hours). Steps are `root`, `hostname`, `observe_host`, `rerun`, `agent`, `control_account`, `control_install`, `control_config`, `sudoers`, `control_unit` and `done`; statuses `ok`, `failed`, `skipped`, `refused`. The enrolment progress response gains `install`. Schema version 11 adds the columns.
+- Service names are now matched against the control daemon's own pattern (no `@`, no leading dash, no `..`) when a host is created.
+- Tests: `tests/test_install_script.py`. The script is only syntax checked (`bash -n` and `sh -n`); it has not been run on a real machine.
+- Deviations: `control.toml` has a single `min_duty_floor`, so the largest per-header `min_duty_limit` is used. Regenerate (S13) is not built, so a run on the wrong machine, which still spends the token, needs a new host entry.
 
 ### S9 notes (done)
 

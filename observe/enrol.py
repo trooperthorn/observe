@@ -29,6 +29,12 @@ from .store import Store
 
 TOKEN_MARKER = "wpe"
 TOKEN_TTL_S = 30 * 60
+STEP_MARKER = "wps"
+STEP_TTL_S = 2 * 3600  # a step key works this long after the script fetch
+INSTALL_STEPS = ("root", "hostname", "observe_host", "rerun", "agent", "control_account", "control_install",
+                 "control_config", "sudoers", "control_unit", "done")
+STEP_STATUSES = ("ok", "failed", "skipped", "refused")
+MAX_NOTE = 200
 CONTROL_SCOPE = "wpc"
 MAX_ALLOWLIST_ENTRIES = 32
 
@@ -39,7 +45,8 @@ _NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 # Same shapes the control daemon accepts (docs/CONTROL.md). None can hold a space, quote, slash,
 # semicolon, dollar sign, backtick or pipe, so an entry is safe inside a shell word or a TOML string.
 _HEADER = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
-_SERVICE = re.compile(r"^[A-Za-z0-9._@:-]{1,128}$")
+# Matches hostwatch SERVICE_NAME (an optional docker: prefix, no @, no leading dash, no "..").
+_SERVICE = re.compile(r"^(?:docker:)?[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 class EnrolError(ValueError):
@@ -74,7 +81,7 @@ def _services(raw: Any) -> list[str]:
         raise EnrolError(f"services must be a list of at most {MAX_ALLOWLIST_ENTRIES} entries")
     out: list[str] = []
     for item in raw:
-        if not isinstance(item, str) or not _SERVICE.match(item):
+        if not isinstance(item, str) or not _SERVICE.match(item) or ".." in item:
             raise EnrolError("services has an entry with characters that are not allowed")
         if item not in out:
             out.append(item)
@@ -181,6 +188,21 @@ class Redeemed:
     agent_key: str | None
     control_key: str | None
     allowlist: dict[str, Any]
+    step_key: str = ""
+
+
+async def peek(store: Store, token: str, now: float) -> tuple[str, bool] | None:
+    """(platform, control chosen) for a token that could still be redeemed, without spending it.
+
+    The route uses this to refuse a platform it has no script for, or a control choice it cannot
+    serve, before the token is burned. Anything else, including a malformed token, is None.
+    """
+    if not isinstance(token, str) or not token.startswith(TOKEN_MARKER + "_"):
+        return None
+    rows = await store._run(
+        "SELECT platform, control FROM enrolments WHERE token_hash=? AND fetched_at IS NULL "
+        "AND expires_at>?", (_digest(token), now))
+    return (rows[0][0], bool(rows[0][1])) if rows else None
 
 
 async def redeem(store: Store, token: str, now: float, remote: str = "") -> Redeemed | None:
@@ -214,10 +236,35 @@ async def redeem(store: Store, token: str, now: float, remote: str = "") -> Rede
                                              scope=CONTROL_SCOPE)
         await store._run("UPDATE enrolments SET control_prefix=? WHERE host=?",
                          (info.prefix, host))
+    step_key = f"{STEP_MARKER}_{secrets.token_urlsafe(32)}"
+    await store._run("UPDATE enrolments SET step_hash=? WHERE host=?", (_digest(step_key), host))
     await audit.record(store, "enrol_fetched", method="GET", path=path, status=200,
                        remote=remote, detail={"host": host, "platform": platform,
                                               "agent": bool(agent), "control": bool(control)})
-    return Redeemed(host, platform, agent_key, control_key, json.loads(allowlist))
+    return Redeemed(host, platform, agent_key, control_key, json.loads(allowlist), step_key)
+
+
+async def record_step(store: Store, step_key: str, step: str, status: str, note: str,
+                      now: float) -> str | None:
+    """Store one install step report. Returns the host, or None when the step key is not valid.
+
+    The key is the redeemed token's step key: a digest match on a fetched enrolment, for two
+    hours after the fetch. A report for the same step replaces the earlier one. The note is
+    redacted of secret-shaped text and capped, so a key cannot be carried back by accident.
+    """
+    if not isinstance(step_key, str) or not step_key.startswith(STEP_MARKER + "_"):
+        return None
+    rows = await store._run(
+        "SELECT host, reports FROM enrolments WHERE step_hash=? AND fetched_at IS NOT NULL "
+        "AND fetched_at+?>?", (_digest(step_key), STEP_TTL_S, now))
+    if not rows:
+        return None
+    host, raw = rows[0]
+    note = "".join(c for c in audit.redact_secrets(note) if c.isprintable())[:MAX_NOTE]
+    reports = [r for r in json.loads(raw) if r["step"] != step]
+    reports.append({"step": step, "status": status, "note": note, "at": now})
+    await store._run("UPDATE enrolments SET reports=? WHERE host=?", (json.dumps(reports), host))
+    return host
 
 
 async def claim_expiry_audit(store: Store, host: str, now: float) -> bool:
@@ -240,11 +287,11 @@ async def progress(store: Store, host: str, now: float) -> dict[str, Any] | None
     step reached: waiting, script_fetched, first_data, control_pulled, ready or expired.
     """
     rows = await store._run(
-        "SELECT platform, agent, control, created, expires_at, fetched_at, control_prefix "
+        "SELECT platform, agent, control, created, expires_at, fetched_at, control_prefix, reports "
         "FROM enrolments WHERE host=?", (host,))
     if not rows:
         return None
-    platform, agent, control, created, expires_at, fetched_at, control_prefix = rows[0]
+    platform, agent, control, created, expires_at, fetched_at, control_prefix, reports = rows[0]
     first = await store._run("SELECT first_seen FROM hosts WHERE host=?", (host,))
     data_at = first[0][0] if fetched_at is not None and first else None
     pulled_at = None
@@ -284,7 +331,9 @@ async def progress(store: Store, host: str, now: float) -> dict[str, Any] | None
         state = "waiting"
     return {"host": host, "platform": platform, "agent": bool(agent), "control": bool(control),
             "state": state, "ready": ready, "expired": expired, "created": created,
-            "expires_at": expires_at, "steps": steps}
+            "expires_at": expires_at, "steps": steps,
+            "install": [{"step": r["step"], "status": r["status"], "note": r["note"],
+                         "at": r["at"]} for r in json.loads(reports)]}
 
 
 def command_text(host: str, platform: str, base_url: str, token: str) -> str:

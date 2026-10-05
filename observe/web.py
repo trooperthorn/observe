@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import hmac
+import re
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -30,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from . import audit
 from . import auth as authmod
-from . import enrol
+from . import enrol, scripts
 from . import hostview
 from .alerts import Alerter
 from .config import Config
@@ -92,6 +93,18 @@ def _page_handler(file: Path) -> Callable[[], Awaitable[FileResponse]]:
     async def page() -> FileResponse:
         return FileResponse(file)
     return page
+
+
+def scripts_machine_id() -> str:
+    """This machine's id for the install script's Observe-host guard, or empty when unreadable."""
+    for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+        try:
+            text = Path(path).read_text(encoding="ascii").strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if re.fullmatch(r"[0-9a-f]{32}", text):
+            return text
+    return ""
 
 
 def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Alerter,
@@ -785,6 +798,83 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                                remote=request.client.host if request.client else "",
                                detail={"host": host[:MAX_NAME]})
         return JSONResponse(state)
+
+    enrol_limiter = RateLimiter(config.server.plugin_rate_per_minute, ingest_clock)
+    app.state.observe_machine_id = scripts_machine_id()
+
+    def control_public_key() -> str:
+        loaded = plugins.get("control")
+        return str(getattr(loaded.plugin, "public_key", "") or "") if loaded else ""
+
+    @app.get("/i/{token}", include_in_schema=False)
+    async def install_script(token: str, request: Request) -> Response:
+        """The install script for one enrolment. No session: the single-use token in the path is
+        the credential. It is spent by this fetch, so a second fetch is 410. A platform with no
+        script yet, or control without a loaded control plugin, is refused before the token is
+        spent. The response is `no-store` and the token is never logged."""
+        remote = request.client.host if request.client else ""
+        if not enrol_limiter.allow(remote or "unknown"):
+            raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": "60"})
+        now = auth_clock()
+        known = await enrol.peek(store, token, now)
+        if known is not None:
+            platform, wants_control = known
+            if platform not in scripts.SCRIPT_PLATFORMS:
+                raise HTTPException(501, "no install script for this platform yet")
+            if wants_control and not control_public_key():
+                raise HTTPException(409, "control is not set up on this Observe server")
+        red = await enrol.redeem(store, token, now, remote)
+        if red is None:
+            return PlainTextResponse("This install command was already used or has expired. "
+                                     "Make a new one in the Observe console.\n", status_code=410)
+        listen = scripts.usable_address(config.server.listen)
+        addrs = [a for a in (listen, scripts.usable_address(request.url.hostname or ""))
+                 if a is not None]
+        ctx = scripts.Context(str(request.base_url).rstrip("/"),
+                              app.state.observe_machine_id, tuple(dict.fromkeys(addrs)),
+                              control_public_key())
+        try:
+            body = scripts.render_linux(red, ctx)
+        except scripts.ScriptError as err:
+            await audit.record(store, "enrol_script_failed", method="GET", path="/i/[token]",
+                               status=500, remote=remote,
+                               detail={"host": red.host, "reason": str(err)})
+            return PlainTextResponse("echo 'Observe could not build this script' >&2; exit 1\n",
+                                     status_code=500)
+        return PlainTextResponse(body, media_type="text/x-shellscript")
+
+    @app.post("/api/enrol/step", include_in_schema=False)
+    async def install_step(request: Request) -> Response:
+        """One progress report from the install script. Authenticated by the step key of the
+        redeemed token (Bearer wps_...), which works for two hours after the fetch. The body is
+        {"step", "status", "note"}; the note is redacted and capped."""
+        remote = request.client.host if request.client else ""
+        if not enrol_limiter.allow(remote or "unknown"):
+            raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": "60"})
+        header = request.headers.get("authorization", "")
+        key = header[7:].strip() if header[:7].lower() == "bearer " else ""
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        ok = (isinstance(body, dict) and set(body) <= {"step", "status", "note"}
+              and body.get("step") in enrol.INSTALL_STEPS
+              and body.get("status") in enrol.STEP_STATUSES
+              and isinstance(body.get("note", ""), str))
+        host = await enrol.record_step(
+            store, key, str(body["step"]) if ok else "", str(body["status"]) if ok else "",
+            body.get("note", "") if ok else "", auth_clock()) if key and ok else None
+        if host is None:
+            await audit.record(store, "enrol_step_refused", method="POST",
+                               path="/api/enrol/step", status=401, remote=remote)
+            raise HTTPException(401, "missing or invalid step key",
+                                headers={"WWW-Authenticate": "Bearer"})
+        if body["status"] in ("failed", "refused"):
+            await audit.record(store, "enrol_install_problem", actor=host, method="POST",
+                               path="/api/enrol/step", status=200, remote=remote,
+                               detail={"host": host, "step": body["step"],
+                                       "status": body["status"]})
+        return Response(status_code=204)
 
     @app.get("/api/hosts/{host:path}", include_in_schema=False)
     async def host_detail(host: str,

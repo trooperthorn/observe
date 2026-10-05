@@ -349,8 +349,11 @@ platform, backed by a single-use token that lasts 30 minutes and is stored only
 as a digest. The host's `wpi` and `wpc` keys are created when the token is
 redeemed. `GET /api/hosts/{name}/enrolment` reports progress: script fetched,
 first data, control first pull, ready or expired. Control is not offered for
-Windows yet. The install script route and the wizard page come in later slices
-(`docs/GUI-DESIGN.md` S11b and S12). See `docs/ARCHITECTURE.md`, "Host
+Windows yet. `GET /i/{token}` serves a guarded install script for `linux` and
+`raspberry-pi` hosts (S11b): it refuses to run on the wrong machine or on the Observe
+host, installs the agent container and, if chosen, the control daemon, and reports each
+step back. The TrueNAS and Windows scripts and the wizard page come in later slices
+(`docs/GUI-DESIGN.md` S11c and S12). See `docs/ARCHITECTURE.md`, "Host
 enrolment".
 
 ## Direction: no longer read-only

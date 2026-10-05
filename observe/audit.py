@@ -40,9 +40,9 @@ _SECRET_WORDS = ("password", "passwd", "secret", "token", "csrf", "cookie", "aut
 
 
 # An ingest key ("wpi_<prefix>_<secret>", even a truncated one), a control key (wpc_), an
-# enrolment token (wpe_), or any long run of URL-safe characters, which is what a session
+# enrolment token (wpe_), an install step key (wps_), or any long run of URL-safe characters, which is what a session
 # token or a key secret looks like.
-_SECRET_SHAPES = re.compile(r"wp[ice]_[A-Za-z0-9_-]*|[A-Za-z0-9_-]{40,}")
+_SECRET_SHAPES = re.compile(r"wp[icse]_[A-Za-z0-9_-]*|[A-Za-z0-9_-]{40,}")
 
 
 def redact_secrets(text: str) -> str:

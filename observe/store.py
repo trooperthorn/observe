@@ -208,6 +208,18 @@ ENROLMENT_TABLES = (
 )""",
 )
 
+# The install script reports its steps back (observe/scripts.py). The redeemed token's step key is
+# kept as a digest only, and the reports are a short JSON list of step, status and note.
+def _add_enrolment_reports(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(enrolments)")}
+    if "step_hash" not in columns:
+        db.execute("ALTER TABLE enrolments ADD COLUMN step_hash TEXT")
+    if "reports" not in columns:
+        db.execute("ALTER TABLE enrolments ADD COLUMN reports TEXT NOT NULL DEFAULT '[]'")
+
+
+ENROLMENT_REPORT_TABLES = (_add_enrolment_reports,)
+
 MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = {
     1: BASELINE,
     2: HOST_TABLES,
@@ -219,6 +231,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     8: FINDING_ACK_TABLES,
     9: KEY_SCOPE_TABLES,
     10: ENROLMENT_TABLES,
+    11: ENROLMENT_REPORT_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
