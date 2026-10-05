@@ -147,6 +147,7 @@ def test_a_failed_derivation_is_stored_flagged_and_not_a_clean_accept(env, monke
     async def boom(*a, **k):
         raise RuntimeError("secret detail")
     monkeypatch.setattr("watchpost_pockethernet.upload.derive_report", boom)
+    monkeypatch.setattr(derive, "derive_report", boom)
     r = env.post(FIXTURE)
     assert r.status_code == 202
     assert r.json()["result"] == "accepted" and r.json()["derive_status"] == "failed"
@@ -157,9 +158,15 @@ def test_a_failed_derivation_is_stored_flagged_and_not_a_clean_accept(env, monke
     assert detail["derive_failed"] == "RuntimeError" and "secret" not in a[0]
     assert env.rows("SELECT 1 FROM port_properties") == []
 
+    # While the cause remains, a retry fails again and the report stays failed.
+    headers = admin_headers(env)
+    r = env.client.post("/api/plugins/pockethernet/retry", headers=headers)
+    assert r.json()["failed"] == 1 and r.json()["derived"] == 0
+    assert env.rows("SELECT derive_status FROM field_reports") == [("failed",)]
+
     # The cause is fixed; an admin retry derives it and the status becomes ok.
     monkeypatch.setattr("watchpost_pockethernet.upload.derive_report", real)
-    headers = admin_headers(env)
+    monkeypatch.setattr(derive, "derive_report", real)
     r = env.client.post("/api/plugins/pockethernet/retry", headers=headers)
     assert r.status_code == 200
     assert r.json() == {"retried": 1, "derived": 1, "failed": 0}
@@ -185,6 +192,51 @@ def test_revision_2_removes_a_property_only_revision_1_set_and_live_equals_rebui
     strip = lambda rows: [x[:6] + x[8:] for x in rows]  # noqa: E731  first_seen moves
     assert [p[1:] for p in live["props"]] == [p[1:] for p in rebuilt["props"]]
     assert strip(live["links"]) == strip(rebuilt["links"])
+
+
+def test_revision_2_keeps_another_reports_observation_that_shared_its_value(env):
+    """Report X was deduplicated into Y's row; retracting Y must not erase X's value."""
+    env.post(FIXTURE)  # Y, older, owns the rows
+    env.clock.now += 60
+    later = FIXTURE["taken_at_ms"] + 60_000
+    x = env.report(report_id="r-x", taken_at_ms=later)
+    x["properties"] = {**FIXTURE["properties"], "last_tested_at_ms": later}
+    env.post(x)  # X carries equal values, so the core wrote no row of its own for them
+    assert [r[4] for r in props(env, "link_speed_mbps")] == [FIXTURE["report_id"]]
+    y2 = env.report(revision=FIXTURE["revision"] + 1)
+    y2["properties"] = {k: v for k, v in FIXTURE["properties"].items()
+                        if k != "link_speed_mbps"}
+    assert env.post(y2).json()["result"] == "replaced"
+    assert [r[4] for r in props(env, "link_speed_mbps")] == ["r-x"]
+    live = snapshot(env)
+    assert env.client.post("/api/plugins/pockethernet/rebuild",
+                           headers=admin_headers(env)).status_code == 200
+    assert sorted(p[1:] for p in live["props"]) == sorted(
+        p[1:] for p in snapshot(env)["props"])
+
+
+def test_revision_2_without_a_jack_removes_the_old_link_like_a_rebuild(env):
+    env.post(FIXTURE)
+    env.clock.now += 60
+    newer = env.report(revision=FIXTURE["revision"] + 1)
+    newer["site"] = None
+    newer["location_label"] = None
+    newer["properties"] = {k: v for k, v in FIXTURE["properties"].items() if k != "jack_label"}
+    assert env.post(newer).json()["result"] == "replaced"
+    assert env.rows("SELECT 1 FROM infra_links WHERE source='field_report'") == []
+    assert env.client.post("/api/plugins/pockethernet/rebuild",
+                           headers=admin_headers(env)).status_code == 200
+    assert env.rows("SELECT 1 FROM infra_links WHERE source='field_report'") == []
+
+
+def test_retry_leaves_a_pending_report_alone(env):
+    env.post(FIXTURE)
+    db = sqlite3.connect(env.path)
+    db.execute("UPDATE field_reports SET derive_status='pending'")
+    db.commit()
+    db.close()
+    r = env.client.post("/api/plugins/pockethernet/retry", headers=admin_headers(env))
+    assert r.json()["retried"] == 0
 
 
 def test_rebuild_rolls_back_and_lists_the_report_when_a_body_is_corrupt(env):

@@ -25,7 +25,7 @@ from typing import Literal
 from watchpost.plugins import Migration
 from watchpost.store import Store
 
-from .derive import SOURCE, recorded_by_for
+from .derive import Footprint, footprint, recorded_by_for, retract_rows
 
 Result = Literal["accepted", "replaced", "duplicate", "ignored"]
 
@@ -82,13 +82,14 @@ class NewReport:
 class Outcome:
     result: Result
     revision: int  # the revision now stored
+    retracted: Footprint | None = None  # what a replaced revision's retraction removed
 
 
 def _store_sync(store: Store, r: NewReport) -> Outcome:
     digest = hashlib.sha256(r.body).hexdigest()
     with store._lock, store._db:
         row = store._db.execute(
-            "SELECT revision, key_prefix FROM field_reports WHERE source=? AND report_id=?",
+            "SELECT revision, key_prefix, body FROM field_reports WHERE source=? AND report_id=?",
             (r.source, r.report_id)).fetchone()
         values = (r.revision, r.taken_at_ms, r.reported_taken_at_ms, int(r.clock_corrected),
                   r.tester_serial, r.status, r.site, r.port_id, digest, r.body, r.key_prefix)
@@ -104,9 +105,8 @@ def _store_sync(store: Store, r: NewReport) -> Outcome:
         if r.revision > stored:
             # The earlier revision's derived rows go in the same transaction as its replacement,
             # so live state never mixes two revisions and equals what a rebuild would produce.
-            store._db.execute(
-                "DELETE FROM port_properties WHERE source=? AND report_id=? AND recorded_by=?",
-                (SOURCE, r.report_id, recorded_by_for(row[1], r.source)))
+            fp = footprint(row[2])
+            retract_rows(store._db, r.report_id, recorded_by_for(row[1], r.source), fp)
             store._db.execute(
                 "UPDATE field_reports SET revision=?, taken_at_ms=?, reported_taken_at_ms=?, "
                 "clock_corrected=?, tester_serial=?, status=?, site=?, port_id=?, "
@@ -114,7 +114,7 @@ def _store_sync(store: Store, r: NewReport) -> Outcome:
                 "derive_status='pending', "
                 "revisions_seen=revisions_seen+1 WHERE source=? AND report_id=?",
                 (*values, r.received_at, r.source, r.report_id))
-            return Outcome("replaced", r.revision)
+            return Outcome("replaced", r.revision, fp)
         return Outcome("duplicate" if r.revision == stored else "ignored", stored)
 
 

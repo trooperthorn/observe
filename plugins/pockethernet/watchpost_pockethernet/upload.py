@@ -34,7 +34,7 @@ from fastapi.responses import JSONResponse
 
 from watchpost.infra import InfraService
 
-from .derive import derive_report
+from .derive import derive_report, replay_siblings
 from .reports import NewReport, mark_derive_status, store_report
 from .schema import MAX_REPORT_BYTES, ReportError, parse_report
 
@@ -155,9 +155,14 @@ def build_router() -> APIRouter:
         if outcome.result in ("accepted", "replaced"):
             store = request.app.state.plugin_store
             try:
-                derived = await derive_report(
-                    InfraService(request.app.state.plugin_store), report, key_prefix=prefix,
-                    device=device, taken_ms=taken_ms, now=now)
+                derived = None
+                if outcome.retracted is not None:
+                    derived = await replay_siblings(store, outcome.retracted,
+                                                    (device, report.report_id))
+                if derived is None:
+                    derived = await derive_report(
+                        InfraService(request.app.state.plugin_store), report, key_prefix=prefix,
+                        device=device, taken_ms=taken_ms, now=now)
                 request.state.audit_detail["derived"] = derived.as_detail()
                 await mark_derive_status(store, device, report.report_id, outcome.revision, "ok")
             except Exception as err:  # the evidence is stored; only the derivation is lost

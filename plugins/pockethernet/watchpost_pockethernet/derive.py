@@ -34,6 +34,7 @@ reproduces the same rows apart from their autoincrement ids.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
@@ -43,6 +44,8 @@ from watchpost.portkey import LLDP_SUBTYPES, lldp_port_key, mac_digits, port_key
 from watchpost.store import Store
 
 from .schema import Neighbor, Report, ReportError, parse_report
+
+log = logging.getLogger(__name__)
 
 SOURCE = "pockethernet"  # the `source` of every property this plugin writes
 LINK_SOURCE = "field_report"
@@ -163,6 +166,83 @@ def _properties(report: Report, taken_ms: int, jack: str) -> list[tuple[str, Any
     return out
 
 
+def _jack(report: Report) -> str:
+    site = report.site
+    return _clean(site.port_id if site else "") or _clean(report.location_label) \
+        or _clean(report.properties.jack_label)
+
+
+@dataclass(frozen=True)
+class Footprint:
+    """Where a report's derived data sits: its port and its jack."""
+
+    port: tuple[str, str] | None = None
+    jack: str = ""
+
+
+def footprint(body: bytes | None) -> Footprint:
+    """The port and jack a stored body derives to; empty when it cannot be parsed."""
+    if body is None:
+        return Footprint()
+    try:
+        report = parse_report(bytes(body))
+    except (ReportError, ValueError):
+        return Footprint()
+    found = _neighbor(report)
+    if found is None:
+        return Footprint()
+    return Footprint((found[1][0], found[2][0]), _jack(report))
+
+
+def retract_rows(db: sqlite3.Connection, report_id: str, recorded_by: str, fp: Footprint) -> None:
+    """Remove what one report derived: its properties, and the field_report link and jack patch
+    of its jack. Other reports that shared those are replayed by replay_siblings. The caller
+    holds the store lock and the transaction."""
+    db.execute("DELETE FROM port_properties WHERE source=? AND report_id=? AND recorded_by=?",
+               (SOURCE, report_id, recorded_by))
+    if fp.port is not None:
+        # A verification the retracted rows lent to this port's rows is not evidence any more.
+        db.execute("UPDATE port_properties SET last_verified=observed_at "
+                   "WHERE source=? AND switch_id=? AND port_key=?", (SOURCE, *fp.port))
+    if fp.jack:
+        db.execute("DELETE FROM infra_links WHERE source=? AND a_kind='jack' AND a_ref=?",
+                   (LINK_SOURCE, fp.jack))
+        db.execute("UPDATE infra_jacks SET switch_id=NULL, port_key=NULL WHERE jack_key=?",
+                   (fp.jack,))
+
+
+def _sibling_rows(store: Store) -> list[tuple[Any, ...]]:
+    with store._lock:
+        return store._db.execute(
+            "SELECT source, report_id, key_prefix, taken_at_ms, updated_at, body "
+            "FROM field_reports WHERE body IS NOT NULL "
+            "ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
+
+
+async def replay_siblings(store: Store, fp: Footprint, own: tuple[str, str]) -> Derived | None:
+    """Derive again, in observation order, every stored report on the same port or jack as a
+    retracted one, and the report `own` itself, whose stored body is the new revision.
+
+    The core records an equal value only as a verification of the newest row, so a report whose
+    value matched the retracted report's has no row of its own; replaying it writes the row a
+    rebuild would, and replaying in rebuild order gives the same row owners. Returns what
+    deriving `own` produced."""
+    rows = await asyncio.to_thread(_sibling_rows, store)
+    infra = InfraService(store)
+    result: Derived | None = None
+    for source, report_id, key_prefix, taken_ms, updated_at, body in rows:
+        mine = (source, report_id) == own
+        other = footprint(body)
+        if not (mine or (fp.port is not None and other.port == fp.port)
+                or (fp.jack and other.jack == fp.jack)):
+            continue
+        res = await derive_report(infra, parse_report(bytes(body)), key_prefix=key_prefix,
+                                  device=source, taken_ms=taken_ms, now=updated_at)
+        if mine:
+            result = res
+    return result
+
+
 async def derive_report(infra: InfraService, report: Report, *, key_prefix: str, device: str,
                         taken_ms: int, now: float) -> Derived:
     """Write the switch, port, jack, link and properties one report implies. Idempotent."""
@@ -176,8 +256,7 @@ async def derive_report(infra: InfraService, report: Report, *, key_prefix: str,
         return result
     n, (sid, name, addrs, vendor, platform), (key, raw_port) = found
     site = report.site
-    jack = _clean(site.port_id if site else "") or _clean(report.location_label) \
-        or _clean(report.properties.jack_label)
+    jack = _jack(report)
     recorded_by = recorded_by_for(key_prefix, device)
     seen = taken_ms / 1000.0  # the corrected observation time; `now` is only recorded_at
 
@@ -305,12 +384,15 @@ async def rebuild(store: Store) -> RebuildResult:
 class RetryResult:
     retried: int = 0
     derived: int = 0
+    skipped: int = 0
     failed: int = 0
     failures: list[dict[str, str]] = field(default_factory=list)
 
     def as_detail(self) -> dict[str, Any]:
         d: dict[str, Any] = {"retried": self.retried, "derived": self.derived,
                              "failed": self.failed}
+        if self.skipped:
+            d["skipped"] = self.skipped
         if self.failures:
             d["failed_reports"] = self.failures
         return d
@@ -320,19 +402,18 @@ def _pending_sync(store: Store) -> list[tuple[Any, ...]]:
     with store._lock:
         return store._db.execute(
             "SELECT source, report_id, revision, key_prefix, taken_at_ms, updated_at, body "
-            "FROM field_reports WHERE derive_status != 'ok' "
+            "FROM field_reports WHERE derive_status = 'failed' "
             "ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
 
 
-def _retract_sync(store: Store, report_id: str, recorded_by: str) -> None:
+def _retract_sync(store: Store, report_id: str, recorded_by: str, fp: Footprint) -> None:
     with store._lock, store._db:
-        store._db.execute(
-            "DELETE FROM port_properties WHERE source=? AND report_id=? AND recorded_by=?",
-            (SOURCE, report_id, recorded_by))
+        retract_rows(store._db, report_id, recorded_by, fp)
 
 
 async def retry_failed(store: Store) -> RetryResult:
-    """Derive again every stored report whose derivation failed or never finished."""
+    """Derive again every stored report whose derivation failed. A report still marked pending
+    is mid-upload and is left alone; a rebuild covers one a crash left behind."""
     from .reports import mark_derive_status  # reports imports this module for its constants
 
     out = RetryResult()
@@ -344,15 +425,22 @@ async def retry_failed(store: Store) -> RetryResult:
                 raise ReportError("the report body was dropped by retention", 400)
             report = parse_report(bytes(body))
             # Rows a half-finished attempt left are retracted first, so the retry is idempotent.
+            fp = footprint(body)
             await asyncio.to_thread(_retract_sync, store, report_id,
-                                    recorded_by_for(key_prefix, source))
-            await derive_report(infra, report, key_prefix=key_prefix, device=source,
-                                taken_ms=taken_ms, now=updated_at)
+                                    recorded_by_for(key_prefix, source), fp)
+            res = await replay_siblings(store, fp, (source, report_id))
+            if res is None:  # the report's own row is always replayed; guard anyway
+                res = await derive_report(infra, report, key_prefix=key_prefix, device=source,
+                                          taken_ms=taken_ms, now=updated_at)
         except Exception:
+            log.exception("retry of field report %s failed", report_id)
             out.failed += 1
             out.failures.append({"source": source, "report_id": report_id})
             await mark_derive_status(store, source, report_id, revision, "failed")
             continue
-        out.derived += 1
+        if res.skipped:
+            out.skipped += 1
+        else:
+            out.derived += 1
         await mark_derive_status(store, source, report_id, revision, "ok")
     return out
