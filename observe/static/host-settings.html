@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Host settings - Observe</title>
+<link rel="stylesheet" href="/static/css/tokens.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/shell.css">
+<link rel="stylesheet" href="/static/css/components.css">
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/css/admin.css">
+<link rel="stylesheet" href="/static/css/wizard.css">
+<link rel="stylesheet" href="/static/css/settings.css">
+</head>
+<body>
+<header id="shell-header" class="shell-head">
+  <div id="summary" aria-live="polite"></div>
+</header>
+<nav id="shell-nav" aria-label="Main"></nav>
+<main class="admin-main wizard-main" id="page">
+  <div class="admin-title">
+    <p class="crumbs muted" id="crumbs">Hosts / Settings</p>
+    <h1 id="title">Host settings</h1>
+  </div>
+  <p id="msg" class="msg-line" role="alert"></p>
+
+  <section class="card" id="identity" aria-labelledby="identity-h">
+    <h3 id="identity-h">Identity</h3>
+    <dl class="kv" id="identity-list"></dl>
+    <p class="admin-note" id="identity-note"></p>
+  </section>
+
+  <section class="card" id="allowlist-card" aria-labelledby="allowlist-h" hidden>
+    <h3 id="allowlist-h">Control allowlist</h3>
+    <p class="card-sub">Only these fan headers and services can ever be changed from the console. The host enforces the same list, so a change takes effect on the host only after its control.toml is rewritten.</p>
+    <p class="admin-note" id="allowlist-state" aria-live="polite"></p>
+    <form id="form-allow" class="wiz-form" novalidate>
+      <fieldset class="wiz-fieldset" id="fans">
+        <legend>Fan headers</legend>
+        <ul class="wiz-list" id="fan-list"></ul>
+        <div class="wiz-add">
+          <label>Add header <input id="fan-new" type="text" maxlength="32" autocomplete="off" spellcheck="false"></label>
+          <button type="button" class="btn" id="fan-add">Add</button>
+        </div>
+      </fieldset>
+      <fieldset class="wiz-fieldset" id="services">
+        <legend>Restartable services</legend>
+        <ul class="wiz-list" id="service-list"></ul>
+        <div class="wiz-add">
+          <label>Add service <input id="service-new" type="text" maxlength="128" autocomplete="off" spellcheck="false"></label>
+          <button type="button" class="btn" id="service-add">Add</button>
+        </div>
+      </fieldset>
+      <fieldset class="wiz-fieldset" id="reboot-set">
+        <legend>Reboot</legend>
+        <label class="inline"><input type="checkbox" id="reboot"> Allow reboot (always needs the host name typed to confirm)</label>
+      </fieldset>
+      <p class="admin-note" id="allow-error" role="alert"></p>
+      <div class="row-actions">
+        <button type="submit" class="btn primary" id="save">Save allowlist</button>
+        <button type="button" class="btn" id="update-again" hidden>Make a new update command</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card" id="command-card" aria-labelledby="command-h" hidden>
+    <h3 id="command-h">Command</h3>
+    <p class="card-sub" id="command-sub"></p>
+    <div class="cmd-block" id="command-block" hidden>
+      <pre class="cmd" id="cmd" tabindex="0"></pre>
+      <button type="button" class="btn" id="copy">Copy</button>
+    </div>
+    <p class="admin-note" id="expiry"></p>
+    <p class="admin-note" id="command-note"></p>
+    <ol class="progress" id="progress" aria-live="polite"></ol>
+    <ul class="progress" id="reports" aria-live="polite"></ul>
+  </section>
+
+  <section class="card" id="install-card" aria-labelledby="install-h" hidden>
+    <h3 id="install-h">Install command</h3>
+    <p class="card-sub">A new full install command for this host. The command that exists now stops working, and so do this host's agent and control keys, until the new command is run on the host. Its stored data is kept.</p>
+    <div class="row-actions">
+      <button type="button" class="btn" id="regen">Regenerate command</button>
+      <button type="button" class="btn" id="cleanup">Clean up this machine</button>
+    </div>
+    <p class="admin-note">Clean up undoes an install that went onto the wrong machine. Run its command on that machine: it removes only an install made for this host and refuses any other machine.</p>
+  </section>
+
+  <details class="card danger-zone" id="danger" aria-labelledby="danger-h">
+    <summary id="danger-h">Danger zone</summary>
+    <p class="card-sub">Both actions need the host name typed to confirm.</p>
+    <div class="row-actions">
+      <button type="button" class="btn danger" id="revoke">Revoke host keys</button>
+      <button type="button" class="btn danger" id="remove">Remove host</button>
+    </div>
+    <p class="admin-note">Revoking stops the host's agent and control service from being accepted. Removing also deletes the host's enrolment and stored data from Observe. The audit log is kept.</p>
+  </details>
+</main>
+<script type="module" src="/static/host-settings.js"></script>
+<script type="module" src="/static/js/shell.js"></script>
+</body>
+</html>

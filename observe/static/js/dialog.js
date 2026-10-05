@@ -5,7 +5,7 @@ import { typedMatches } from "/static/js/dialog-logic.js";
 
 let counter = 0;
 
-function open({ title, body, confirmText, danger, typedName }) {
+function open({ title, body, lines, confirmText, danger, typedName }) {
   return new Promise((resolve) => {
     const opener = document.activeElement;
     const dlg = el("dialog", "dlg");
@@ -15,6 +15,11 @@ function open({ title, body, confirmText, danger, typedName }) {
     dlg.setAttribute("aria-labelledby", h.id);
     dlg.append(h);
     if (body) dlg.append(el("p", "muted", body));
+    if (lines && lines.length) {
+      const list = el("ul", "dlg-lines");
+      for (const line of lines) list.append(el("li", null, line));
+      dlg.append(list);
+    }
     let input = null;
     if (typedName) {
       const label = el("label", "field");
@@ -49,10 +54,12 @@ function open({ title, body, confirmText, danger, typedName }) {
   });
 }
 
-export function confirmDialog({ title, body, confirmText, danger }) {
-  return open({ title, body, confirmText, danger });
+// `lines` is an optional list of short strings drawn as a bulleted list under the body, such as
+// the changes about to be saved.
+export function confirmDialog({ title, body, lines, confirmText, danger }) {
+  return open({ title, body, lines, confirmText, danger });
 }
 
-export function typedConfirm({ title, name, body, confirmText }) {
-  return open({ title, body, confirmText: confirmText || "Confirm", danger: true, typedName: name });
+export function typedConfirm({ title, name, body, lines, confirmText }) {
+  return open({ title, body, lines, confirmText: confirmText || "Confirm", danger: true, typedName: name });
 }

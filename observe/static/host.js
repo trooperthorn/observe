@@ -17,6 +17,7 @@ const STATE_TEXT = {
 const STATUS_STATE = { good: "up", warning: "warn", critical: "down" };
 const page = document.getElementById("page");
 const name = new URLSearchParams(location.search).get("name") || "";
+let isAdmin = false;
 
 function chip(status, text) {
   return statusChip(STATUS_STATE[status] || status, text);
@@ -154,7 +155,14 @@ function render(h) {
   crumb.append(back, " / ", h.host);
   const line = el("h1");
   line.append(h.host, " ", chip(h.status));
-  head.append(crumb, line, el("p", "card-sub",
+  head.append(crumb, line);
+  if (isAdmin) {
+    // The settings page needs an admin session; a viewer would only see a refusal there.
+    const settings = el("a", "btn", "Settings");
+    settings.href = `/hosts/${encodeURIComponent(h.host)}/settings`;
+    head.append(settings);
+  }
+  head.append(el("p", "card-sub",
     `${h.platform || "unknown platform"}, agent ${h.agent_version || "unknown"}. ` +
     (h.heard ? `Last report ${ago(h.age_seconds)}.` : "No batch has ever arrived.")));
   if (!h.monitored) {
@@ -190,5 +198,13 @@ async function refresh() {
   }
 }
 
-refresh();
-setInterval(refresh, 10000);
+async function start() {
+  try {
+    const r = await fetch("/api/session");
+    if (r.ok) isAdmin = !!(await r.json()).is_admin;
+  } catch (_) { /* a viewer view is the safe default */ }
+  refresh();
+  setInterval(refresh, 10000);
+}
+
+start();

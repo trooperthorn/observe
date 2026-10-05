@@ -15,6 +15,7 @@ the keys never go into the audit log or a log line. The audit rows name the host
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -32,7 +33,8 @@ TOKEN_TTL_S = 30 * 60
 STEP_MARKER = "wps"
 STEP_TTL_S = 2 * 3600  # a step key works this long after the script fetch
 INSTALL_STEPS = ("root", "hostname", "observe_host", "rerun", "pool", "download", "agent", "compose", "app",
-                 "control_account", "control_install", "control_config", "sudoers", "control_unit", "done")
+                 "control_account", "control_install", "control_config", "sudoers", "control_unit", "done",
+                 "cleanup_match", "cleanup_control", "cleanup_agent", "cleanup_files")
 STEP_STATUSES = ("ok", "failed", "skipped", "refused")
 MAX_NOTE = 200
 CONTROL_SCOPE = "wpc"
@@ -119,6 +121,22 @@ def _fans(raw: Any) -> list[tuple[str, int | None]]:
     return out
 
 
+def parse_allowlist(allow: Any) -> tuple[list[tuple[str, int | None]], list[str], bool]:
+    """Validate an allowlist object (fans, services, reboot). Raises EnrolError with a message
+    safe to show. None is an empty allowlist."""
+    if allow is not None and not isinstance(allow, dict):
+        raise EnrolError("allowlist must be an object")
+    allow = allow or {}
+    if set(allow) - {"fans", "services", "reboot"}:
+        raise EnrolError("allowlist has only fans, services and reboot")
+    fans = _fans(allow.get("fans"))
+    services = _services(allow.get("services"))
+    reboot = allow.get("reboot", False)
+    if type(reboot) is not bool:
+        raise EnrolError("reboot must be true or false")
+    return fans, services, reboot
+
+
 def parse_spec(body: Any) -> Spec:
     """Validate a create request. Raises EnrolError with a message safe to show."""
     if not isinstance(body, dict):
@@ -135,17 +153,7 @@ def parse_spec(body: Any) -> Spec:
         raise EnrolError("agent and control must be true or false")
     if not agent and not control:
         raise EnrolError("choose the agent, control or both")
-    allow = body.get("allowlist")
-    if allow is not None and not isinstance(allow, dict):
-        raise EnrolError("allowlist must be an object")
-    allow = allow or {}
-    if set(allow) - {"fans", "services", "reboot"}:
-        raise EnrolError("allowlist has only fans, services and reboot")
-    fans = _fans(allow.get("fans"))
-    services = _services(allow.get("services"))
-    reboot = allow.get("reboot", False)
-    if type(reboot) is not bool:
-        raise EnrolError("reboot must be true or false")
+    fans, services, reboot = parse_allowlist(body.get("allowlist"))
     if control and platform == "windows":
         raise EnrolError("control is not available for Windows yet: it needs a Windows path "
                          "in thermal-control first. Enrol the agent only.")
@@ -210,11 +218,48 @@ async def regenerate_enrolment(store: Store, host: str, now: float) -> tuple[str
     if not rows:
         return None
     platform, agent, control, allowlist = rows[0]
+    return token, spec_from_row(host, platform, agent, control, allowlist)
+
+
+async def reissue_enrolment(store: Store, host: str, now: float) -> tuple[str, Spec, int] | None:
+    """Replace the install command of an enrolment even after its script was fetched. The
+    token is replaced, every agent and control key bound to the host is revoked, and the fetch,
+    the step key, the reports and the key prefixes are cleared, all in one transaction, so the
+    old command, the old keys and the old install's step reports are dead at once. Returns the
+    new plaintext token, the stored choices and the number of keys revoked, or None when the host
+    has no enrolment. The saved allowlist is kept, and goes into the new script.
+    """
+    token = new_token()
+
+    def work() -> tuple[tuple[Any, ...], int] | None:
+        with store._lock, store._db:
+            row = store._db.execute(
+                "SELECT platform, agent, control, allowlist FROM enrolments WHERE host=?",
+                (host,)).fetchone()
+            if row is None:
+                return None
+            revoked = store._db.execute(
+                "UPDATE ingest_keys SET revoked_at=? WHERE host=? AND scope IN ('wpi', ?) "
+                "AND revoked_at IS NULL", (now, host, CONTROL_SCOPE)).rowcount
+            store._db.execute(
+                "UPDATE enrolments SET token_hash=?, created=?, expires_at=?, expiry_audited=0, "
+                "fetched_at=NULL, step_hash=NULL, reports='[]', agent_prefix=NULL, "
+                "control_prefix=NULL, reissued_at=? WHERE host=?",
+                (_digest(token), now, now + TOKEN_TTL_S, now, host))
+            return row, revoked
+
+    made = await asyncio.to_thread(work)
+    if made is None:
+        return None
+    (platform, agent, control, allowlist), revoked = made
+    return token, spec_from_row(host, platform, agent, control, allowlist), revoked
+
+
+def spec_from_row(host: str, platform: str, agent: Any, control: Any, allowlist: str) -> Spec:
     allow = json.loads(allowlist)
     fans = tuple((f["header"], f.get("min_duty_limit")) for f in allow.get("fans", []))
-    spec = Spec(host, platform, bool(agent), bool(control), fans,
+    return Spec(host, platform, bool(agent), bool(control), fans,
                 tuple(allow.get("services", [])), bool(allow.get("reboot", False)))
-    return token, spec
 
 
 @dataclass(frozen=True)
@@ -325,13 +370,18 @@ async def progress(store: Store, host: str, now: float) -> dict[str, Any] | None
     step reached: waiting, script_fetched, first_data, control_pulled, ready or expired.
     """
     rows = await store._run(
-        "SELECT platform, agent, control, created, expires_at, fetched_at, control_prefix, reports "
-        "FROM enrolments WHERE host=?", (host,))
+        "SELECT platform, agent, control, created, expires_at, fetched_at, control_prefix, reports, "
+        "reissued_at FROM enrolments WHERE host=?", (host,))
     if not rows:
         return None
-    platform, agent, control, created, expires_at, fetched_at, control_prefix, reports = rows[0]
-    first = await store._run("SELECT first_seen FROM hosts WHERE host=?", (host,))
+    (platform, agent, control, created, expires_at, fetched_at, control_prefix, reports,
+     reissued_at) = rows[0]
+    first = await store._run("SELECT first_seen, last_seen FROM hosts WHERE host=?", (host,))
     data_at = first[0][0] if fetched_at is not None and first else None
+    if reissued_at is not None and data_at is not None:
+        # A reissued command starts a new install on a host that may already have reported, so
+        # data counts only when a batch arrived after the reissue.
+        data_at = first[0][1] if first[0][1] >= reissued_at else None
     pulled_at = None
     if fetched_at is not None and control_prefix:
         used = await store._run("SELECT last_used FROM ingest_keys WHERE prefix=?",

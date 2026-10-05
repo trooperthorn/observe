@@ -366,6 +366,31 @@ the script is fetched, the wizard offers Regenerate command, which calls
 token, so the old command stops working. Once the script has been fetched the token is
 spent and regenerate is refused. See `docs/ARCHITECTURE.md`, "Host enrolment".
 
+## Host settings
+
+Admins open a host's settings from the Settings button on its host page, at
+`/hosts/{name}/settings`. The page shows the host's identity, the control allowlist, the install
+command and a danger zone.
+
+- **Allowlist.** Edit the fan headers (with the lowest remote duty per header), the restartable
+  services and the reboot choice. Save shows a confirm dialog that lists the changes, then
+  `PUT /api/hosts/{name}/allowlist` stores the new list. When the install command was already run
+  the response also holds a short update command, headed with the host name, that rewrites
+  `control.toml` and the sudoers rules on that host and restarts the control service. It has the
+  same guards as the install script: root, the host name, and not the Observe host. The status
+  chip reads Pending until the update has run, Written once `control.toml` holds the list, and
+  Applied after the host's control service next pulls with its key.
+- **Install command.** Regenerate command revokes the old token, the agent key and the control key
+  of the host after a confirm dialog, and shows a new headed command with live progress. The
+  saved allowlist goes into it. The host's stored data is kept.
+- **Clean up this machine.** Makes a command for undoing an install that went onto the wrong
+  machine. It removes only an install made for this host, and refuses any other machine before it
+  changes anything.
+- **Danger zone.** Revoke host keys and Remove host both need the host name typed.
+
+The update and cleanup commands are served by `GET /t/{token}`, with a single-use token that
+lasts 30 minutes, like the install command. See `docs/ARCHITECTURE.md`, "Host settings".
+
 ## Direction: no longer read-only
 
 The owner reversed the earlier decision that Observe is read-only by

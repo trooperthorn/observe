@@ -220,6 +220,33 @@ def _add_enrolment_reports(db: sqlite3.Connection) -> None:
 
 ENROLMENT_REPORT_TABLES = (_add_enrolment_reports,)
 
+
+# Host settings (observe/hosttasks.py). The enrolment row gains a revision of its saved allowlist,
+# when it was saved and when its install command was last reissued. host_tasks holds the short
+# update and cleanup commands: one row each, a digest of the single-use token, a digest of the
+# step key and the install reports, like the enrolment row.
+def _add_settings_columns(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(enrolments)")}
+    if "allowlist_rev" not in columns:
+        db.execute("ALTER TABLE enrolments ADD COLUMN allowlist_rev INTEGER NOT NULL DEFAULT 0")
+    if "allowlist_saved_at" not in columns:
+        db.execute("ALTER TABLE enrolments ADD COLUMN allowlist_saved_at REAL")
+    if "reissued_at" not in columns:
+        db.execute("ALTER TABLE enrolments ADD COLUMN reissued_at REAL")
+
+
+HOST_TASK_TABLES = (
+    _add_settings_columns,
+    """CREATE TABLE IF NOT EXISTS host_tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT NOT NULL, kind TEXT NOT NULL,
+  platform TEXT NOT NULL, allowlist TEXT NOT NULL DEFAULT '{}', rev INTEGER NOT NULL DEFAULT 0,
+  token_hash TEXT NOT NULL UNIQUE, created REAL NOT NULL, created_by TEXT NOT NULL DEFAULT '',
+  expires_at REAL NOT NULL, fetched_at REAL, step_hash TEXT, reports TEXT NOT NULL DEFAULT '[]',
+  expiry_audited INTEGER NOT NULL DEFAULT 0
+)""",
+    "CREATE INDEX IF NOT EXISTS host_tasks_host ON host_tasks(host, id)",
+)
+
 MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = {
     1: BASELINE,
     2: HOST_TABLES,
@@ -232,6 +259,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     9: KEY_SCOPE_TABLES,
     10: ENROLMENT_TABLES,
     11: ENROLMENT_REPORT_TABLES,
+    12: HOST_TASK_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

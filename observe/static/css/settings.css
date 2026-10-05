@@ -1,0 +1,9 @@
+/* Host settings page. Tokens only, no colour literals. Loaded after wizard.css, which supplies
+   the form, command block and progress rows. */
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: var(--o-s1) var(--o-s4); margin: var(--o-s3) 0 0; }
+.kv dt { color: var(--o-text-muted); font-size: var(--o-fs-sm); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.danger-zone { border-color: var(--o-down); }
+.danger-zone > summary { color: var(--o-down); font-weight: 650; }
+#allowlist-state { display: flex; flex-wrap: wrap; align-items: center; gap: var(--o-s2); }
+.cmd-block .row-actions { margin: 0; }

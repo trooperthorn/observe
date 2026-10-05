@@ -94,6 +94,7 @@ dialog.dlg { background: var(--o-surface); color: var(--o-text); border: 1px sol
              width: calc(100% - 2 * var(--o-s4)); }
 dialog.dlg::backdrop { background: var(--o-surface-subtle); backdrop-filter: blur(2px); }
 .dlg .field { display: flex; flex-direction: column; gap: var(--o-s1); margin: var(--o-s3) 0; }
+.dlg-lines { margin: var(--o-s3) 0 0; padding-left: var(--o-s4); display: grid; gap: var(--o-s1); }
 .dlg-actions { display: flex; justify-content: flex-end; gap: var(--o-s2); margin-top: var(--o-s4); }
 
 /* ---- toasts ---- */

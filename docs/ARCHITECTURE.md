@@ -93,7 +93,9 @@ Version 3 adds `ingest_keys`, `users`, `sessions` and `audit`, and version 4 add
 `ingest_batches`, version 5 adds `plugin_schema`, and version 6 adds the
 infrastructure tables (see "Infrastructure map core"). Version 9 adds the
 `scope` column to `ingest_keys`; existing keys get `wpi`. Version 10 adds
-`enrolments` (see "Host enrolment") and version 11 adds its `step_hash` and `reports` columns. A migration step may
+`enrolments` (see "Host enrolment") and version 11 adds its `step_hash` and `reports` columns. Version 12 adds
+the `allowlist_rev`, `allowlist_saved_at` and `reissued_at` columns of `enrolments` and the `host_tasks` table (see "Host
+settings"). A migration step may
 be a function as well as a statement, so an `ALTER TABLE` can check first and
 stay safe to run again. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
@@ -362,7 +364,72 @@ Audit kinds: `enrol_created`, `enrol_create_failed`, `enrol_regenerated`, `enrol
 the expiry is first observed), `enrol_script_failed`, `enrol_step_refused` and
 `enrol_install_problem` (a step reported failed or refused). The rows name the host, the actor and the
 choices, never the token or a key. The audit redactor also recognises `wpc_`,
-`wpe_` and `wps_` shapes.
+`wpe_`, `wps_` and `wpt_` shapes.
+
+### Host settings
+
+`observe/hosttasks.py`, `observe/taskscripts.py` and the `host_tasks` table (schema version 12)
+back the host settings page (`GET /hosts/{name}/settings`, the static `host-settings.html`,
+`host-settings.js`, `js/settings-logic.js` and `css/settings.css`, admin only like the wizard).
+
+- **Reading.** `GET /api/hosts/{name}/settings` (admin session) returns the identity, the saved
+  allowlist, `allowlist_status`, which of the update and cleanup commands the platform has, the
+  number of active keys and the newest task with its state and step reports. It never returns a
+  token or a key. A host that was not added through the console is readable (`enrolled: false`)
+  so its keys can still be revoked or the host removed.
+- **Saving.** `PUT /api/hosts/{name}/allowlist` (admin and CSRF) takes the allowlist and
+  `confirmed: true`, validates it with the same rules as the create request
+  (`enrol.parse_allowlist`), refuses an unchanged list (409) and stores it with a new
+  `allowlist_rev`. When the install script was already fetched it also makes an update task and
+  returns its command. Before that there is no host to update, so no command is made and the
+  saved list goes into the install script. If only the command cannot be made, the list stays
+  saved and the response carries `command_error`.
+- **Tasks.** A task is a row in `host_tasks`: a host, a kind (`update` or `cleanup`), the platform,
+  the allowlist snapshot, a digest of a single-use `wpt_` token (30 minutes, one fetch), a digest
+  of the step key that the fetch mints and the script's reports. `POST /api/hosts/{name}/tasks`
+  (admin and CSRF, `kind` and `confirmed: true`) makes one, which is how an expired update command
+  is made again and how a cleanup command is made. `GET /t/{token}` serves the script. It follows
+  `GET /i/{token}`: no session, rate limited per peer, a dry render with placeholder values before
+  the token is spent, 410 for a used, expired or unknown token, `no-store`. A newer task of the
+  same kind removes the older unfetched one, so only the newest command works. The scripts report
+  through `POST /api/enrol/step`, which tries the install step keys first and then the task step
+  keys. The task state is `waiting`, `fetched`, `done` (a `done` report), `failed` (a step failed
+  or was refused) or `expired`.
+- **Update script (Linux and Raspberry Pi).** Same three guards as the install script, then it
+  checks that a control install is there, writes `control.toml.new` (with the local `machine_id`
+  before the first table), renders the sudoers rules from it, checks them with `visudo -c`, and only
+  then moves the file and the rules into place and restarts `hostwatch-control`. It carries no key
+  and does not touch the keys.
+- **Cleanup scripts (all four platforms).** The root guard, then a match guard in place of the
+  hostname and Observe-host guards. The machine that holds a mistaken install is by definition not
+  the machine with that name, so the cleanup runs where an install made for the named host is found
+  (`HOSTWATCH_HOST_NAME=` in `agent.env`, or `host =` in `control.toml`, or the Windows
+  `agent.env`, or `/mnt/*/hostwatch/agent.env` on TrueNAS) and refuses anywhere else before it
+  changes anything. It removes the agent container and settings, the control unit, rules, files,
+  folder and account, and keeps the data volumes and folders. It does not revoke keys.
+- **Status.** `hosttasks.allowlist_status` derives `pending`, `written` and `applied`. The list is
+  written when the install script was fetched after the save (and did not report a failure), or when
+  an update script of the current revision reported `control_config` ok. It is applied when the
+  `wpc` key's last use is not older than that write, because only a daemon that was restarted with
+  the new file pulls again. `none` is a host without control.
+- **Reissue.** `POST /api/hosts/{name}/enrolment/reissue` (admin and CSRF, `confirmed: true`) is the
+  regenerate that also works after the script was fetched. In one transaction it replaces the token,
+  revokes every `wpi` and `wpc` key bound to the host, and clears the fetch, the step key, the
+  reports and the key prefixes. It also removes unfetched tasks. The saved allowlist goes into the new
+  script, and the progress counts data only from a batch after the reissue. A fetch that was already
+  claimed when the reissue ran could still mint keys afterwards, which is a narrow race left
+  open (see THREAT-MODEL.md).
+- **Danger zone.** `POST /api/hosts/{name}/keys/revoke` and `POST /api/hosts/{name}/remove` need
+  `confirm_host` equal to the host name. Revoke revokes the `wpi` and `wpc` keys of the host. Remove
+  does that, then deletes the enrolment, its tasks and the host's stored rows (`hosts`,
+  `host_samples`, `host_sources`, `host_events`, `ingest_batches`) in one transaction, and keeps the
+  audit log and the control command history. A host listed in the Observe config is refused (409)
+  because it would come back.
+- **Audit kinds.** `host_allowlist_saved`, `host_allowlist_failed`, `host_task_created`,
+  `host_task_failed`, `host_task_fetched`, `host_task_fetch_failed`, `host_task_script_failed`,
+  `host_task_expired`, `enrol_reissued`, `enrol_reissue_failed`, `host_keys_revoked`,
+  `host_keys_revoke_failed`, `host_removed` and `host_remove_failed`. They name the host, the
+  actor, counts and a reason, never a token or a key.
 
 `admin.js`, `audit.js`, `infra-admin.js` and `port.js` are ES modules that use the shared
 `table.js`, `chips.js`, `dialog.js` and `toast.js` modules, plus `js/admin-ui.js` (card, button,

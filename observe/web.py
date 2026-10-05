@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import hmac
+import json
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -31,7 +32,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from . import audit
 from . import auth as authmod
-from . import enrol, scripts
+from . import enrol, hosttasks, scripts, taskscripts
 from . import hostview
 from .alerts import Alerter
 from .config import Config
@@ -921,9 +922,12 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
               and body.get("step") in enrol.INSTALL_STEPS
               and body.get("status") in enrol.STEP_STATUSES
               and isinstance(body.get("note", ""), str))
-        host = await enrol.record_step(
-            store, key, str(body["step"]) if ok else "", str(body["status"]) if ok else "",
-            body.get("note", "") if ok else "", auth_clock()) if key and ok else None
+        args = (key, str(body["step"]) if ok else "", str(body["status"]) if ok else "",
+                body.get("note", "") if ok else "", auth_clock())
+        host = await enrol.record_step(store, *args) if key and ok else None
+        if host is None and key and ok:
+            # Not an install's step key: it may belong to an update or cleanup task.
+            host = await hosttasks.record_step(store, *args)
         if host is None:
             # Bounded like login and plugin denials: one row per peer per window, with a count.
             covered = step_denials.note(remote or "unknown")
@@ -942,6 +946,326 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                                detail={"host": host, "step": body["step"],
                                        "status": body["status"]})
         return Response(status_code=204)
+
+    # ---- Host settings (docs/GUI-DESIGN.md section 3.11) ----
+    def script_context(request: Request) -> scripts.Context:
+        listen = scripts.usable_address(config.server.listen)
+        addrs = [a for a in (listen, scripts.usable_address(request.url.hostname or ""))
+                 if a is not None]
+        return scripts.Context(str(request.base_url).rstrip("/"), app.state.observe_machine_id,
+                               tuple(dict.fromkeys(addrs)), control_public_key())
+
+    async def body_of(request: Request) -> dict[str, Any]:
+        try:
+            body = await request.json()
+        except ValueError:
+            return {}
+        return body if isinstance(body, dict) else {}
+
+    async def enrolment_row(host: str) -> tuple[Any, ...] | None:
+        rows = await store._run(
+            "SELECT platform, agent, control, allowlist, created, created_by, fetched_at, "
+            "allowlist_rev FROM enrolments WHERE host=?", (host,))
+        return rows[0] if rows else None
+
+    async def settings_refused(sess: authmod.Session, request: Request, kind: str, host: str,
+                               status: int, reason: str) -> JSONResponse:
+        await audit.record(store, kind, actor=sess.username, method=request.method,
+                           path="/api/hosts/[host]/" + request.url.path.rsplit("/", 1)[-1],
+                           status=status, remote=request.client.host if request.client else "",
+                           detail={"host": host[:MAX_NAME], "reason": reason})
+        return JSONResponse({"detail": reason}, status_code=status)
+
+    async def make_task(request: Request, sess: authmod.Session, host: str, kind: str,
+                        row: tuple[Any, ...], now: float) -> JSONResponse:
+        """Store a task for the host and return its headed command, or a JSON refusal."""
+        platform, control, allowlist, rev = row[0], row[2], row[3], row[7]
+        if not taskscripts.task_supported(kind, platform):
+            return await settings_refused(sess, request, "host_task_failed", host, 409,
+                                          "this kind of command is not available for this platform")
+        if kind == "update" and not control:
+            return await settings_refused(sess, request, "host_task_failed", host, 409,
+                                          "control was not chosen for this host")
+        if kind == "update" and not control_public_key():
+            return await settings_refused(sess, request, "host_task_failed", host, 409,
+                                          "control is not set up on this Observe server")
+        # Dry run with a placeholder step key: a bad Host header or listen address is found
+        # before anything is stored.
+        try:
+            taskscripts.render_task(hosttasks.RedeemedTask(
+                host, kind, platform, json.loads(allowlist), rev, "wps_" + "x" * 20),
+                script_context(request))
+        except scripts.ScriptError as err:
+            return await settings_refused(sess, request, "host_task_failed", host, 500,
+                                          f"Observe could not build the script: {err}")
+        token = await hosttasks.create_task(store, host, kind, platform, json.loads(allowlist),
+                                            rev, sess.username, now)
+        await audit.record(store, "host_task_created", actor=sess.username, method=request.method,
+                           path="/api/hosts/[host]/tasks", status=200,
+                           remote=request.client.host if request.client else "",
+                           detail={"host": host[:MAX_NAME], "kind": kind, "platform": platform,
+                                   "rev": rev})
+        return JSONResponse({
+            "host": host, "kind": kind, "platform": platform,
+            "platform_label": enrol.PLATFORMS[platform],
+            "expires_at": now + enrol.TOKEN_TTL_S, "ttl_s": enrol.TOKEN_TTL_S,
+            "command": hosttasks.task_command_text(host, platform, kind, str(request.base_url),
+                                                   token)})
+
+    @app.get("/hosts/{host}/settings", include_in_schema=False)
+    async def host_settings_page(host: str) -> FileResponse:
+        # The page holds no data; host-settings.js needs an admin session for everything it does.
+        return FileResponse(STATIC / "host-settings.html")
+
+    @app.get("/api/hosts/{host}/settings", include_in_schema=False)
+    async def host_settings(host: str, _: authmod.Session = Depends(guards.admin)) -> Response:
+        """What the settings page shows for one host: identity, the saved allowlist, whether the
+        host has picked it up, and the newest update or cleanup task. Admin session. It never
+        returns a token or a key."""
+        now = auth_clock()
+        row = await enrolment_row(host)
+        reporting = {r["host"]: r for r in await store.host_rows()}.get(host)
+        keys = await store._run(
+            "SELECT COUNT(*) FROM ingest_keys WHERE host=? AND scope IN ('wpi', 'wpc') "
+            "AND revoked_at IS NULL", (host,))
+        if row is None and reporting is None and host not in pushed and not keys[0][0]:
+            raise HTTPException(404, "unknown host")
+        out: dict[str, Any] = {
+            "host": host, "enrolled": row is not None, "in_config": host in pushed,
+            "reporting": reporting is not None, "active_keys": keys[0][0],
+            "agent_version": reporting["agent_version"] if reporting else "",
+            "control_ready": bool(control_public_key()), "ttl_s": enrol.TOKEN_TTL_S,
+            "platform": "", "platform_label": "", "agent": False, "control": False,
+            "created": None, "created_by": "", "installed": False, "allowlist": None,
+            "allowlist_status": None, "can_update": False, "can_cleanup": False, "task": None}
+        if row is not None:
+            platform, agent, control, allowlist, created, created_by, fetched_at, _rev = row
+            out.update(
+                platform=platform, platform_label=enrol.PLATFORMS[platform], agent=bool(agent),
+                control=bool(control), created=created, created_by=created_by,
+                installed=fetched_at is not None,
+                allowlist=enrol.spec_from_row(host, platform, agent, control, allowlist).allowlist(),
+                allowlist_status=await hosttasks.allowlist_status(store, host),
+                can_update=bool(control) and taskscripts.task_supported("update", platform),
+                can_cleanup=taskscripts.task_supported("cleanup", platform))
+            task = await hosttasks.latest(store, host, now)
+            if task is not None and task["state"] == "expired" \
+                    and await hosttasks.claim_expiry_audit(store, task["id"], now):
+                await audit.record(store, "host_task_expired", method="GET",
+                                   path="/api/hosts/[host]/settings", status=200,
+                                   detail={"host": host[:MAX_NAME], "kind": task["kind"]})
+            out["task"] = task
+        return JSONResponse(out)
+
+    @app.put("/api/hosts/{host}/allowlist", include_in_schema=False)
+    async def save_allowlist(
+            host: str, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Save the control allowlist of an enrolled host and, when the install command was
+        already run, make the short update command that rewrites control.toml on the host. The
+        body is the allowlist (fans, services, reboot) and `confirmed: true`, which the diff
+        dialog sets. Before the install command is run there is no host to update, so the
+        saved allowlist simply goes into the install script, and no command is made."""
+        body = await body_of(request)
+        row = await enrolment_row(host)
+        if row is None:
+            return await settings_refused(sess, request, "host_allowlist_failed", host, 404,
+                                          "this host was not added through the console")
+        platform, agent, control, stored, _created, _by, fetched_at, _rev = row
+        if not control:
+            return await settings_refused(sess, request, "host_allowlist_failed", host, 409,
+                                          "control was not chosen for this host")
+        if body.get("confirmed") is not True:
+            return await settings_refused(sess, request, "host_allowlist_failed", host, 400,
+                                          "the change was not confirmed")
+        try:
+            fans, services, reboot = enrol.parse_allowlist(
+                {k: v for k, v in body.items() if k != "confirmed"})
+        except enrol.EnrolError as err:
+            return await settings_refused(sess, request, "host_allowlist_failed", host,
+                                          err.status, err.reason)
+        old = enrol.spec_from_row(host, platform, agent, control, stored)
+        new = enrol.Spec(host, platform, bool(agent), True, tuple(fans), tuple(services), reboot)
+        if new.allowlist() == old.allowlist():
+            return await settings_refused(sess, request, "host_allowlist_failed", host, 409,
+                                          "the allowlist is unchanged")
+        now = auth_clock()
+        saved = await store._run(
+            "UPDATE enrolments SET allowlist=?, allowlist_rev=allowlist_rev+1, "
+            "allowlist_saved_at=? WHERE host=? RETURNING allowlist_rev",
+            (json.dumps(new.allowlist(), sort_keys=True), now, host))
+        rev = saved[0][0]
+        old_fans, new_fans = {h for h, _ in old.fans}, {h for h, _ in new.fans}
+        await audit.record(store, "host_allowlist_saved", actor=sess.username, method="PUT",
+                           path="/api/hosts/[host]/allowlist", status=200,
+                           remote=request.client.host if request.client else "",
+                           detail={"host": host[:MAX_NAME], "rev": rev,
+                                   "fans_added": len(new_fans - old_fans),
+                                   "fans_removed": len(old_fans - new_fans),
+                                   "services_added": len(set(new.services) - set(old.services)),
+                                   "services_removed": len(set(old.services) - set(new.services)),
+                                   "reboot": reboot})
+        out: dict[str, Any] = {"saved": True, "rev": rev, "command": None,
+                               "allowlist": new.allowlist()}
+        if fetched_at is not None:
+            fresh = await enrolment_row(host)
+            assert fresh is not None
+            made = await make_task(request, sess, host, "update", fresh, now)
+            if made.status_code != 200:
+                # The allowlist is saved; only the command could not be made. The page shows the
+                # reason and the pending status, and the command can be asked for again.
+                out["command_error"] = json.loads(made.body)["detail"]
+            else:
+                out.update(json.loads(made.body))
+        out["allowlist_status"] = await hosttasks.allowlist_status(store, host)
+        return JSONResponse(out)
+
+    @app.post("/api/hosts/{host}/tasks", include_in_schema=False)
+    async def create_host_task(
+            host: str, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """A new update command for the saved allowlist (when the earlier one expired) or a
+        cleanup command for the machine that holds the install. The body is `kind` (update or
+        cleanup) and `confirmed: true`. The token is in this response only (no-store)."""
+        body = await body_of(request)
+        kind = body.get("kind")
+        if kind not in hosttasks.KINDS:
+            return await settings_refused(sess, request, "host_task_failed", host, 422,
+                                          "kind must be update or cleanup")
+        if body.get("confirmed") is not True:
+            return await settings_refused(sess, request, "host_task_failed", host, 400,
+                                          "the request was not confirmed")
+        row = await enrolment_row(host)
+        if row is None:
+            return await settings_refused(sess, request, "host_task_failed", host, 404,
+                                          "this host was not added through the console")
+        if row[6] is None:
+            what = ("update. The saved allowlist is in the install command."
+                    if kind == "update" else "clean up.")
+            return await settings_refused(
+                sess, request, "host_task_failed", host, 409,
+                "the install command has not been run yet, so there is nothing to " + what)
+        return await make_task(request, sess, host, kind, row, auth_clock())
+
+    @app.post("/api/hosts/{host}/enrolment/reissue", include_in_schema=False)
+    async def reissue_enrolment(
+            host: str, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """A new full install command for a host whose script was already run: the old token,
+        the old keys and the old install's reports are revoked at once. The body is
+        `confirmed: true` (the dialog) and optionally `pool`. The saved allowlist goes into the
+        new script. The host's data is kept. The token is in this response only (no-store)."""
+        body = await body_of(request)
+        if body.get("confirmed") is not True:
+            return await settings_refused(sess, request, "enrol_reissue_failed", host, 400,
+                                          "the request was not confirmed")
+        now = auth_clock()
+        made = await enrol.reissue_enrolment(store, host, now)
+        if made is None:
+            return await settings_refused(sess, request, "enrol_reissue_failed", host, 404,
+                                          "this host was not added through the console")
+        token, spec, revoked = made
+        # An update command made for the old install is dead too: the new script carries the
+        # saved allowlist.
+        await store._run("DELETE FROM host_tasks WHERE host=? AND fetched_at IS NULL", (host,))
+        try:
+            pool = enrol.parse_pool(body.get("pool"), spec.platform)
+        except enrol.EnrolError:
+            pool = ""
+        await audit.record(store, "enrol_reissued", actor=sess.username, method="POST",
+                           path="/api/hosts/[host]/enrolment/reissue", status=200,
+                           remote=request.client.host if request.client else "",
+                           detail={"host": host[:MAX_NAME], "platform": spec.platform,
+                                   "keys_revoked": revoked})
+        return JSONResponse({
+            "host": spec.name, "platform": spec.platform,
+            "platform_label": enrol.PLATFORMS[spec.platform], "keys_revoked": revoked,
+            "expires_at": now + enrol.TOKEN_TTL_S, "ttl_s": enrol.TOKEN_TTL_S,
+            "command": enrol.command_text(spec.name, spec.platform, str(request.base_url),
+                                          token, pool)})
+
+    @app.post("/api/hosts/{host}/keys/revoke", include_in_schema=False)
+    async def revoke_host_keys(
+            host: str, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Revoke every agent and control key bound to the host. The body is `confirm_host`,
+        which must equal the host name character for character (the typed confirmation)."""
+        body = await body_of(request)
+        if body.get("confirm_host") != host:
+            return await settings_refused(sess, request, "host_keys_revoke_failed", host, 400,
+                                          "type the host name exactly to confirm")
+        count = await hosttasks.revoke_host_keys(store, host, auth_clock())
+        await audit.record(store, "host_keys_revoked", actor=sess.username, method="POST",
+                           path="/api/hosts/[host]/keys/revoke", status=200,
+                           remote=request.client.host if request.client else "",
+                           detail={"host": host[:MAX_NAME], "keys_revoked": count})
+        return JSONResponse({"host": host, "keys_revoked": count})
+
+    @app.post("/api/hosts/{host}/remove", include_in_schema=False)
+    async def remove_host(
+            host: str, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Remove the host: revoke its keys and delete its enrolment, tasks and stored hardware
+        data. The audit log and the control command history are kept. The body is
+        `confirm_host`, which must equal the host name exactly. A host that is listed in the
+        Observe config is refused (409), because it would come back."""
+        body = await body_of(request)
+        if body.get("confirm_host") != host:
+            return await settings_refused(sess, request, "host_remove_failed", host, 400,
+                                          "type the host name exactly to confirm")
+        if host in pushed:
+            return await settings_refused(sess, request, "host_remove_failed", host, 409,
+                                          "this host is listed in the Observe config; remove "
+                                          "it there first")
+        counts = await hosttasks.remove_host(store, host, auth_clock())
+        if counts is None:
+            return await settings_refused(sess, request, "host_remove_failed", host, 404,
+                                          "unknown host")
+        await audit.record(store, "host_removed", actor=sess.username, method="POST",
+                           path="/api/hosts/[host]/remove", status=200,
+                           remote=request.client.host if request.client else "",
+                           detail={"host": host[:MAX_NAME], **counts})
+        return JSONResponse({"host": host, "removed": counts})
+
+    @app.get("/t/{token}", include_in_schema=False)
+    async def task_script(token: str, request: Request) -> Response:
+        """The script of an update or cleanup task. No session: the single-use token in the path
+        is the credential, spent by this fetch (a second fetch is 410). A kind with no script for
+        the platform, or an update without a loaded control plugin, is refused before the token
+        is spent. The response is `no-store` and the token is never logged."""
+        remote = request.client.host if request.client else ""
+        if not enrol_limiter.allow(remote or "unknown"):
+            raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": "60"})
+        now = auth_clock()
+        known = await hosttasks.peek(store, token, now)
+        platform_of = known[1] if known is not None else ""
+        ctx = script_context(request)
+        if known is not None:
+            kind, platform, host, allowlist = known
+            if not taskscripts.task_supported(kind, platform):
+                raise HTTPException(501, "no script for this platform")
+            if kind == "update" and not control_public_key():
+                raise HTTPException(409, "control is not set up on this Observe server")
+            try:
+                taskscripts.render_task(hosttasks.RedeemedTask(
+                    host, kind, platform, allowlist, 0, "wps_" + "x" * 20), ctx)
+            except scripts.ScriptError as err:
+                await audit.record(store, "host_task_script_failed", method="GET",
+                                   path="/t/[token]", status=500, remote=remote,
+                                   detail={"reason": str(err), "token_spent": False})
+                return PlainTextResponse(scripts.error_body(platform_of), status_code=500)
+        task = await hosttasks.redeem(store, token, now, remote)
+        if task is None:
+            return PlainTextResponse("This command was already used or has expired. "
+                                     "Make a new one in the Observe console.\n", status_code=410)
+        try:
+            body = taskscripts.render_task(task, ctx)
+        except scripts.ScriptError as err:
+            await audit.record(store, "host_task_script_failed", method="GET", path="/t/[token]",
+                               status=500, remote=remote,
+                               detail={"host": task.host, "reason": str(err)})
+            return PlainTextResponse(scripts.error_body(platform_of), status_code=500)
+        return PlainTextResponse(body, media_type=scripts.media_type(task.platform))
 
     @app.get("/api/hosts/{host:path}", include_in_schema=False)
     async def host_detail(host: str,
