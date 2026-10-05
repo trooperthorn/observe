@@ -147,14 +147,15 @@ def test_keys_are_never_echoed_or_sent_in_a_report():
 
 
 @pytest.mark.parametrize("bad", ["nas01; rm -rf /", "nas01'", "NAS01", "a b", "$(id)", "a`id`",
-                                 "nas01\nx", "", "x" * 64, "-nas"])
+                                 "nas01\nx", "nas01\n", "", "x" * 64, "-nas"])
 def test_hostile_host_names_are_not_rendered(bad):
     with pytest.raises(scripts.ScriptError):
         scripts.render_linux(red(host=bad), CTX)
 
 
 @pytest.mark.parametrize("allow", [
-    {"fans": ["fan;id"]}, {"fans": ["a b"]}, {"fans": ["$(id)"]},
+    {"fans": ["fan;id"]}, {"fans": ["fan\n"]}, {"services": ["smbd\n"]},
+    {"services": ["docker:web\n"]}, {"fans": ["a b"]}, {"fans": ["$(id)"]},
     {"fans": [{"header": "f", "min_duty_limit": 101}]},
     {"services": ["smbd'; id; '"]}, {"services": ["a|b"]}, {"services": ["x\ny"]},
     {"services": ["a@b"]}, {"services": ["a..b"]}, {"services": ["-x"]},
@@ -204,6 +205,16 @@ def test_fetch_serves_the_script_once_then_410(env):
     assert env.rows("SELECT COUNT(*) FROM ingest_keys") == keys
     assert audit_kinds(env).count("enrol_fetched") == 1
     assert audit_kinds(env).count("enrol_fetch_failed") == 1
+
+
+def test_a_bad_host_header_is_refused_before_the_token_is_spent(env):
+    hdr = admin(env)
+    token = token_of(create(env, hdr, platform="linux"))
+    keys = env.rows("SELECT COUNT(*) FROM ingest_keys")
+    bad = env.client.get(f"/i/{token}", headers={"Host": "bad_host.lan"})
+    assert bad.status_code == 500 and "wpi_" not in bad.text
+    assert env.rows("SELECT COUNT(*) FROM ingest_keys") == keys
+    assert env.client.get(f"/i/{token}").status_code == 200
 
 
 def test_fetched_script_carries_this_servers_guard_values(env):

@@ -823,16 +823,30 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                 raise HTTPException(501, "no install script for this platform yet")
             if wants_control and not control_public_key():
                 raise HTTPException(409, "control is not set up on this Observe server")
-        red = await enrol.redeem(store, token, now, remote)
-        if red is None:
-            return PlainTextResponse("This install command was already used or has expired. "
-                                     "Make a new one in the Observe console.\n", status_code=410)
         listen = scripts.usable_address(config.server.listen)
         addrs = [a for a in (listen, scripts.usable_address(request.url.hostname or ""))
                  if a is not None]
         ctx = scripts.Context(str(request.base_url).rstrip("/"),
                               app.state.observe_machine_id, tuple(dict.fromkeys(addrs)),
                               control_public_key())
+        if known is not None:
+            # Dry run with placeholder values: a bad Host header or listen address is found
+            # before the token is spent and the keys are minted.
+            dummy = enrol.Redeemed("dry-run", platform, "wpi_" + "x" * 20,
+                                   "wpc_" + "x" * 20 if wants_control else None,
+                                   {"fans": [], "services": [], "reboot": False}, "wps_" + "x" * 20)
+            try:
+                scripts.render_linux(dummy, ctx)
+            except scripts.ScriptError as err:
+                await audit.record(store, "enrol_script_failed", method="GET", path="/i/[token]",
+                                   status=500, remote=remote,
+                                   detail={"reason": str(err), "token_spent": False})
+                return PlainTextResponse("echo 'Observe could not build this script' >&2; exit 1\n",
+                                         status_code=500)
+        red =await enrol.redeem(store, token, now, remote)
+        if red is None:
+            return PlainTextResponse("This install command was already used or has expired. "
+                                     "Make a new one in the Observe console.\n", status_code=410)
         try:
             body = scripts.render_linux(red, ctx)
         except scripts.ScriptError as err:

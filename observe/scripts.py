@@ -56,7 +56,7 @@ def _q(value: str) -> str:
 
 
 def _need(pattern: re.Pattern[str], value: Any, what: str) -> str:
-    if not isinstance(value, str) or not pattern.match(value):
+    if not isinstance(value, str) or not pattern.fullmatch(value):
         raise ScriptError(f"{what} has characters that are not allowed")
     return value
 
@@ -224,7 +224,10 @@ main() {
     refuse observe_host "machine id is the Observe host" "this is the Observe host itself. Install agents on the machines to be monitored, not here."
   fi
   url_host=${OBSERVE_URL#*://}
-  url_host=${url_host%%:*}
+  case $url_host in
+    '['*) url_host=${url_host#\[}; url_host=${url_host%%]*} ;;
+    *) url_host=${url_host%%:*} ;;
+  esac
   resolved=$(getent hosts "$url_host" 2>/dev/null | awk '{print $1}' || true)
   for addr in $OBSERVE_ADDRS $resolved; do
     for mine in $here_addrs; do
@@ -263,10 +266,17 @@ install_agent() {
     printf 'HOSTWATCH_HOST_NAME=%s\n' "$HOST_NAME"
   } > "$ETC/agent.env.new" || fail agent "cannot write settings" "cannot write the agent settings"
   umask 022
-  chmod 0600 "$ETC/agent.env.new"
-  mv -f "$ETC/agent.env.new" "$ETC/agent.env"
+  chmod 0600 "$ETC/agent.env.new" && mv -f "$ETC/agent.env.new" "$ETC/agent.env" ||
+    fail agent "cannot secure settings" "cannot secure the agent settings"
   docker pull "$IMAGE" >/dev/null 2>&1 || say "Could not pull $IMAGE, using a local copy if there is one."
-  docker rm -f hostwatch-agent >/dev/null 2>&1 || true
+  # Keep the old container until the new one runs, so a failed start does not leave no agent.
+  docker rm -f hostwatch-agent-prev >/dev/null 2>&1 || true
+  had_old=0
+  if docker inspect hostwatch-agent >/dev/null 2>&1; then
+    docker stop hostwatch-agent >/dev/null 2>&1 || true
+    docker rename hostwatch-agent hostwatch-agent-prev >/dev/null 2>&1 &&
+      had_old=1 || docker rm -f hostwatch-agent >/dev/null 2>&1 || true
+  fi
   set -- --detach --name hostwatch-agent --restart unless-stopped --network host \
     --user 10001:10001 --read-only --tmpfs /tmp --cap-drop ALL \
     --security-opt no-new-privileges:true --env-file "$ETC/agent.env" \
@@ -276,7 +286,15 @@ install_agent() {
   if [ -d /var/log/journal ]; then set -- "$@" --volume /var/log/journal:/host/journal:ro; fi
   if [ -d /run/log/journal ]; then set -- "$@" --volume /run/log/journal:/host/journal-volatile:ro; fi
   if [ -d /run/thermalctl ]; then set -- "$@" --volume /run/thermalctl:/run/thermalctl:ro; fi
-  docker run "$@" "$IMAGE" >/dev/null 2>&1 || fail agent "container did not start" "docker could not start the agent container"
+  if ! docker run "$@" "$IMAGE" >/dev/null 2>&1; then
+    docker rm -f hostwatch-agent >/dev/null 2>&1 || true
+    if [ "$had_old" = 1 ]; then
+      docker rename hostwatch-agent-prev hostwatch-agent >/dev/null 2>&1 &&
+        docker start hostwatch-agent >/dev/null 2>&1 || true
+    fi
+    fail agent "container did not start" "docker could not start the agent container. Any earlier agent was put back."
+  fi
+  docker rm -f hostwatch-agent-prev >/dev/null 2>&1 || true
   report agent ok "agent container running"
   say "Agent container started."
 }
@@ -307,18 +325,19 @@ install_control() {
     if [ -n "$here_id" ]; then printf 'machine_id = "%s"\n' "$here_id"; fi
   } > "$ETC/control.toml.new" || fail control_config "cannot write settings" "cannot write control.toml"
   umask 022
-  chown root:hostwatch-control "$ETC/control.toml.new"
-  chmod 0640 "$ETC/control.toml.new"
-  mv -f "$ETC/control.toml.new" "$ETC/control.toml"
+  # The daemon runs as hostwatch-control and must read these, so they are root:hostwatch-control 0640.
+  { chown root:hostwatch-control "$ETC/control.toml.new" && chmod 0640 "$ETC/control.toml.new" &&
+      mv -f "$ETC/control.toml.new" "$ETC/control.toml"; } ||
+    fail control_config "cannot set modes" "cannot secure control.toml"
   umask 077
   {
     printf 'HOSTWATCH_CONTROL_URL=%s\n' "$OBSERVE_URL"
     printf 'HOSTWATCH_CONTROL_KEY=%s\n' "$CONTROL_KEY"
   } > "$ETC/control.env.new" || fail control_config "cannot write settings" "cannot write control.env"
   umask 022
-  chown root:hostwatch-control "$ETC/control.env.new"
-  chmod 0640 "$ETC/control.env.new"
-  mv -f "$ETC/control.env.new" "$ETC/control.env"
+  { chown root:hostwatch-control "$ETC/control.env.new" && chmod 0640 "$ETC/control.env.new" &&
+      mv -f "$ETC/control.env.new" "$ETC/control.env"; } ||
+    fail control_config "cannot set modes" "cannot secure control.env"
   report control_config ok "control settings written"
 
   sudoers_tmp=$(mktemp) || fail sudoers "no temporary file" "cannot create a temporary file"
@@ -328,13 +347,17 @@ install_control() {
     rm -f "$sudoers_tmp"
     fail sudoers "visudo rejected the rules" "visudo rejected the generated rules, so none were installed"
   fi
-  install -o root -g root -m 0440 "$sudoers_tmp" /etc/sudoers.d/hostwatch-control
+  if ! install -o root -g root -m 0440 "$sudoers_tmp" /etc/sudoers.d/hostwatch-control; then
+    rm -f "$sudoers_tmp"
+    fail sudoers "install failed" "could not install the sudoers rules"
+  fi
   rm -f "$sudoers_tmp"
   report sudoers ok "sudoers checked and installed"
 
   cat > /etc/systemd/system/hostwatch-control.service <<'UNIT_EOF'
 @@UNIT@@UNIT_EOF
-  chmod 0644 /etc/systemd/system/hostwatch-control.service
+  chmod 0644 /etc/systemd/system/hostwatch-control.service ||
+    fail control_unit "cannot set unit mode" "cannot set the mode of the service file"
   systemctl daemon-reload &&
     systemctl enable hostwatch-control >/dev/null 2>&1 &&
     systemctl restart hostwatch-control ||

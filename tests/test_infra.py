@@ -307,6 +307,7 @@ def test_phase5_database_migrates_keeping_rows(tmp_path):
                       **{t: 0 for t in INFRA}}
     assert INFRA <= tables(path)
     assert SCHEMA_VERSION >= 10
+    assert 10 in MIGRATIONS and 11 in MIGRATIONS  # 11 is the S11b enrolment reports step
     assert "infra_dependencies" in tables(path)
 
 

@@ -81,7 +81,7 @@ def _services(raw: Any) -> list[str]:
         raise EnrolError(f"services must be a list of at most {MAX_ALLOWLIST_ENTRIES} entries")
     out: list[str] = []
     for item in raw:
-        if not isinstance(item, str) or not _SERVICE.match(item) or ".." in item:
+        if not isinstance(item, str) or not _SERVICE.fullmatch(item) or ".." in item:
             raise EnrolError("services has an entry with characters that are not allowed")
         if item not in out:
             out.append(item)
@@ -108,7 +108,7 @@ def _fans(raw: Any) -> list[tuple[str, int | None]]:
             item = item.get("header")
             if limit is not None and (type(limit) is not int or not 0 <= limit <= 100):
                 raise EnrolError("min_duty_limit must be a whole number from 0 to 100")
-        if not isinstance(item, str) or not _HEADER.match(item):
+        if not isinstance(item, str) or not _HEADER.fullmatch(item):
             raise EnrolError("fans has an entry with characters that are not allowed")
         if any(h == item for h, _ in out):
             continue
@@ -121,7 +121,7 @@ def parse_spec(body: Any) -> Spec:
     if not isinstance(body, dict):
         raise EnrolError("the request must be a JSON object")
     name = body.get("name")
-    if not isinstance(name, str) or not _NAME.match(name):
+    if not isinstance(name, str) or not _NAME.fullmatch(name):
         raise EnrolError("name must be 1 to 63 characters: lower-case letters, digits and "
                          "dashes, starting and ending with a letter or digit")
     platform = body.get("platform")

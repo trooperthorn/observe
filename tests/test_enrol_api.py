@@ -87,7 +87,7 @@ def test_windows_gets_a_powershell_command_and_control_is_refused(env):
 
 
 @pytest.mark.parametrize("over", [
-    {"name": ""}, {"name": "NAS01"}, {"name": "-nas"}, {"name": "nas_01"}, {"name": "a b"},
+    {"name": ""}, {"name": "nas01\n"}, {"name": "NAS01"}, {"name": "-nas"}, {"name": "nas_01"}, {"name": "a b"},
     {"name": "x" * 64}, {"name": "nas01/../x"}, {"name": 5},
     {"platform": "freebsd"}, {"platform": None},
     {"agent": "yes"}, {"control": 1}, {"agent": False, "control": False},
@@ -98,6 +98,8 @@ def test_windows_gets_a_powershell_command_and_control_is_refused(env):
     {"allowlist": {"fans": [{"header": "f", "extra": 1}]}},
     {"allowlist": {"services": ["smbd`id`"]}}, {"allowlist": {"services": ["a|b"]}},
     {"allowlist": {"services": ["a\nb"]}}, {"allowlist": {"services": ["a'b"]}},
+    {"allowlist": {"services": ["smbd\n"]}}, {"allowlist": {"fans": ["fan\n"]}},
+    {"allowlist": {"fans": [{"header": "fan\n"}]}},
     {"allowlist": {"services": ["x" * 129]}}, {"allowlist": {"services": "smbd"}},
     {"allowlist": {"fans": [f"f{i}" for i in range(33)]}},
     {"allowlist": {"reboot": "true"}}, {"allowlist": {"other": []}}, {"allowlist": []},
