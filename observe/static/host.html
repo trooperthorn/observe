@@ -3,22 +3,26 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>host - observe</title>
+<title>Host - Observe</title>
 <link rel="stylesheet" href="/static/css/tokens.css">
 <link rel="stylesheet" href="/static/css/base.css">
 <link rel="stylesheet" href="/static/css/shell.css">
+<link rel="stylesheet" href="/static/css/components.css">
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/css/host.css">
 </head>
 <body>
 <header id="shell-header" class="shell-head">
   <div id="summary" aria-live="polite"></div>
 </header>
 <nav id="shell-nav" aria-label="Main"></nav>
-<main class="hostpage" id="page"></main>
-<section class="sec ctl" id="control" hidden></section>
+<main class="hostpage host-main">
+  <div id="page" class="host-body"></div>
+  <section class="card ctl" id="control" aria-labelledby="control-h" hidden></section>
+</main>
 <footer id="footer"></footer>
-<script src="/static/host.js"></script>
-<script src="/static/host-control.js"></script>
+<script type="module" src="/static/host.js"></script>
+<script type="module" src="/static/host-control.js"></script>
 <script type="module" src="/static/js/shell.js"></script>
 </body>
 </html>

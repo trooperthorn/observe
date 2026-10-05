@@ -1,24 +1,25 @@
-// Per-host hardware page. Every string came from a host agent, so it is written
-// with textContent only, never innerHTML.
-"use strict";
+// Per-host hardware page. Every string came from a host agent, so it is written with
+// textContent only, never as markup. The Control section is a separate module that mounts
+// itself into its own card, so a refresh of this page never touches it.
+import { el } from "/static/js/dom.js";
+import { statusChip } from "/static/js/chips.js";
 
 const SECTIONS = [
   ["cpu", "CPU"], ["memory", "Memory"], ["power", "Power"], ["temperatures", "Temperatures"],
   ["fans", "Fans and controller"], ["raid", "RAID"], ["zfs", "ZFS pools"], ["disks", "Disks"],
   ["ups", "UPS"], ["alerts", "Alerts"],
 ];
+const KPI_SECTIONS = ["cpu", "temperatures", "fans", "disks"];
 const STATE_TEXT = {
   stale: "stale", unavailable: "source unavailable", absent: "not present on this host",
   not_reported: "never reported",
 };
+const STATUS_STATE = { good: "up", warning: "warn", critical: "down" };
 const page = document.getElementById("page");
 const name = new URLSearchParams(location.search).get("name") || "";
 
-function el(tag, cls, text) {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text !== undefined) e.textContent = text;
-  return e;
+function chip(status, text) {
+  return statusChip(STATUS_STATE[status] || status, text);
 }
 
 function ago(s) {
@@ -44,29 +45,40 @@ function labelText(labels) {
   return Object.entries(labels || {}).map(([k, v]) => `${k}=${v}`).join(" ");
 }
 
-function pill(status) { return el("span", `pill ${status}`, status); }
+function dataTable(heads, rows) {
+  const wrap = el("div", "table-wrap");
+  const t = el("table", "data");
+  const thead = el("thead");
+  const hr = el("tr");
+  for (const h of heads) hr.append(el("th", null, h));
+  thead.append(hr);
+  const tbody = el("tbody");
+  for (const cells of rows) {
+    const r = el("tr");
+    for (const c of cells) {
+      const td = el("td");
+      if (c instanceof Node) td.append(c); else td.textContent = c;
+      r.append(td);
+    }
+    tbody.append(r);
+  }
+  t.append(thead, tbody);
+  wrap.append(t);
+  return wrap;
+}
 
 function itemsTable(items) {
-  const t = el("table", "items");
-  const head = el("tr");
-  for (const h of ["Reading", "Labels", "Value", "Status", "Seen"]) head.append(el("th", null, h));
-  t.append(head);
-  for (const i of items) {
-    const r = el("tr");
-    r.append(el("td", null, `${i.source}.${i.metric}`), el("td", null, labelText(i.labels)),
-      el("td", "num", fmtValue(i)));
-    const st = el("td");
-    st.append(pill(i.status));
-    if (i.reason) st.append(" ", el("span", "note", i.reason));
-    r.append(st, el("td", i.stale ? "stalemark" : null,
-      `${ago(i.age_seconds)}${i.stale ? " (stale)" : ""}`));
-    t.append(r);
-  }
-  return t;
+  return dataTable(["Reading", "Labels", "Value", "State", "Seen"], items.map((i) => {
+    const st = el("span");
+    st.append(chip(i.status));
+    if (i.reason) st.append(" ", el("span", "muted", i.reason));
+    return [`${i.source}.${i.metric}`, labelText(i.labels), fmtValue(i), st,
+      `${ago(i.age_seconds)}${i.stale ? " (stale)" : ""}`];
+  }));
 }
 
 function eventsList(events) {
-  const ol = el("ol");
+  const ol = el("ol", "host-events");
   for (const e of events) {
     const li = el("li");
     li.append(el("span", "when", fmtTime(e.ts)), ` ${e.severity} ${e.kind}: ${e.title}`);
@@ -75,67 +87,93 @@ function eventsList(events) {
   return ol;
 }
 
+function card(title, ...chips) {
+  const d = el("details", "card");
+  d.open = true;
+  const s = el("summary");
+  s.append(el("span", null, title), ...chips);
+  d.append(s);
+  return d;
+}
+
 function section(title, sec, isEvents) {
-  const box = el("section", "sec");
-  const h = el("h2", null, title);
-  h.append(pill(sec.status));
-  if (sec.state !== "ok") h.append(el("span", `pill ${sec.state}`, STATE_TEXT[sec.state] || sec.state));
-  box.append(h);
-  if (sec.note) box.append(el("div", "note", sec.note));
+  const box = card(title, chip(sec.status));
+  if (sec.state !== "ok") box.firstChild.append(chip(sec.state, STATE_TEXT[sec.state] || sec.state));
+  if (sec.note) box.append(el("p", "card-sub", sec.note));
   if (sec.items.length) box.append(isEvents ? eventsList(sec.items) : itemsTable(sec.items));
   return box;
 }
 
 function sourcesTable(sources) {
-  const box = el("section", "sec");
-  box.append(el("h2", null, "Sources"));
+  const box = card("Sources");
   if (!sources.length) {
-    box.append(el("div", "note", "No source has reported."));
+    box.append(el("p", "card-sub", "No source has reported."));
     return box;
   }
-  const t = el("table", "items");
-  const head = el("tr");
-  for (const h of ["Source", "State", "Reason", "Reported"]) head.append(el("th", null, h));
-  t.append(head);
-  for (const s of sources) {
-    const r = el("tr");
+  box.append(dataTable(["Source", "State", "Reason", "Reported"], sources.map((s) => {
     const state = !s.present ? "absent" : !s.available ? "unavailable" : s.stale ? "stale" : "ok";
-    const st = el("td");
-    st.append(pill(s.status), " ", el("span", "note", STATE_TEXT[state] || "available"));
-    r.append(el("td", null, s.source), st, el("td", null, s.present ? s.reason : ""),
-      el("td", s.stale ? "stalemark" : null, ago(s.age_seconds)));
-    t.append(r);
-  }
-  box.append(t);
+    const st = el("span");
+    st.append(chip(s.status), " ", el("span", "muted", STATE_TEXT[state] || "available"));
+    return [s.source, st, s.present ? s.reason : "", ago(s.age_seconds)];
+  })));
   return box;
 }
 
+function kpis(h) {
+  const row = el("div", "kpi-row");
+  for (const key of KPI_SECTIONS) {
+    const sec = h[key];
+    const title = SECTIONS.find(([k]) => k === key)[1];
+    const tile = el("div", "kpi");
+    tile.append(el("span", "kpi-label", title), el("span", "kpi-value", String(sec.items.length)));
+    const foot = el("span", "kpi-label");
+    foot.append(chip(sec.status));
+    tile.append(foot);
+    row.append(tile);
+  }
+  return row;
+}
+
+function notice(h) {
+  if (h.status === "good" || !h.status_reason) return null;
+  const n = el("section", "card notice");
+  n.setAttribute("role", "status");
+  n.append(el("h3", null, h.status === "critical" ? "Needs attention" : "Warning"),
+    el("p", null, h.status_reason));
+  return n;
+}
+
 function render(h) {
-  document.title = `${h.host} - observe`;
-  document.getElementById("summary").replaceChildren(
-    el("span", `pill ${h.status}`, `${h.host}: ${h.status}`));
+  document.title = `${h.host} - Observe`;
+  document.getElementById("summary").replaceChildren(chip(h.status, `${h.host}: ${h.status}`));
   const frag = document.createDocumentFragment();
-  const banner = el("div", `banner ${h.status}`);
-  banner.append(el("strong", null, h.host),
-    ` ${h.platform || "unknown platform"}, agent ${h.agent_version || "unknown"}. `,
-    h.heard ? `Last batch ${ago(h.age_seconds)}. ` : "No batch has ever arrived. ");
-  if (h.status_reason) banner.append(el("div", null, h.status_reason));
+  const head = el("div", "host-title");
+  const crumb = el("p", "card-sub");
+  const back = el("a", null, "Hosts");
+  back.href = "/";
+  crumb.append(back, " / ", h.host);
+  const line = el("h1");
+  line.append(h.host, " ", chip(h.status));
+  head.append(crumb, line, el("p", "card-sub",
+    `${h.platform || "unknown platform"}, agent ${h.agent_version || "unknown"}. ` +
+    (h.heard ? `Last report ${ago(h.age_seconds)}.` : "No batch has ever arrived.")));
   if (!h.monitored) {
-    banner.append(el("div", "note", "Not listed as a pushed_host monitor, so it never alerts."));
+    head.append(el("p", "card-sub", "Not listed as a pushed_host monitor, so it never alerts."));
   } else if (h.monitor) {
-    banner.append(el("div", "note", `Monitor ${h.monitor.name}: ${h.monitor.effective_state}.`));
+    head.append(el("p", "card-sub", `Monitor ${h.monitor.name}: ${h.monitor.effective_state}.`));
   }
   const b = h.boot;
   if (b.boot_ts) {
     const prev = b.clean_shutdown === true ? "previous shutdown was clean"
       : b.clean_shutdown === false ? "previous shutdown was a crash" : "previous shutdown unknown";
-    banner.append(el("div", "note", `Last boot ${fmtTime(b.boot_ts)}: ${prev}`));
+    head.append(el("p", "card-sub", `Last boot ${fmtTime(b.boot_ts)}: ${prev}`));
   }
-  frag.append(banner);
+  frag.append(head, kpis(h));
+  const n = notice(h);
+  if (n) frag.append(n);
   for (const [key, title] of SECTIONS) frag.append(section(title, h[key], key === "alerts"));
-  const ev = el("section", "sec");
-  ev.append(el("h2", null, "Recent events"));
-  ev.append(h.events.length ? eventsList(h.events) : el("div", "note", "No events reported."));
+  const ev = card("Recent events");
+  ev.append(h.events.length ? eventsList(h.events) : el("p", "card-sub", "No events reported."));
   frag.append(ev, sourcesTable(h.sources));
   page.replaceChildren(frag);
   document.getElementById("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;

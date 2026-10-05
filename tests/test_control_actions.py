@@ -376,17 +376,25 @@ def test_host_page_loads_the_control_section_and_writes_only_text(env):
     page = env.client.get("/host").text
     assert 'id="control"' in page and "host-control.js" in page
     js = env.client.get("/static/host-control.js").text
-    assert "textContent" in js and "X-CSRF-Token" in js and "showModal" in js
+    assert "textContent" in js and "X-CSRF-Token" in js
     for banned in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
         assert banned not in js
     # The reboot dialog compares the typed name with the host name exactly.
-    assert "typed.value !== ctlHost" in js and "cancel" in js.lower()
-    assert re.search(r"hidden", page)
+    # The reboot goes through the shared typed-name dialog, and the page holds a native dialog
+    # only through that module. Control sits inside main as the last card.
+    assert "typedConfirm" in js and "confirm_host" in js and "toast(" in js
+    assert 'from "/static/js/dialog.js"' in js and "createElement" in js
+    assert "ctlHost" in js and "typed.value" not in js
+    assert "showModal" in env.client.get("/static/js/dialog.js").text
+    assert page.index("<main") < page.index('id="control"') < page.index("</main>")
+    assert '<script type="module" src="/static/host-control.js"></script>' in page
+    assert 'href="/static/css/host.css"' in page and re.search(r"hidden", page)
 
 
 def test_new_files_use_lf_and_no_em_dashes_or_model_names():
     for rel in ("plugins/control/observe_control/actions.py", "tests/test_control_actions.py",
                 "observe/static/host-control.js", "observe/static/host.html",
+                "observe/static/host.js", "observe/static/css/host.css",
                 "plugins/control/observe_control/__init__.py", "docs/CONTROL.md"):
         raw = stored_bytes(ROOT / rel)
         text = raw.decode("utf-8")

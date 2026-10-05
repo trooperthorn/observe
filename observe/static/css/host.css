@@ -1,0 +1,16 @@
+/* Host page layout and the Control card. Tokens only, no colour literals. Loaded after
+   components.css and app.css, so these rules win over the legacy ones. */
+.host-main { max-width: 1100px; margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4); }
+.host-body { display: grid; gap: var(--o-s4); }
+.host-title h1 { display: flex; align-items: center; gap: var(--o-s2); }
+.host-events { list-style: none; padding: 0; margin: 0; font-size: var(--o-fs-sm); }
+.host-events li { padding: var(--o-s1) 0; border-bottom: 1px solid var(--o-border); overflow-wrap: anywhere; }
+.hostpage table { overflow-wrap: anywhere; }
+.ctl { max-width: none; margin: 0; }
+.ctl-form { display: grid; gap: var(--o-s2); justify-items: start; }
+.ctl-params { display: grid; gap: var(--o-s2); }
+.ctl-field { display: flex; flex-direction: column; gap: var(--o-s1); }
+.ctl-actions { display: flex; flex-wrap: wrap; gap: var(--o-s2); align-items: center; }
+.ctl .card-sub { margin: var(--o-s2) 0; }
+.ctl h4 { margin: var(--o-s4) 0 var(--o-s2); font-size: var(--o-fs-title); }
+.ctl-notice { margin-top: var(--o-s3); }

@@ -2,7 +2,9 @@
 // command history. Every string (host names, parameters, results) is written with textContent
 // only, never as markup. Changes are fetches with the session's CSRF token in X-CSRF-Token.
 // Nothing here reaches a host: a request is queued and signed, and the host's daemon pulls it.
-"use strict";
+import { statusChip } from "/static/js/chips.js";
+import { confirmDialog, typedConfirm } from "/static/js/dialog.js";
+import { toast } from "/static/js/toast.js";
 
 const ctlBox = document.getElementById("control");
 const ctlHost = new URLSearchParams(location.search).get("name") || "";
@@ -14,6 +16,12 @@ const ACTION_TEXT = {
 let ctlCsrf = "";
 let ctlCaps = null;
 let ctlHistoryBox = null;
+let ctlNotice = null;
+// Command states drawn as chips: the word is the state itself, the colour only a second signal.
+const STATE_CHIP = {
+  requested: "pending", pulled: "pending", scheduled: "warn", done: "up", ok: "up",
+  applied: "up", failed: "down", refused: "down", cancelled: "unreachable", expired: "stale", unknown: "pending",
+};
 
 function cel(tag, cls, text) {
   const e = document.createElement(tag);
@@ -77,7 +85,7 @@ function paramInputs(action) {
     inputs.name.placeholder = "hostwatch-agent";
     box.append(field("Service name", inputs.name));
   } else {
-    box.append(cel("div", "note", "The host schedules the reboot after its own delay, and you can cancel it from the history below while it waits."));
+    box.append(cel("p", "card-sub", "The host schedules the reboot after its own delay, and you can cancel it from the history below while it waits."));
   }
   return { box, inputs };
 }
@@ -89,67 +97,69 @@ function readParams(action, inputs) {
   return params;
 }
 
-function confirmDialog(action, params, onDone) {
-  const dlg = cel("dialog", "ctl-dialog");
-  dlg.append(cel("h3", null, ACTION_TEXT[action]));
-  dlg.append(cel("p", null, `Host ${ctlHost}: ${describe(action, params)}.`));
-  dlg.append(cel("p", "note", "The host's own allowlist has the final say, and the request is audited."));
-  let typed = null;
-  if (action === "host.reboot") {
-    typed = cel("input");
-    typed.autocomplete = "off";
-    dlg.append(field(`Type the host name (${ctlHost}) to confirm a reboot`, typed));
+function showError(text) {
+  ctlNotice.replaceChildren(cel("h3", null, "Request refused"), cel("p", null, text));
+  ctlNotice.hidden = false;
+  toast(text, "down");
+}
+
+// Ask for confirmation, then queue the request. The reboot needs the host name typed exactly;
+// the server checks the typed name again, so this is a convenience and not the gate.
+async function submit(action, params) {
+  const detail = `Host ${ctlHost}: ${describe(action, params)}. The host's own allowlist has the final say, and the request is audited.`;
+  const ok = action === "host.reboot"
+    ? await typedConfirm({ title: ACTION_TEXT[action], name: ctlHost, body: detail, confirmText: "Reboot" })
+    : await confirmDialog({ title: ACTION_TEXT[action], body: detail, confirmText: "Confirm" });
+  if (!ok) return;
+  const body = { host: ctlHost, action, params, confirmed: true };
+  if (action === "host.reboot") body.confirm_host = ctlHost;
+  const r = await ctlApi("POST", `${BASE}/request`, body);
+  if (r.ok) {
+    ctlNotice.hidden = true;
+    toast(`${ACTION_TEXT[action]} queued for ${ctlHost}`, "up");
+    loadHistory();
+    return;
   }
-  const err = cel("div", "note ctl-error");
-  const confirm = cel("button", null, "Confirm");
-  const cancel = cel("button", null, "Cancel");
-  cancel.type = confirm.type = "button";
-  if (typed) {
-    confirm.disabled = true;
-    typed.addEventListener("input", () => { confirm.disabled = typed.value !== ctlHost; });
-  }
-  cancel.addEventListener("click", () => dlg.close());
-  confirm.addEventListener("click", async () => {
-    confirm.disabled = true;
-    const body = { host: ctlHost, action, params, confirmed: true };
-    if (typed) body.confirm_host = typed.value;
-    const r = await ctlApi("POST", `${BASE}/request`, body);
-    if (r.ok) { dlg.close(); onDone(); return; }
-    err.textContent = (r.data && r.data.detail && String(r.data.detail)) || `refused (${r.status})`;
-    confirm.disabled = false;
-  });
-  dlg.addEventListener("close", () => dlg.remove());
-  const row = cel("div", "ctl-buttons");
-  row.append(cancel, confirm);
-  dlg.append(err, row);
-  document.body.append(dlg);
-  dlg.showModal();
+  showError((r.data && r.data.detail && String(r.data.detail)) || `refused (${r.status})`);
 }
 
 function requestForm() {
   const form = cel("div", "ctl-form");
-  const actionSel = selectOf(ctlCaps.actions);
-  for (const o of actionSel.options) o.textContent = ACTION_TEXT[o.value] || o.value;
-  const holder = cel("div");
-  let current = paramInputs(actionSel.value);
-  holder.append(current.box);
-  actionSel.addEventListener("change", () => {
-    current = paramInputs(actionSel.value);
-    holder.replaceChildren(current.box);
-  });
-  const go = cel("button", null, "Review request");
-  go.type = "button";
-  go.addEventListener("click", () => {
-    const action = actionSel.value;
-    confirmDialog(action, readParams(action, current.inputs), loadHistory);
-  });
-  form.append(field("Action", actionSel), holder, go);
+  const actions = ctlCaps.actions.filter((a) => a !== "host.reboot");
+  const row = cel("div", "ctl-actions");
+  if (actions.length) {
+    const actionSel = selectOf(actions);
+    for (const o of actionSel.options) o.textContent = ACTION_TEXT[o.value] || o.value;
+    const holder = cel("div");
+    let current = paramInputs(actionSel.value);
+    holder.append(current.box);
+    actionSel.addEventListener("change", () => {
+      current = paramInputs(actionSel.value);
+      holder.replaceChildren(current.box);
+    });
+    const go = cel("button", "btn primary", "Queue action");
+    go.type = "button";
+    go.addEventListener("click", () => {
+      const action = actionSel.value;
+      submit(action, readParams(action, current.inputs));
+    });
+    form.append(field("Action", actionSel), holder);
+    row.append(go);
+  }
+  if (ctlCaps.actions.includes("host.reboot")) {
+    const reboot = cel("button", "btn danger", "Reboot host...");
+    reboot.type = "button";
+    reboot.addEventListener("click", () => submit("host.reboot", {}));
+    row.append(reboot);
+  }
+  form.append(row);
   return form;
 }
 
 function historyTable(commands) {
-  if (!commands.length) return cel("div", "note", "No commands have been requested for this host.");
-  const t = cel("table", "items");
+  if (!commands.length) return cel("p", "card-sub", "No commands have been requested for this host.");
+  const wrap = cel("div", "table-wrap");
+  const t = cel("table", "data");
   const head = cel("tr");
   for (const h of ["Requested", "Action", "By", "State", "Result", ""]) head.append(cel("th", null, h));
   t.append(head);
@@ -158,11 +168,11 @@ function historyTable(commands) {
     r.append(cel("td", null, new Date(c.issued_at * 1000).toLocaleString()),
       cel("td", null, describe(c.action, c.params)), cel("td", null, c.requested_by));
     const st = cel("td");
-    st.append(cel("span", `pill ctl-${c.state}`, c.state));
+    st.append(statusChip(STATE_CHIP[c.state] || "pending", c.state));
     r.append(st, cel("td", null, c.result ? `${c.result.state}${c.result.output ? ": " + c.result.output : ""}` : ""));
     const act = cel("td");
     if (c.state === "requested" || (c.action === "host.reboot" && c.state === "scheduled")) {
-      const b = cel("button", null, c.state === "requested" ? "Cancel" : "Cancel reboot");
+      const b = cel("button", "btn", c.state === "requested" ? "Cancel" : "Cancel reboot");
       b.type = "button";
       b.addEventListener("click", async () => {
         b.disabled = true;
@@ -175,7 +185,8 @@ function historyTable(commands) {
     r.append(act);
     t.append(r);
   }
-  return t;
+  wrap.append(t);
+  return wrap;
 }
 
 async function loadHistory() {
@@ -192,10 +203,15 @@ async function startControl() {
     const caps = await ctlApi("GET", `${BASE}/capabilities?host=${encodeURIComponent(ctlHost)}`);
     if (!caps.ok || !caps.data.known) return;
     ctlCaps = caps.data;
-    ctlBox.replaceChildren(cel("h2", null, "Control"));
-    ctlBox.append(cel("div", "note", "Requests are signed and queued. The host pulls them and applies its own allowlist."));
-    ctlBox.append(requestForm());
-    ctlBox.append(cel("h3", null, "Command history"));
+    const h = cel("h3", null, "Control");
+    h.id = "control-h";
+    ctlBox.replaceChildren(h);
+    ctlBox.append(cel("p", "card-sub", "Requests are signed and queued. The host pulls them and applies its own allowlist."));
+    ctlNotice = cel("div", "card notice ctl-notice");
+    ctlNotice.setAttribute("role", "alert");
+    ctlNotice.hidden = true;
+    ctlBox.append(requestForm(), ctlNotice);
+    ctlBox.append(cel("h4", null, "Command history"));
     ctlHistoryBox = cel("div");
     ctlBox.append(ctlHistoryBox);
     ctlBox.hidden = false;

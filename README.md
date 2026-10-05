@@ -453,7 +453,7 @@ command per action, 10 commands per hour and one reboot per 15 minutes. An admin
 Control section of the host page (`fan.set_floor`, `fan.set_mode`, `service.restart` or `host.reboot`): the page
 validates the parameters against what the host last reported, asks for confirmation in a dialog, and for a reboot
 requires the host name typed exactly. The same section lists the host's command history with each state and a
-Cancel button while a reboot is scheduled. The admin routes need an admin session and the CSRF token. The signing format and a test vector are in `docs/CONTROL.md`. Setup in short: install the plugin, run `--control-keygen`, pin the printed public key in each host's `control.toml`, and create one `wpc` key per host with `--ingest-key-create HOST --ingest-key-scope wpc`. The endpoints, setup steps and threat notes are in `docs/CONTROL.md` and `THREAT-MODEL.md`.
+Cancel button while a reboot is scheduled. The section is the last card of the host page, shows states as status chips, and reports a refusal as an inline notice and a toast. The admin routes need an admin session and the CSRF token. The signing format and a test vector are in `docs/CONTROL.md`. Setup in short: install the plugin, run `--control-keygen`, pin the printed public key in each host's `control.toml`, and create one `wpc` key per host with `--ingest-key-create HOST --ingest-key-scope wpc`. The endpoints, setup steps and threat notes are in `docs/CONTROL.md` and `THREAT-MODEL.md`.
 
 Logins use Argon2id password hashes and server-side sessions. Create the first
 admin with `python -m observe --config observe.yaml --create-admin NAME`; it

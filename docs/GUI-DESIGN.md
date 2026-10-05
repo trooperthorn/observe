@@ -539,12 +539,20 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 - Deviation: the per-monitor card keeps its click-to-expand sparkline and history instead of drawing a sparkline on every card, to avoid one history request per monitor on every refresh. The "Customize" control stays in phase 2 (S14), and the page title is now "Overview - Observe".
 - Tests: `tests/test_ui_dashboard.py` checks the IDs and the stylesheet and module order, and sends a hostile monitor and group name through the API to confirm the page markup never contains it and the script only writes text.
 
+### S6 notes (done)
+
+- `host.html` loads `components.css` and `css/host.css` (tokens only) after `app.css`, and `host.js`, `host-control.js` and `shell.js` as ES modules. `host.js` draws a title block with a breadcrumb, a status chip and the last report age, a KPI row (CPU, Temperatures, Fans, Disks, each with an item count and a status chip), a `notice` card when the host is not good, and one `details.card` per section with `table.data` tables and status chips. No `.pill` is built any more.
+- The Control section is now a `<section class="card" id="control">` inside `<main>`, after the `#page` mount, so the 10 second refresh of the page never redraws it. It stays hidden for viewers and unknown hosts.
+- Control uses `confirmDialog` for the four actions and `typedConfirm` for the reboot, which is now its own danger button, "Reboot host...", outside the action list. The queue button is "Queue action". Command states are status chips (requested and pulled as pending, scheduled as warning, done as up, failed and refused as down). A refusal shows as an inline `notice` with `role="alert"` and an error toast; a queued request shows a status toast.
+- Deviations: the "Settings" button is left for S7 and S12 because no settings page exists yet. The KPI tiles show the item count of the section and its status instead of a single headline value such as a percentage, because the host view API does not return one.
+- Tests: `tests/test_ui_host.py` checks the markup, stylesheet order, module scripts and tokens-only CSS; `tests/test_control_actions.py` checks the page loads the shared dialog and keeps the typed host name and `confirm_host` rule.
+
 ### S4 notes (done)
 
 - `css/components.css` holds cards (including `details.card` and `.card.notice`), the KPI row, status tiles, chips, buttons, tables, dialogs and toasts. It uses tokens only, with no colour literals. It is not yet linked by any page: the pages that adopt it (S5 onwards) add it after `base.css`, and the tests that pin the `tokens, base, app` order will gain it then.
 - `js/chips.js` builds `statusChip(state, text)`, `neutralChip` and `monoTag`. The state table lives in `js/chip-states.js` as plain data (role, icon shape, word), so it can be tested without a browser. Unknown states fall back to a hollow "Unknown" chip.
 - `js/table.js` exports `sortableTable({columns, rows, empty, pageSizes, caption})` with sortable headers, a page-size select, "Showing N of M" and previous and next buttons. The pure rules (`sortRows`, `nextSort`, `ariaSort`, `pageSlice`) live in `js/table-core.js`.
-- `js/dialog.js` exports `confirmDialog` and `typedConfirm`, both returning a Promise of a boolean and returning focus to the opener. The typed-name rule is `typedMatches` in `js/dialog-logic.js`. `host-control.js` still has its own copy until S6 switches it over.
+- `js/dialog.js` exports `confirmDialog` and `typedConfirm`, both returning a Promise of a boolean and returning focus to the opener. The typed-name rule is `typedMatches` in `js/dialog-logic.js`. `host-control.js` now uses these instead of its own copy (S6).
 - `js/toast.js` exports `toast(text, kind)` with a polite status region and an alert region for errors. Errors stay until closed; the rest go after six seconds.
 - Tests: `tests/test_ui_components.py` checks the sources, mirrors the sort rules in Python and asserts that no `.pill` element is built without text. `tests/js/table-core.test.mjs` holds the same cases for `node --test tests/js` in CI. Per Q6, Node is not required locally.
 - Deviation: the pure helpers are split into `table-core.js`, `chip-states.js` and `dialog-logic.js`, because the modules import `dom.js` by an absolute URL that Node cannot resolve.

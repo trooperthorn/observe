@@ -91,10 +91,3 @@ ul.chips li { padding: .1rem 0; }
 ul.findings { list-style: none; padding: 0; margin: 0; }
 ul.findings li { padding: .3rem 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .mappage table, .hostpage table { overflow-wrap: anywhere; }
-
-/* Control section of the host page */
-.ctl { max-width: 60rem; margin: 1rem auto; }
-.ctl-field { display: flex; flex-direction: column; gap: .2rem; margin: .5rem 0; }
-.ctl-buttons { display: flex; gap: .5rem; justify-content: flex-end; margin-top: .75rem; }
-.ctl-error { color: var(--o-down); }
-.ctl-dialog { max-width: 28rem; }
