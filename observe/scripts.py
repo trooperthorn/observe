@@ -1,6 +1,8 @@
 """Install scripts served by GET /i/{token} (docs/GUI-DESIGN.md section 3.10).
 
-This module renders the POSIX sh script for the linux and raspberry-pi platforms. Every value
+This module renders the POSIX sh script for the linux and raspberry-pi platforms (render_linux),
+a POSIX sh script for TrueNAS SCALE (render_truenas) and a PowerShell script for Windows
+(render_windows). TrueNAS and Windows are agent only. Every value
 is validated here against a strict pattern, whatever the caller already checked, and then
 written inside single quotes, so no value can carry shell syntax into the script. A value that
 fails raises ScriptError and nothing is rendered.
@@ -21,9 +23,13 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .enrol import PLATFORMS, Redeemed
+from .enrol import DEFAULT_POOL, PLATFORMS, POOL, Redeemed
 
-SCRIPT_PLATFORMS = ("linux", "raspberry-pi")
+LINUX_PLATFORMS = ("linux", "raspberry-pi")
+SCRIPT_PLATFORMS = ("linux", "raspberry-pi", "truenas", "windows")
+# Platforms whose script installs the agent only. Control needs the Linux account, sudoers and
+# systemd path, which a TrueNAS appliance does not offer and Windows does not have yet (Q10).
+AGENT_ONLY_PLATFORMS = ("truenas", "windows")
 
 _NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _HEADER = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
@@ -385,7 +391,7 @@ main "$@"
 
 def render_linux(red: Redeemed, ctx: Context) -> str:
     """The install script for one redeemed enrolment. Raises ScriptError on any unsafe value."""
-    if red.platform not in SCRIPT_PLATFORMS:
+    if red.platform not in LINUX_PLATFORMS:
         raise ScriptError("no install script for this platform")
     name = _need(_NAME, red.host, "the host name")
     url = _need(_URL, ctx.observe_url, "the Observe address")
@@ -425,3 +431,369 @@ def render_linux(red: Redeemed, ctx: Context) -> str:
         script = script.replace(marker, value)
     # The multi-line fills go last so a value can never be mistaken for a marker.
     return script.replace("@@TOML@@", toml).replace("@@UNIT@@", unit)
+
+
+# ---------------------------------------------------------------------------------------------
+# TrueNAS SCALE and Windows (agent only)
+# ---------------------------------------------------------------------------------------------
+
+WINDOWS_SOURCE = "https://github.com/trooperthorn/hostwatch/archive/refs/heads/main.zip"
+
+# The helper functions and the three guards are the Linux script's own text, cut out of it, so
+# every platform runs the same guard code in the same order.
+_HELPERS = _BODY[:_BODY.index("main() {")]
+_GUARDS = _BODY[_BODY.index("  # 1. Guards."):_BODY.index("  # 2. Rerun detection.")]
+
+
+def valid_pool(pool: str) -> bool:
+    """True for an empty pool (the default is used) or a safe TrueNAS pool name."""
+    return pool == "" or (POOL.fullmatch(pool) is not None and ".." not in pool)
+
+
+def media_type(platform: str) -> str:
+    return "text/plain; charset=utf-8" if platform == "windows" else "text/x-shellscript"
+
+
+def error_body(platform: str) -> str:
+    """What the script URL returns when Observe could not build the script. It must be safe to
+    run in the shell that fetched it: `exit` would close a PowerShell console."""
+    if platform == "windows":
+        return "Write-Host 'Observe could not build this script. Nothing was changed.'\n"
+    return "echo 'Observe could not build this script' >&2; exit 1\n"
+
+
+def _pq(value: str) -> str:
+    """Single-quote one value for PowerShell, where a quote is doubled."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _agent_only(red: Redeemed, ctx: Context, platform: str) -> tuple[str, str, str, str, str, list[str]]:
+    """Validate what both agent-only scripts share. Returns the host name, the Observe URL, the
+    Observe machine id, the step key, the agent key and the usable Observe addresses."""
+    if red.platform != platform:
+        raise ScriptError("no install script for this platform")
+    name = _need(_NAME, red.host, "the host name")
+    url = _need(_URL, ctx.observe_url, "the Observe address")
+    mid = ctx.observe_machine_id
+    if mid:
+        _need(_MACHINE_ID, mid, "the Observe machine id")
+    addrs = [usable_address(a) for a in ctx.observe_addrs]
+    if any(a is None for a in addrs):
+        raise ScriptError("an Observe address is not a usable IP address")
+    step = _need(_KEY, red.step_key, "the step key") if red.step_key else ""
+    agent = _need(_KEY, red.agent_key, "the agent key") if red.agent_key else ""
+    if not agent.startswith("wpi_"):
+        raise ScriptError("this platform needs an agent key")
+    if red.control_key or red.allowlist.get("fans") or red.allowlist.get("services") \
+            or red.allowlist.get("reboot"):
+        raise ScriptError("control is not available for this platform")
+    return name, url, mid, step, agent, [a for a in addrs if a]
+
+
+_TN_HEAD = r"""#!/bin/sh
+# Observe install for @@NAME@@ (TrueNAS). Run on @@NAME@@ only.
+# It refuses to run on any other machine and on the Observe host. It prints no key.
+# It writes files on the pool; one step is done by you in the TrueNAS web UI and is printed
+# at the end. Run it again to update the files in place.
+set -u
+umask 022
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+HOST_NAME=@@Q_NAME@@
+OBSERVE_URL=@@Q_URL@@
+OBSERVE_MACHINE_ID=@@Q_MID@@
+OBSERVE_ADDRS=@@Q_ADDRS@@
+STEP_KEY=@@Q_STEPKEY@@
+AGENT_KEY=@@Q_AGENTKEY@@
+POOL=@@Q_POOL@@
+IMAGE=@@Q_IMAGE@@
+"""
+
+_TN_MAIN = r"""
+main() {
+@@GUARDS@@
+  # 2. This looks like TrueNAS, and the pool exists. Still nothing has changed.
+  if ! command -v midclt >/dev/null 2>&1; then
+    say "Note: midclt was not found, so this may not be TrueNAS SCALE. Continuing because the host name matched."
+  fi
+  base=/mnt/$POOL
+  if [ ! -d "$base" ]; then
+    say "Pools and datasets under /mnt:" >&2
+    ls -1 /mnt >&2 2>/dev/null || true
+    refuse pool "pool not found" "there is no pool named $POOL on $HOST_NAME. Ask Observe for a new command and choose the pool that exists."
+  fi
+  report pool ok "pool found"
+  dir=$base/hostwatch
+
+  # 3. Rerun detection. The files below are replaced, never appended to.
+  if [ -f "$dir/agent.env" ] || [ -f "$dir/compose.yaml" ]; then
+    say "An earlier install was found in $dir. Its files will be updated in place."
+    report rerun ok "updating existing files"
+  fi
+
+  mkdir -p "$dir/data" || fail agent "cannot create the folder" "cannot create $dir"
+  chown 10001:10001 "$dir/data" || fail agent "cannot set the data folder owner" "cannot set the owner of $dir/data"
+  chmod 0755 "$dir" || fail agent "cannot set the folder mode" "cannot set the mode of $dir"
+  write_env
+  write_compose
+  report agent ok "agent settings written"
+  report compose ok "compose file written"
+
+  say ""
+  say "=================================================================="
+  say " One step is left, and it is done in the TrueNAS web UI of $HOST_NAME."
+  say " Do it on $HOST_NAME only."
+  say ""
+  say "   1. Open Apps, then Discover Apps, then the three dot menu,"
+  say "      then Install via YAML."
+  say "   2. Name the app: hostwatch"
+  say "   3. Paste the whole of this file, which holds no key:"
+  say "        $dir/compose.yaml"
+  say "      You can print it with: cat $dir/compose.yaml"
+  say "   4. Save. Observe shows $HOST_NAME when the agent sends data."
+  say ""
+  say " The agent key is in $dir/agent.env (root only). It was not printed."
+  say " Optional extras, such as the TrueNAS API source and energy counters,"
+  say " are in docs/deploy-truenas.md of the hostwatch repository."
+  say "=================================================================="
+  report app skipped "waiting for the manual step in the TrueNAS web UI"
+  report done ok "files written"
+  say "Done. Observe shows progress for $HOST_NAME."
+}
+
+write_env() {
+  rm -f "$dir/agent.env.new"
+  umask 077
+  {
+    printf 'HOSTWATCH_HUB_URL=%s\n' "$OBSERVE_URL"
+    printf 'HOSTWATCH_INGEST_KEY=%s\n' "$AGENT_KEY"
+    printf 'HOSTWATCH_HOST_NAME=%s\n' "$HOST_NAME"
+  } > "$dir/agent.env.new" || fail agent "cannot write settings" "cannot write the agent settings"
+  umask 022
+  # Docker reads env_file as root before the container starts, so root only is enough.
+  chmod 0400 "$dir/agent.env.new" && mv -f "$dir/agent.env.new" "$dir/agent.env" ||
+    fail agent "cannot secure settings" "cannot secure the agent settings"
+}
+
+write_compose() {
+  gid=$(getent group systemd-journal 2>/dev/null | cut -d: -f3)
+  case $gid in ''|*[!0-9]*) gid= ;; esac
+  rm -f "$dir/compose.yaml.new"
+  {
+    cat <<COMPOSE_HEAD
+# hostwatch agent for $HOST_NAME, written by the Observe install script.
+# It holds no key: the hub address and the key are in agent.env beside this file.
+services:
+  hostwatch:
+    image: $IMAGE
+    pull_policy: always
+    container_name: hostwatch
+    restart: unless-stopped
+    network_mode: host
+    user: "10001:10001"
+    read_only: true
+    privileged: false
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - $dir/agent.env
+    environment:
+      HOSTWATCH_ROLE: agent
+      HOSTWATCH_HOST_NAME: $HOST_NAME
+COMPOSE_HEAD
+    if [ -n "$gid" ]; then
+      printf '      HOSTWATCH_JOURNAL_GID: "%s"\n' "$gid"
+      printf '    group_add:\n      - "%s"\n' "$gid"
+    fi
+    printf '    volumes:\n      - /sys:/host/sys:ro\n'
+    if [ -d /var/log/journal ]; then printf '      - /var/log/journal:/host/journal:ro\n'; fi
+    if [ -d /run/log/journal ]; then printf '      - /run/log/journal:/host/journal-volatile:ro\n'; fi
+    if [ -d /sys/fs/pstore ]; then printf '      - /sys/fs/pstore:/host/pstore:ro\n'; fi
+    printf '      - %s/data:/data\n' "$dir"
+  } > "$dir/compose.yaml.new" || fail compose "cannot write the compose file" "cannot write the compose file"
+  chmod 0644 "$dir/compose.yaml.new" && mv -f "$dir/compose.yaml.new" "$dir/compose.yaml" ||
+    fail compose "cannot place the compose file" "cannot place the compose file"
+}
+
+main "$@"
+"""
+
+
+def render_truenas(red: Redeemed, ctx: Context, pool: str = "") -> str:
+    """The install script for a TrueNAS SCALE host. Raises ScriptError on any unsafe value."""
+    name, url, mid, step, agent, addrs = _agent_only(red, ctx, "truenas")
+    pool = pool or DEFAULT_POOL
+    if not valid_pool(pool):
+        raise ScriptError("the pool name has characters that are not allowed")
+    script = _TN_HEAD + _HELPERS + _TN_MAIN
+    fills = {"@@NAME@@": name, "@@Q_NAME@@": _q(name), "@@Q_URL@@": _q(url), "@@Q_MID@@": _q(mid),
+             "@@Q_ADDRS@@": _q(" ".join(addrs)), "@@Q_STEPKEY@@": _q(step),
+             "@@Q_AGENTKEY@@": _q(agent), "@@Q_POOL@@": _q(pool), "@@Q_IMAGE@@": _q(IMAGE)}
+    for marker, value in fills.items():
+        script = script.replace(marker, value)
+    return script.replace("@@GUARDS@@", _GUARDS.rstrip("\n"))
+
+
+_WIN = r"""# Observe install for @@NAME@@ (Windows). Run on @@NAME@@ only.
+# It refuses to run on any other machine and on the Observe host. It prints no key.
+# The agent is installed with hostwatch's own installer; control is not available on Windows yet.
+function Invoke-ObserveInstall {
+  $ErrorActionPreference = 'Stop'
+  $HostName = @@P_NAME@@
+  $ObserveUrl = @@P_URL@@
+  $ObserveMachineId = @@P_MID@@
+  $ObserveAddrs = @(@@P_ADDRS@@)
+  $StepKey = @@P_STEPKEY@@
+  $AgentKey = @@P_AGENTKEY@@
+  $SourceUrl = @@P_SOURCE@@
+
+  # Report one step to Observe. The key goes in a header inside this process, never on a command
+  # line. Notes are fixed text, so no key can be carried in one. A failed report is ignored.
+  function Send-Step([string]$Step, [string]$Status, [string]$Note) {
+    if (-not $StepKey) { return }
+    try {
+      [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+      $json = @{ step = $Step; status = $Status; note = $Note } | ConvertTo-Json -Compress
+      Invoke-RestMethod -Uri "$ObserveUrl/api/enrol/step" -Method Post -ContentType 'application/json' -Headers @{ Authorization = "Bearer $StepKey" } -Body $json -TimeoutSec 10 | Out-Null
+    } catch { }
+  }
+  function Stop-Refuse([string]$Step, [string]$Note, [string]$Message) {
+    Write-Host "REFUSED: $Message" -ForegroundColor Red
+    Write-Host 'Nothing was changed.' -ForegroundColor Red
+    Send-Step $Step 'refused' $Note
+    throw [System.OperationCanceledException]::new('stopped')
+  }
+  function Stop-Fail([string]$Step, [string]$Note, [string]$Message) {
+    Write-Host "FAILED: $Message" -ForegroundColor Red
+    Send-Step $Step 'failed' $Note
+    throw [System.OperationCanceledException]::new('stopped')
+  }
+
+  $work = $null
+  try {
+    # 1. Guards. Nothing after this block runs unless all three pass, and they change nothing.
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+      Stop-Refuse 'root' 'not run as administrator' 'run this in an elevated PowerShell (Run as administrator).'
+    }
+    Write-Host "Observe install for $HostName"
+    Send-Step 'root' 'ok' 'running as administrator'
+
+    $want = $HostName.ToLowerInvariant()
+    $dnsName = ''
+    $fqdn = ''
+    try { $dnsName = [Net.Dns]::GetHostName() } catch { }
+    try { $fqdn = [Net.Dns]::GetHostEntry($dnsName).HostName } catch { }
+    $mine = @($env:COMPUTERNAME, $dnsName, $fqdn, ($fqdn -split '\.')[0]) | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() }
+    if ($mine -notcontains $want) {
+      Write-Host "This command was made for the host: $HostName" -ForegroundColor Red
+      Write-Host "This machine's name is:             $($env:COMPUTERNAME) (full name $fqdn)" -ForegroundColor Red
+      Stop-Refuse 'hostname' 'hostname does not match' "this is not $HostName. Run the command on $HostName."
+    }
+    Send-Step 'hostname' 'ok' 'hostname matches'
+
+    $hereId = ''
+    try { $hereId = ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid).MachineGuid -replace '-', '').ToLowerInvariant() } catch { }
+    if ($ObserveMachineId -and $hereId -and $hereId -eq $ObserveMachineId) {
+      Stop-Refuse 'observe_host' 'machine id is the Observe host' 'this is the Observe host itself. Install agents on the machines to be monitored, not here.'
+    }
+    $hereAddrs = @()
+    try {
+      foreach ($nic in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+        foreach ($ua in $nic.GetIPProperties().UnicastAddresses) { $hereAddrs += ($ua.Address.ToString() -split '%')[0] }
+      }
+    } catch { }
+    $resolved = @()
+    try { $resolved = @([Net.Dns]::GetHostAddresses(([Uri]$ObserveUrl).DnsSafeHost) | ForEach-Object { ($_.ToString() -split '%')[0] }) } catch { }
+    foreach ($addr in (@($ObserveAddrs) + $resolved)) {
+      if ($hereAddrs -contains $addr) {
+        Stop-Refuse 'observe_host' 'address is the Observe host' "this machine has the address of the Observe host ($addr). Install agents on the machines to be monitored, not here."
+      }
+    }
+    Send-Step 'observe_host' 'ok' 'not the Observe host'
+
+    # 2. Checks that change nothing.
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+      Stop-Fail 'agent' 'python not found' 'Python 3 is needed and was not found on the path. Install Python, then ask Observe for a new command.'
+    }
+    $existing = Get-Service -Name 'hostwatch-agent' -ErrorAction SilentlyContinue
+
+    # 3. Download hostwatch and run its own installer.
+    $work = Join-Path ([IO.Path]::GetTempPath()) ('observe-install-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $work | Out-Null
+    Write-Host 'Downloading hostwatch.'
+    try {
+      [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+      $zip = Join-Path $work 'hostwatch.zip'
+      Invoke-WebRequest -Uri $SourceUrl -OutFile $zip -UseBasicParsing
+      Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $work 'src') -Force
+    } catch { Stop-Fail 'download' 'download failed' 'could not download hostwatch from github.com/trooperthorn/hostwatch.' }
+    $src = Get-ChildItem -LiteralPath (Join-Path $work 'src') -Directory | Select-Object -First 1
+    $installer = if ($src) { Join-Path $src.FullName 'deploy\windows\install.ps1' } else { '' }
+    if (-not $installer -or -not (Test-Path -LiteralPath $installer)) {
+      Stop-Fail 'download' 'installer not in the download' 'the download did not hold deploy\windows\install.ps1.'
+    }
+    Send-Step 'download' 'ok' 'hostwatch downloaded'
+
+    if ($existing) {
+      Write-Host 'An earlier install was found. It will be removed with the uninstall.ps1 of hostwatch (its data folder is kept) and installed again.'
+      Send-Step 'rerun' 'ok' 'updating an existing install'
+      $remover = Join-Path $src.FullName 'deploy\windows\uninstall.ps1'
+      try { & $remover -Force } catch { Stop-Fail 'rerun' 'removing the earlier install failed' 'could not remove the earlier install.' }
+    }
+
+    Write-Host 'Installing the hostwatch agent service.'
+    try {
+      # The key is handed over as a SecureString object. It is on no command line.
+      $secure = ConvertTo-SecureString $AgentKey -AsPlainText -Force
+      & $installer -HubUrl $ObserveUrl -HostName $HostName -IngestKey $secure -SourcePath $src.FullName -Force
+    } catch { Stop-Fail 'agent' 'installer failed' 'the installer of hostwatch failed. Its messages are above.' }
+    $service = Get-Service -Name 'hostwatch-agent' -ErrorAction SilentlyContinue
+    if (-not $service -or $service.Status -ne 'Running') {
+      Stop-Fail 'agent' 'service is not running' 'the hostwatch-agent service is not running.'
+    }
+    Send-Step 'agent' 'ok' 'agent service running'
+    Send-Step 'done' 'ok' 'install finished'
+    Write-Host "Done. Observe shows progress for $HostName."
+  }
+  catch [System.OperationCanceledException] { }
+  catch {
+    Write-Host 'FAILED: the install stopped with an unexpected error.' -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    Send-Step 'agent' 'failed' 'unexpected error'
+  }
+  finally {
+    $AgentKey = $null
+    if ($work -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
+
+Invoke-ObserveInstall
+"""
+
+
+def render_windows(red: Redeemed, ctx: Context) -> str:
+    """The PowerShell install script for a Windows host. Raises ScriptError on any unsafe value."""
+    name, url, mid, step, agent, addrs = _agent_only(red, ctx, "windows")
+    script = _WIN
+    fills = {"@@NAME@@": name, "@@P_NAME@@": _pq(name), "@@P_URL@@": _pq(url),
+             "@@P_MID@@": _pq(mid), "@@P_ADDRS@@": ", ".join(_pq(a) for a in addrs),
+             "@@P_STEPKEY@@": _pq(step), "@@P_AGENTKEY@@": _pq(agent),
+             "@@P_SOURCE@@": _pq(WINDOWS_SOURCE)}
+    for marker, value in fills.items():
+        script = script.replace(marker, value)
+    return script
+
+
+def render(red: Redeemed, ctx: Context, pool: str = "") -> str:
+    """The script for the enrolment's platform."""
+    if red.platform == "truenas":
+        return render_truenas(red, ctx, pool)
+    if red.platform == "windows":
+        return render_windows(red, ctx)
+    return render_linux(red, ctx)

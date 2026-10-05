@@ -1,4 +1,6 @@
-"""GET /i/{token} and POST /api/enrol/step: the Linux and Raspberry Pi install script."""
+"""GET /i/{token} and POST /api/enrol/step: the Linux and Raspberry Pi install script.
+
+The TrueNAS and Windows scripts are tested in test_install_script_agents.py."""
 
 from __future__ import annotations
 
@@ -237,10 +239,10 @@ def test_expired_unknown_and_garbage_tokens_are_410(env):
     assert env.rows("SELECT COUNT(*) FROM ingest_keys") == [(0,)]
 
 
-def test_platform_without_a_script_does_not_burn_the_token(env):
+def test_control_on_an_agent_only_platform_does_not_burn_the_token(env):
     hdr = admin(env)
     token = token_of(create(env, hdr, name="tn01", platform="truenas"))
-    assert env.client.get(f"/i/{token}").status_code == 501
+    assert env.client.get(f"/i/{token}").status_code == 409
     assert env.rows("SELECT fetched_at FROM enrolments WHERE host='tn01'") == [(None,)]
     assert env.rows("SELECT COUNT(*) FROM ingest_keys") == [(0,)]
 

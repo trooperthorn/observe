@@ -303,9 +303,12 @@ fetches cannot both win, and then mints the host-bound keys: a `wpi` key for
 the agent and a `wpc` key for control. Until then no key exists. The function
 is `enrol.redeem`, called by `GET /i/{token}`. That route needs no session: the token
 is the credential. For `linux` and `raspberry-pi` it answers with the POSIX sh script
-rendered by `observe/scripts.py`; a second fetch, an expired token or garbage is 410.
-A platform with no script yet (TrueNAS and Windows, later slices) is 501, and control
-when no control plugin is loaded is 409, both before the token is spent. The fetch also
+rendered by `observe/scripts.py`; `truenas` gets a POSIX sh script and `windows` a
+PowerShell script (agent only, `text/plain`); a second fetch, an expired token or
+garbage is 410. Control on TrueNAS or Windows, and control when no control plugin is
+loaded, is 409, and a bad `pool` query is 400, all before the token is spent. A
+TrueNAS command carries the pool as `?pool=NAME` (the create body's optional `pool`,
+TrueNAS only, a ZFS-style name; default `Apps`). The fetch also
 mints a step key (`wps_`), stored as a digest, which authenticates the script's progress
 reports.
 
@@ -317,7 +320,15 @@ the local ones). Only then does it change anything: the agent container, and for
 the `hostwatch-control` account, a venv install of `hostwatch[control]`, `control.toml`
 and `control.env`, a sudoers file rendered by hostwatch's `render_sudoers` and checked
 with `visudo -c`, and the systemd unit. Every value is validated server side and single
-quoted. `POST /api/enrol/step` (Bearer step key, valid two hours after the fetch) stores
+quoted. The TrueNAS and Windows scripts reuse the same guard text (the TrueNAS one is
+cut from the Linux script, so they cannot drift) and the same step reports. TrueNAS
+then checks that `/mnt/<pool>` exists, writes `/mnt/<pool>/hostwatch/agent.env` (0400)
+and `compose.yaml` (no key in it, mirroring hostwatch's `deploy/truenas/compose.yaml`
+with the journal group detected locally) and prints the manual step. Windows downloads
+the hostwatch source archive to a temporary folder, runs its `deploy/windows/install.ps1`
+with `-IngestKey` as a SecureString (after its `uninstall.ps1` when the service already
+exists, which keeps the data folder), checks the service runs, and deletes the
+folder. `POST /api/enrol/step` (Bearer step key, valid two hours after the fetch) stores
 each step report, which `GET /api/hosts/{name}/enrolment` returns as `install`.
 
 `GET /api/hosts/{name}/enrolment` (admin session) returns the state machine:

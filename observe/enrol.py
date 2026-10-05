@@ -31,8 +31,8 @@ TOKEN_MARKER = "wpe"
 TOKEN_TTL_S = 30 * 60
 STEP_MARKER = "wps"
 STEP_TTL_S = 2 * 3600  # a step key works this long after the script fetch
-INSTALL_STEPS = ("root", "hostname", "observe_host", "rerun", "agent", "control_account", "control_install",
-                 "control_config", "sudoers", "control_unit", "done")
+INSTALL_STEPS = ("root", "hostname", "observe_host", "rerun", "pool", "download", "agent", "compose", "app",
+                 "control_account", "control_install", "control_config", "sudoers", "control_unit", "done")
 STEP_STATUSES = ("ok", "failed", "skipped", "refused")
 MAX_NOTE = 200
 CONTROL_SCOPE = "wpc"
@@ -42,6 +42,9 @@ PLATFORMS = {"linux": "Linux server", "truenas": "TrueNAS", "windows": "Windows"
              "raspberry-pi": "Raspberry Pi"}
 
 _NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+# A TrueNAS pool name: letters, digits, dots, dashes and underscores, starting with a letter or digit.
+POOL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+DEFAULT_POOL = "Apps"
 # Same shapes the control daemon accepts (docs/CONTROL.md). None can hold a space, quote, slash,
 # semicolon, dollar sign, backtick or pipe, so an entry is safe inside a shell word or a TOML string.
 _HEADER = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
@@ -149,6 +152,18 @@ def parse_spec(body: Any) -> Spec:
     if not control and (fans or services or reboot):
         raise EnrolError("an allowlist needs control to be chosen")
     return Spec(name, platform, agent, control, tuple(fans), tuple(services), reboot)
+
+
+def parse_pool(raw: Any, platform: str) -> str:
+    """The TrueNAS pool chosen in the wizard: empty for any other platform or when unset (the
+    script then uses the default pool). Raises EnrolError with a message safe to show."""
+    if raw is None or raw == "":
+        return ""
+    if platform != "truenas":
+        raise EnrolError("a pool applies to TrueNAS only")
+    if not isinstance(raw, str) or not POOL.fullmatch(raw) or ".." in raw:
+        raise EnrolError("pool has characters that are not allowed")
+    return raw
 
 
 def _digest(token: str) -> str:
@@ -336,7 +351,7 @@ async def progress(store: Store, host: str, now: float) -> dict[str, Any] | None
                          "at": r["at"]} for r in json.loads(reports)]}
 
 
-def command_text(host: str, platform: str, base_url: str, token: str) -> str:
+def command_text(host: str, platform: str, base_url: str, token: str, pool: str = "") -> str:
     """The one-liner, headed with the host name and platform so it cannot be run on the wrong
     machine by mistake. The header is a comment in both shells. `base_url` is the origin the
     console was reached at."""
@@ -344,6 +359,8 @@ def command_text(host: str, platform: str, base_url: str, token: str) -> str:
     head = (f"# Observe install for {host} ({label}). Run this on {host} only. "
             f"The token expires in {TOKEN_TTL_S // 60} minutes and works once.")
     url = f"{base_url.rstrip('/')}/i/{token}"
+    if pool:
+        url += f"?pool={parse_pool(pool, platform)}"
     if platform == "windows":
         line = f"irm '{url}' | iex"
     else:

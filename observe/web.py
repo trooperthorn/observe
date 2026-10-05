@@ -765,6 +765,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
 
         try:
             spec = enrol.parse_spec(body)
+            pool = enrol.parse_pool(body.get("pool"), spec.platform)
             now = auth_clock()
             if spec.name in pushed:
                 raise enrol.EnrolError("a host with this name already exists", 409)
@@ -782,7 +783,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             "platform_label": enrol.PLATFORMS[spec.platform],
             "expires_at": now + enrol.TOKEN_TTL_S, "ttl_s": enrol.TOKEN_TTL_S,
             "command": enrol.command_text(spec.name, spec.platform, str(request.base_url),
-                                          token)})
+                                          token, pool)})
 
     @app.get("/api/hosts/{host}/enrolment", include_in_schema=False)
     async def host_enrolment(host: str, request: Request,
@@ -818,15 +819,21 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": "60"})
         now = auth_clock()
         known = await enrol.peek(store, token, now)
+        platform_of = known[0] if known is not None else ""
         if known is not None:
             platform, wants_control = known
             if platform not in scripts.SCRIPT_PLATFORMS:
                 raise HTTPException(501, "no install script for this platform yet")
+            if wants_control and platform in scripts.AGENT_ONLY_PLATFORMS:
+                raise HTTPException(409, "control is not available for this platform yet")
             if wants_control and not control_public_key():
                 raise HTTPException(409, "control is not set up on this Observe server")
+            if platform == "truenas" and not scripts.valid_pool(request.query_params.get("pool", "")):
+                raise HTTPException(400, "the pool name has characters that are not allowed")
         listen = scripts.usable_address(config.server.listen)
         addrs = [a for a in (listen, scripts.usable_address(request.url.hostname or ""))
                  if a is not None]
+        pool = request.query_params.get("pool", "")
         ctx = scripts.Context(str(request.base_url).rstrip("/"),
                               app.state.observe_machine_id, tuple(dict.fromkeys(addrs)),
                               control_public_key())
@@ -837,26 +844,24 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                                    "wpc_" + "x" * 20 if wants_control else None,
                                    {"fans": [], "services": [], "reboot": False}, "wps_" + "x" * 20)
             try:
-                scripts.render_linux(dummy, ctx)
+                scripts.render(dummy, ctx, pool)
             except scripts.ScriptError as err:
                 await audit.record(store, "enrol_script_failed", method="GET", path="/i/[token]",
                                    status=500, remote=remote,
                                    detail={"reason": str(err), "token_spent": False})
-                return PlainTextResponse("echo 'Observe could not build this script' >&2; exit 1\n",
-                                         status_code=500)
+                return PlainTextResponse(scripts.error_body(platform_of), status_code=500)
         red = await enrol.redeem(store, token, now, remote)
         if red is None:
             return PlainTextResponse("This install command was already used or has expired. "
                                      "Make a new one in the Observe console.\n", status_code=410)
         try:
-            body = scripts.render_linux(red, ctx)
+            body = scripts.render(red, ctx, pool)
         except scripts.ScriptError as err:
             await audit.record(store, "enrol_script_failed", method="GET", path="/i/[token]",
                                status=500, remote=remote,
                                detail={"host": red.host, "reason": str(err)})
-            return PlainTextResponse("echo 'Observe could not build this script' >&2; exit 1\n",
-                                     status_code=500)
-        return PlainTextResponse(body, media_type="text/x-shellscript")
+            return PlainTextResponse(scripts.error_body(platform_of), status_code=500)
+        return PlainTextResponse(body, media_type=scripts.media_type(red.platform))
 
     @app.post("/api/enrol/step", include_in_schema=False)
     async def install_step(request: Request) -> Response:
