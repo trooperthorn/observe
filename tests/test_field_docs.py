@@ -3,6 +3,7 @@ kind, route and page, and the files of this slice keep the project's writing rul
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,20 @@ from watchpost.infra_changes import LENGTH_TOLERANCE_M
 from .test_infra_changes import FIRES
 
 ROOT = Path(__file__).parent.parent
+
+
+def stored_bytes(path: Path) -> bytes:
+    """The bytes git stores for a tracked file, which is what the line ending rule is about.
+
+    A Windows checkout with core.autocrlf rewrites the working copy with CRLF even though the
+    committed blob uses LF, so the working copy is only read for files git does not track yet.
+    """
+    rel = path.relative_to(ROOT).as_posix()
+    try:
+        return subprocess.run(["git", "-C", str(ROOT), "cat-file", "blob", f":{rel}"],
+                              capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return path.read_bytes()
 PLUGIN = ROOT / "plugins" / "pockethernet" / "watchpost_pockethernet"
 KINDS = sorted({k for k, *_ in FIRES})
 DOCS = {name: (ROOT / name).read_text(encoding="utf-8")
@@ -50,7 +65,7 @@ def test_readme_and_threat_model_cover_plugin_pages_and_field_findings():
 
 @pytest.mark.parametrize("name", sorted(DOCS))
 def test_docs_use_lf_line_endings(name):
-    assert b"\r" not in (ROOT / name).read_bytes()
+    assert b"\r" not in stored_bytes(ROOT / name)
 
 
 def test_docs_added_no_em_dash_for_this_slice():
@@ -62,7 +77,7 @@ def test_docs_added_no_em_dash_for_this_slice():
 
 @pytest.mark.parametrize("path", OWNED, ids=lambda p: p.name)
 def test_new_files_use_lf_and_no_em_dashes_or_model_names(path):
-    raw = path.read_bytes()
+    raw = stored_bytes(path)
     text = raw.decode("utf-8")
     assert b"\r" not in raw and "\u2014" not in text
     assert not any(w in text.lower() for w in ("claude", "opus", "sonnet", "haiku"))
