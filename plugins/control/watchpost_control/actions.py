@@ -14,8 +14,8 @@ from .queue import QueueError
 
 CONTROLLERS = ("thermalctl", "thermal-control-suite")
 MODES = ("dry_run", "active")
-_HEADER = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
-_SERVICE = re.compile(r"^[A-Za-z0-9_.@:-]{1,128}$")
+_HEADER = re.compile(r"[A-Za-z0-9_.-]{1,32}")
+_SERVICE = re.compile(r"[A-Za-z0-9_.@:-]{1,128}")
 _FAN_METRICS = ("fan", "fan_duty", "fan_target")
 
 
@@ -58,7 +58,7 @@ def validate(action: str, params: Any, caps: dict[str, Any]) -> dict[str, Any]:
         _only(params, ("controller", "header", "min_duty"))
         controller = _controller(params)
         header, duty = params["header"], params["min_duty"]
-        if not isinstance(header, str) or not _HEADER.match(header):
+        if not isinstance(header, str) or not _HEADER.fullmatch(header):
             raise QueueError("header must be 1 to 32 letters, digits, dots, dashes or "
                              "underscores", 422)
         if isinstance(duty, bool) or not isinstance(duty, int) or not 0 <= duty <= 100:
@@ -79,7 +79,7 @@ def validate(action: str, params: Any, caps: dict[str, Any]) -> dict[str, Any]:
     if action == "service.restart":
         _only(params, ("name",))
         name = params["name"]
-        if not isinstance(name, str) or not _SERVICE.match(name):
+        if not isinstance(name, str) or not _SERVICE.fullmatch(name):
             raise QueueError("name must be 1 to 128 letters, digits or . _ @ : -", 422)
         return {"name": name}
     if action == "host.reboot":

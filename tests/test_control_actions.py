@@ -109,6 +109,13 @@ def test_unconfirmed_request_is_refused(env):
     assert len(env.audit("control_request_refused")) == 2
 
 
+@pytest.mark.parametrize("value", ["true", 1, "yes", "True", [True], None])
+def test_confirmed_must_be_the_json_boolean_true(env, value):
+    csrf = login(env)
+    assert post(env, csrf, {**req(), "confirmed": value}).status_code == 400
+    assert env.rows("SELECT COUNT(*) FROM control_commands") == [(0,)]
+
+
 @pytest.mark.parametrize("typed", [None, "", "NAS01", "nas01 ", " nas01", "nas02", "nas0"])
 def test_reboot_needs_the_exact_host_name(env, typed):
     csrf = login(env)
@@ -157,6 +164,10 @@ def test_rate_limit_still_applies_to_requests(env):
     ("service.restart", {"name": "a b"}),
     ("service.restart", {"name": HOSTILE}),
     ("service.restart", {"name": ""}),
+    ("service.restart", {"name": "nginx\n"}),
+    ("service.restart", {"name": "nginx "}),
+    ("fan.set_floor", {**FLOOR, "header": "pwm1\n"}),
+    ("fan.set_floor", {**FLOOR, "header": "pwm1 "}),
     ("service.restart", {"name": "x", "extra": 1}),
     ("host.reboot", {"x": 1}),
     ("rm.everything", {}),

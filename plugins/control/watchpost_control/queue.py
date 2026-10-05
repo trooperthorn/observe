@@ -259,9 +259,12 @@ async def pull_commands(store: Store, host: str, key_prefix: str, remote: str,
     return {"commands": items, "cancel": cancel}
 
 
-_KEYS = re.compile(r"\bw(?:p[icf])_[A-Za-z0-9_-]*|\bbearer\s+\S+", re.IGNORECASE)
+_PEM = re.compile(r"-----BEGIN [A-Z0-9 ]+-----.*?(?:-----END [A-Z0-9 ]+-----|\Z)", re.DOTALL)
+_AUTH_HEADER = re.compile(r"\bauthorization\s*:[^\r\n]*", re.IGNORECASE)
+_KEYS = re.compile(r"\b(?:wp[icf]|hw)_[A-Za-z0-9_-]*|\bbearer\s+\S+", re.IGNORECASE)
 _ASSIGNED = re.compile(r"((?:password|passwd|secret|token|api[_-]?key)\s*[=:]\s*)\S+",
                        re.IGNORECASE)
+_LONG_RUN = re.compile(r"[A-Za-z0-9+/_-]{32,}={0,2}")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
 
@@ -270,8 +273,9 @@ def clean_output(text: str) -> tuple[str, bool]:
 
     Redaction runs before the cap so a secret cannot survive by being cut in half.
     """
-    redacted = audit.redact_secrets(_ASSIGNED.sub(
-        lambda m: m.group(1) + audit.REDACTED, _KEYS.sub(audit.REDACTED, text)))
+    red = _AUTH_HEADER.sub(audit.REDACTED, _PEM.sub(audit.REDACTED, text))
+    red = _ASSIGNED.sub(lambda m: m.group(1) + audit.REDACTED, _KEYS.sub(audit.REDACTED, red))
+    redacted = _LONG_RUN.sub(audit.REDACTED, audit.redact_secrets(red))
     cleaned = _CONTROL.sub("?", redacted)
     return cleaned[:MAX_OUTPUT_CHARS], len(cleaned) > MAX_OUTPUT_CHARS
 

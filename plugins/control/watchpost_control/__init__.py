@@ -116,8 +116,9 @@ class RequestBody(BaseModel):
     host: str = Field(min_length=1, max_length=MAX_HOST)
     action: str = Field(min_length=1, max_length=32)
     params: dict[str, Any] = Field(default_factory=dict)
-    # The dialog's Confirm button sets this; a request without it is refused.
-    confirmed: bool = False
+    # The dialog's Confirm button sets this; only the JSON boolean true counts, so the
+    # field is not coerced: "true", 1 and "yes" are refused.
+    confirmed: Any = None
     # A reboot also needs the host name typed exactly.
     confirm_host: str = Field(default="", max_length=MAX_HOST + 64)
 
@@ -158,7 +159,7 @@ def build_admin_router(plugin: "ControlPlugin") -> APIRouter:
         data = await store.latest_host(body.host)
         if data is None:
             return await refuse(404, "this host has never reported")
-        if not body.confirmed:
+        if body.confirmed is not True:
             return await refuse(400, "the request was not confirmed")
         if body.action == REBOOT and body.confirm_host != body.host:
             return await refuse(400, "type the host name exactly to confirm a reboot")

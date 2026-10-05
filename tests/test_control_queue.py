@@ -362,6 +362,29 @@ def test_clean_output_redacts_and_caps():
     assert len(long) == MAX_OUTPUT_CHARS and cut
 
 
+@pytest.mark.parametrize("secret", [
+    "Bearer abc.def.ghi",
+    "wpi_abc_123", "wpc_abc_123", "wpf_abc_123", "hw_abc_123",
+    "password=hunter2", "token=abc123xyz",
+    "Authorization: Basic dXNlcjpwYXNz",
+    "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG\n-----END PRIVATE KEY-----",
+    "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU2Nzg5+/==",
+    "0123456789abcdef0123456789abcdef0123456789abcdef",
+])
+def test_each_secret_shape_is_redacted_in_stored_output(secret):
+    text, _ = clean_output(f"before {secret} after")
+    for part in ("abc.def.ghi", "abc_123", "hunter2", "abc123xyz", "dXNlcjpwYXNz",
+                 "MIIEvQ", "QUJDREVG", "0123456789abcdef0123"):
+        assert part not in text
+    assert "before" in text
+
+
+def test_redaction_runs_before_truncation():
+    secret = "wpi_" + "a" * 50
+    text, cut = clean_output("x" * (MAX_OUTPUT_CHARS - 10) + secret)
+    assert "wpi_" not in text and "aaaa" not in text
+
+
 # ---- committed files --------------------------------------------------------------------
 
 def test_new_control_files_use_lf_and_no_em_dashes_or_model_names():
