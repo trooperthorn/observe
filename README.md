@@ -599,3 +599,8 @@ python -m pytest -q -rs
 
 Set `OBSERVE_REQUIRE_SERVICES=1` to make missing test services a failure
 rather than a skip; CI does this.
+
+`tests/test_ui_static.py` is a static guard. It fails if any page or script under
+`observe/static` or a plugin adds inline script or style, `style=` or `on*=`
+attributes, `innerHTML` and its relatives, `eval`, or an off-origin URL, or if a
+page route loses its Content-Security-Policy header.

@@ -24,7 +24,7 @@ on how you deploy).
 | Unknown config keys rejected | enforced | Typos such as `verfy_tls: false` fail loudly instead of being ignored. |
 | Credential type must match monitor type | enforced | A WinRM secret can not be sent as an SNMP community by mistake. |
 | TLS validation on by default (HTTP, TLS cert, WinRM, MQTT TLS) | enforced | Turning it off is an explicit per-monitor setting. |
-| Device-supplied text rendered as text | enforced | `app.js` uses `textContent` only; CSP forbids inline script and third-party origins. Covers hostile SNMP strings, MQTT payloads, HTTP error text. |
+| Device-supplied text rendered as text | enforced | `app.js` uses `textContent` only; CSP forbids inline script and third-party origins. `tests/test_ui_static.py` scans every HTML and JavaScript file under `observe/static` and the plugin `pages` and `static` folders and fails on inline script or style, `style=` and `on*=` attributes, the `innerHTML` family, `eval`, string timers, `element.style` and off-origin URLs, and asserts the CSP header on every page route, core and plugin. Covers hostile SNMP strings, MQTT payloads, HTTP error text. |
 | PowerShell injection from config values | enforced | Values are embedded as single-quoted literals with quotes doubled; `disk` is pattern-validated. Tested in `test_windows.py`. |
 | Secrets redacted from SNMP error text | enforced | Tested with a wrong community. |
 | Container: non-root UID 10001, all capabilities dropped, read-only root, no-new-privileges | enforced by compose | Only if you run it with the provided compose file. |

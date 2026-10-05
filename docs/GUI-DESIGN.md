@@ -515,7 +515,7 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 
 | # | Slice | Contents | Tests |
 | --- | --- | --- | --- |
-| S0 | Static guard | Add `test_ui_static.py` (no inline script or style, no `style=`/`on*=`, no innerHTML-family or eval in JS, same-origin URLs only). Fix any existing violation. | Static scan, CSP header assert on every page route. |
+| S0 | Static guard | Add `test_ui_static.py` (no inline script or style, no `style=`/`on*=`, no innerHTML-family or eval in JS, same-origin URLs only). Fix any existing violation. | Static scan, CSP header assert on every page route. Done: the scan found no existing violation to fix, and it also checks CSS for off-origin URLs. |
 | S1 | Modules and DOM helpers | `js/dom.js`, `js/api.js`. Convert `infra-common.js` to a module, switch one page (map) to `type="module"`, no visual change. | Page test: the map HTML references `/static/pages/map.js` with `type="module"`. The static file is served with a JS content type. Existing map tests pass. |
 | S2 | Tokens and base CSS | `tokens.css`, `base.css`, `app.css` reduced to legacy aliases. Theme toggle in a small module. | Parse `tokens.css`: every required token is present in light and both dark blocks. Contrast script (pure Python WCAG formula) passes 4.5:1 for text and 3:1 for dots. |
 | S3 | Shell and nav | `shell.js` with a NAV table, header and summary, plus a plugin nav hook (Python returns nav entries). | TestClient: a viewer's `/api/ui/nav` (or nav embedded per page) omits admin entries. Every page includes a `<nav>` mount and `shell.js`. |
