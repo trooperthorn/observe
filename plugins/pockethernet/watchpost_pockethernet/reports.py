@@ -2,8 +2,8 @@
 
 A report is keyed by `(source, report_id)`. The source is the device label the upload key is
 bound to, so a key for one phone can never replace or hide a report of another phone, even
-with a guessed report id. Port properties and links are derived from these rows (derive.py), so the body is the
-evidence they can be rebuilt from.
+with a guessed report id. Port properties and links are derived from these rows (derive.py),
+so the body is the evidence they can be rebuilt from.
 
 Revisions decide what an upload does: a higher revision replaces the stored report, an equal
 revision is a duplicate and changes nothing, and a lower revision is ignored. The decision and
@@ -89,8 +89,9 @@ def _store_sync(store: Store, r: NewReport) -> Outcome:
         if row is None:
             store._db.execute(
                 "INSERT INTO field_reports (revision, taken_at_ms, reported_taken_at_ms, "
-                "clock_corrected, tester_serial, status, site, port_id, body_sha256, body, key_prefix, "
-                "source, report_id, received_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "clock_corrected, tester_serial, status, site, port_id, body_sha256, body, "
+                "key_prefix, source, report_id, received_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (*values, r.source, r.report_id, r.received_at, r.received_at))
             return Outcome("accepted", r.revision)
         stored = int(row[0])

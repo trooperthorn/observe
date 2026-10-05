@@ -12,6 +12,9 @@ What a report yields:
 - The site port id (else the location label, else the jack label property) names the jack. The
   jack is patched to that port and a `field_report` link joins them. A jack seen on another
   port than before closes the earlier link at once (the core does that in upsert_link).
+- A switch or port that already exists is never overwritten: live LLDP or SNMP data owns the
+  name, addresses, vendor, platform and port role (an uplink stays an uplink). A port the report
+  creates starts as `access`.
 - Each allowlisted property in the report is appended to the port with provenance: the report
   id, the key (prefix and device label) as `recorded_by`, and the tester serial as a property.
   A value equal to the newest one only moves `last_verified`.
@@ -24,6 +27,7 @@ apart from their autoincrement ids.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -154,9 +158,15 @@ async def derive_report(infra: InfraService, report: Report, *, key_prefix: str,
     recorded_by = f"{key_prefix}:{device}"[:64]
     seen = taken_ms / 1000.0
 
-    await infra.upsert_switch(sid, name=name, mgmt_addresses=addrs[:16], vendor=vendor,
-                              platform=platform, now=now)
-    await infra.upsert_port(sid, key, raw_port_id=raw_port, role="access", now=now)
+    # Field data never overwrites what live sources know: a switch or port that already exists
+    # keeps its name, addresses, vendor, platform and role, and only has its last-seen moved.
+    if await infra.switch_exists(sid):
+        await infra.upsert_switch(sid, now=now)
+    else:
+        await infra.upsert_switch(sid, name=name, mgmt_addresses=addrs[:16], vendor=vendor,
+                                  platform=platform, now=now)
+    role = "unknown" if await infra.port_exists(sid, key) else "access"
+    await infra.upsert_port(sid, key, raw_port_id=raw_port, role=role, now=now)
     result.switch, result.port = sid, key
     if jack:
         await infra.upsert_jack(jack, room=_clean(site.room if site else ""),
@@ -232,7 +242,7 @@ async def rebuild(store: Store) -> RebuildResult:
             report = parse_report(bytes(body))
             res = await derive_report(infra, report, key_prefix=key_prefix, device=source,
                                       taken_ms=taken_ms, now=updated_at)
-        except (ReportError, InfraError, ValueError):
+        except (ReportError, InfraError, ValueError, sqlite3.Error):
             out.failed += 1
             continue
         if res.skipped:

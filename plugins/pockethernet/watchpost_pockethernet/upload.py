@@ -23,6 +23,7 @@ version. The corrected time is a column beside it.
 
 from __future__ import annotations
 
+import logging
 import zlib
 from collections.abc import Callable
 from typing import Any
@@ -35,6 +36,8 @@ from watchpost.infra import InfraService
 from .derive import derive_report
 from .reports import NewReport, store_report
 from .schema import MAX_REPORT_BYTES, ReportError, parse_report
+
+log = logging.getLogger(__name__)
 
 MAX_RATIO = 50  # inflated bytes per compressed byte; real reports compress about 5 to 15 times
 RATIO_FLOOR = 16_384  # below this size the ratio is not checked, because it cannot hurt
@@ -155,6 +158,7 @@ def build_router() -> APIRouter:
                 request.state.audit_detail["derived"] = derived.as_detail()
             except Exception as err:  # the evidence is stored; only the derivation is lost
                 request.state.audit_detail["derive_failed"] = type(err).__name__
+                log.exception("derivation failed for field report %s", report.report_id)
         return JSONResponse({
             "result": outcome.result, "report_id": report.report_id,
             "revision": outcome.revision, "clock_corrected": corrected,

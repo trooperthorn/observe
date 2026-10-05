@@ -169,6 +169,16 @@ class InfraService:
         await self._run(go)
         return key
 
+    async def switch_exists(self, sid: str) -> bool:
+        sid = _norm_switch(sid)
+        return bool(await self._run(lambda db: db.execute(
+            "SELECT 1 FROM infra_switches WHERE switch_id=?", (sid,)).fetchone()))
+
+    async def port_exists(self, sid: str, port: str) -> bool:
+        sid, key = _norm_switch(sid), _key(port)
+        return bool(await self._run(lambda db: db.execute(
+            "SELECT 1 FROM infra_ports WHERE switch_id=? AND port_key=?", (sid, key)).fetchone()))
+
     async def upsert_jack(self, jack_key: str, *, room: str = "", site: str = "",
                           switch: str | None = None, port: str | None = None,
                           now: float | None = None) -> str:

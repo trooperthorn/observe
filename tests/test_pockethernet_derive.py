@@ -228,3 +228,62 @@ def test_rebuild_refuses_when_retention_dropped_a_body(env):
     r = env.client.post("/api/plugins/pockethernet/rebuild", headers=admin_headers(env))
     assert r.status_code == 409
     assert snapshot(env) == before  # nothing was deleted
+
+
+def test_field_report_never_overwrites_what_live_sources_know(env):
+    env.post(FIXTURE)
+    db = sqlite3.connect(env.path)
+    db.execute("UPDATE infra_ports SET role='uplink' WHERE switch_id=?", (SID,))
+    db.execute("UPDATE infra_switches SET name='core-sw', vendor='Live Vendor', "
+               "platform='live-os', mgmt_addresses='[\"192.0.2.1\"]' WHERE switch_id=?", (SID,))
+    db.commit()
+    db.close()
+    env.clock.now += 60
+    env.post(second_port(env, "r-live", port="Gi1/0/5"))
+    assert env.rows("SELECT role FROM infra_ports") == [("uplink",)]
+    assert env.rows("SELECT name, vendor, platform, mgmt_addresses FROM infra_switches") == [
+        ("core-sw", "Live Vendor", "live-os", '["192.0.2.1"]')]
+    assert env.rows("SELECT last_seen FROM infra_switches")[0][0] > FIXTURE["taken_at_ms"] / 1000
+
+    # A rebuild keeps them too.
+    headers = admin_headers(env)
+    assert env.client.post("/api/plugins/pockethernet/rebuild", headers=headers).status_code == 200
+    assert env.rows("SELECT role FROM infra_ports") == [("uplink",)]
+    assert env.rows("SELECT name FROM infra_switches") == [("core-sw",)]
+
+
+def test_rebuild_after_a_replaced_revision_keeps_the_newest_values_and_drops_old_history(env):
+    env.post(FIXTURE)
+    env.clock.now += 60
+    newer = env.report(revision=FIXTURE["revision"] + 1,
+                       properties={**FIXTURE["properties"], "link_speed_mbps": 100})
+    assert env.post(newer).json()["result"] == "replaced"
+    assert [r[1] for r in props(env, "link_speed_mbps")] == ["1000", "100"]
+    current = [l[:6] + l[8:] for l in snapshot(env)["links"]]
+
+    r = env.client.post("/api/plugins/pockethernet/rebuild", headers=admin_headers(env))
+    assert r.status_code == 200 and r.json()["derived"] == 1
+    # Only the newest stored revision is replayed, so the superseded value is not recreated.
+    assert [r[1] for r in props(env, "link_speed_mbps")] == ["100"]
+    # The same edges come back; only the first-seen time moves to the replayed revision.
+    assert [l[:6] + l[8:] for l in snapshot(env)["links"]] == current
+
+
+def test_migration_2_upgrades_a_version_1_database_with_rows(tmp_path):
+    from watchpost.store import migrate_plugins
+    from watchpost_pockethernet.reports import MIGRATIONS
+
+    db = sqlite3.connect(str(tmp_path / "old.db"))
+    migrate_plugins(db, {"pockethernet": MIGRATIONS[:1]})
+    assert "key_prefix" not in [r[1] for r in db.execute("PRAGMA table_info(field_reports)")]
+    db.execute(
+        "INSERT INTO field_reports (source, report_id, revision, taken_at_ms, "
+        "reported_taken_at_ms, received_at, updated_at, status, body_sha256, body) "
+        "VALUES ('sean-pixel', 'old-1', 1, 1000, 1000, 1.0, 1.0, 'pass', 'abc', x'7b7d')")
+    db.commit()
+    migrate_plugins(db, {"pockethernet": MIGRATIONS})
+    assert db.execute("SELECT version FROM plugin_schema WHERE plugin='pockethernet'"
+                      ).fetchone() == (2,)
+    assert db.execute("SELECT report_id, key_prefix, body FROM field_reports").fetchall() == [
+        ("old-1", "", b"{}")]
+    db.close()
