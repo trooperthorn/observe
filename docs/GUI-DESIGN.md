@@ -532,6 +532,16 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 | S14 | Customise dashboard (optional) | `/api/ui/layout/{view}` per user, `tiles.js` with up/down and hide. | TestClient: per-user isolation, stale IDs dropped, unknown view rejected, size cap. |
 | S15 | Cleanup and rename | Remove legacy aliases and `app.css`, change the old name to "Observe" in titles and brand. | Static scan: no `var(--bg)` and similar remain, every `<title>` ends with "- Observe". |
 
+### S4 notes (done)
+
+- `css/components.css` holds cards (including `details.card` and `.card.notice`), the KPI row, status tiles, chips, buttons, tables, dialogs and toasts. It uses tokens only, with no colour literals. It is not yet linked by any page: the pages that adopt it (S5 onwards) add it after `base.css`, and the tests that pin the `tokens, base, app` order will gain it then.
+- `js/chips.js` builds `statusChip(state, text)`, `neutralChip` and `monoTag`. The state table lives in `js/chip-states.js` as plain data (role, icon shape, word), so it can be tested without a browser. Unknown states fall back to a hollow "Unknown" chip.
+- `js/table.js` exports `sortableTable({columns, rows, empty, pageSizes, caption})` with sortable headers, a page-size select, "Showing N of M" and previous and next buttons. The pure rules (`sortRows`, `nextSort`, `ariaSort`, `pageSlice`) live in `js/table-core.js`.
+- `js/dialog.js` exports `confirmDialog` and `typedConfirm`, both returning a Promise of a boolean and returning focus to the opener. The typed-name rule is `typedMatches` in `js/dialog-logic.js`. `host-control.js` still has its own copy until S6 switches it over.
+- `js/toast.js` exports `toast(text, kind)` with a polite status region and an alert region for errors. Errors stay until closed; the rest go after six seconds.
+- Tests: `tests/test_ui_components.py` checks the sources, mirrors the sort rules in Python and asserts that no `.pill` element is built without text. `tests/js/table-core.test.mjs` holds the same cases for `node --test tests/js` in CI. Per Q6, Node is not required locally.
+- Deviation: the pure helpers are split into `table-core.js`, `chip-states.js` and `dialog-logic.js`, because the modules import `dom.js` by an absolute URL that Node cannot resolve.
+
 ### S3 notes (done)
 
 - `js/shell.js` and `css/shell.css` are loaded by every signed-in page (not the login page). Each page keeps a `<header id="shell-header">` with its `#summary` live region and any page-specific controls, plus `<nav id="shell-nav">`. Classic page scripts still find `#summary` at load time because the markup is static; the module adds the brand, the theme toggle and the user name around it.

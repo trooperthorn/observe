@@ -1,0 +1,110 @@
+/* Observe components: card, KPI, status tiles, chips, tables, buttons, dialogs and toasts.
+   Every colour comes from tokens.css. Status is always an icon and a word, never colour alone.
+   Rules ported in spirit from ha_Int_soc (MIT, same owner). */
+
+/* ---- cards ---- */
+.card { background: var(--o-surface); border: 1px solid var(--o-border);
+        border-radius: var(--o-radius); padding: var(--o-s4); }
+.card h3 { font-size: var(--o-fs-title); font-weight: 650; }
+.card-sub { color: var(--o-text-muted); font-size: var(--o-fs-sm); margin: var(--o-s1) 0 0; }
+details.card > summary { cursor: pointer; list-style: none; display: flex; align-items: center;
+                         gap: var(--o-s2); font-weight: 650; min-height: 32px; }
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary::before { content: ""; width: 7px; height: 7px; flex: none;
+  border-right: 2px solid var(--o-text-muted); border-bottom: 2px solid var(--o-text-muted);
+  transform: rotate(-45deg); transition: transform var(--o-dur); }
+details.card[open] > summary::before { transform: rotate(45deg); }
+details.card[open] > summary { margin-bottom: var(--o-s3); }
+.card.notice { background: var(--o-down-bg); border-color: var(--o-down); color: var(--o-text); }
+.card.notice h3 { color: var(--o-down); }
+
+/* ---- KPI tiles ---- */
+.kpi-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--o-s3); }
+.kpi { display: flex; flex-direction: column; gap: var(--o-s1); text-align: left;
+       background: var(--o-surface); border: 1px solid var(--o-border);
+       border-radius: var(--o-radius); padding: var(--o-s4); color: var(--o-text); }
+button.kpi:hover { background: var(--o-surface-subtle); border-color: var(--o-accent-line); }
+.kpi-value { font-size: var(--o-fs-kpi); font-weight: 650; line-height: 1.1;
+             font-variant-numeric: tabular-nums; }
+.kpi-label { color: var(--o-text-muted); font-size: var(--o-fs-sm); }
+@media (max-width: 900px) { .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .kpi-row { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---- status tiles: tinted, with an icon and a word, never just a coloured box ---- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+         gap: var(--o-s2); }
+.tile { display: flex; align-items: center; gap: var(--o-s2); padding: var(--o-s3);
+        border-radius: var(--o-radius-sm); border: 1px solid var(--o-border); }
+.tile .tile-count { font-size: var(--o-fs-h); font-weight: 650; font-variant-numeric: tabular-nums; }
+.tile.s-up { background: var(--o-up-bg); color: var(--o-up); }
+.tile.s-warn { background: var(--o-warn-bg); color: var(--o-warn); }
+.tile.s-serious { background: var(--o-serious-bg); color: var(--o-serious); }
+.tile.s-down { background: var(--o-down-bg); color: var(--o-down); }
+.tile.s-pending { background: var(--o-pending-bg); color: var(--o-pending); }
+.tile.s-unreach { background: var(--o-unreach-bg); color: var(--o-unreach); }
+
+/* ---- chips ---- */
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px;
+        border-radius: var(--o-radius-pill); font-size: var(--o-fs-xs); font-weight: 600;
+        line-height: 1.5; white-space: nowrap; }
+.chip-icon { flex: none; fill: none; stroke: currentColor; stroke-width: 1.6;
+             stroke-linecap: round; stroke-linejoin: round; }
+.chip.s-up, .toast.s-up { background: var(--o-up-bg); color: var(--o-up); }
+.chip.s-warn, .toast.s-warn { background: var(--o-warn-bg); color: var(--o-warn); }
+.chip.s-serious, .toast.s-serious { background: var(--o-serious-bg); color: var(--o-serious); }
+.chip.s-down, .toast.s-down { background: var(--o-down-bg); color: var(--o-down); }
+.chip.s-pending, .toast.s-pending { background: var(--o-pending-bg); color: var(--o-pending); }
+.chip.s-unreach, .toast.s-unreach { background: var(--o-unreach-bg); color: var(--o-unreach); }
+.chip.neutral { background: var(--o-surface-subtle); color: var(--o-text-muted);
+                border: 1px solid var(--o-border); }
+.tag { font-family: var(--o-mono); font-size: var(--o-fs-xs); padding: 1px 6px;
+       border-radius: 6px; background: var(--o-surface-subtle); border: 1px solid var(--o-border); }
+
+/* ---- buttons ---- */
+.btn { background: transparent; border: 1px solid var(--o-accent); color: var(--o-accent);
+       border-radius: var(--o-radius-sm); padding: 0 var(--o-s3); }
+.btn:hover { background: var(--o-accent-tint); }
+.btn.primary { background: var(--o-accent); color: var(--o-surface); }
+.btn.primary:hover { background: var(--o-accent); opacity: .9; }
+.btn.danger { border-color: var(--o-down); color: var(--o-down); }
+.btn.danger:hover { background: var(--o-down-bg); }
+.btn.ghost { border-color: transparent; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ---- tables ---- */
+.table-wrap { overflow-x: auto; max-width: 100%; }
+table.data { width: 100%; font-size: var(--o-fs-base); }
+table.data th, table.data td { text-align: left; padding: var(--o-s2) var(--o-s3);
+                               border-bottom: 1px solid var(--o-border); vertical-align: middle; }
+table.data th { color: var(--o-text-muted); font-size: var(--o-fs-sm); font-weight: 600;
+                white-space: nowrap; padding-top: 0; padding-bottom: 0; }
+table.data th.num, table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.data tbody tr:hover { background: var(--o-surface-subtle); }
+.th-sort { background: none; border: 0; padding: var(--o-s2) 0; display: inline-flex;
+           align-items: center; gap: var(--o-s1); color: inherit; font-weight: inherit; }
+.th-arrow { font-size: 10px; opacity: .6; }
+th[aria-sort="ascending"] .th-arrow, th[aria-sort="descending"] .th-arrow { opacity: 1; }
+.table-foot { display: flex; align-items: center; flex-wrap: wrap; gap: var(--o-s3);
+              padding-top: var(--o-s3); font-size: var(--o-fs-sm); }
+.empty { text-align: center; padding: var(--o-s5) var(--o-s4); }
+
+/* ---- dialogs ---- */
+dialog.dlg { background: var(--o-surface); color: var(--o-text); border: 1px solid var(--o-border);
+             border-radius: var(--o-radius); padding: var(--o-s4); max-width: 28rem;
+             width: calc(100% - 2 * var(--o-s4)); }
+dialog.dlg::backdrop { background: var(--o-surface-subtle); backdrop-filter: blur(2px); }
+.dlg .field { display: flex; flex-direction: column; gap: var(--o-s1); margin: var(--o-s3) 0; }
+.dlg-actions { display: flex; justify-content: flex-end; gap: var(--o-s2); margin-top: var(--o-s4); }
+
+/* ---- toasts ---- */
+.toasts { position: fixed; right: var(--o-s4); bottom: var(--o-s4); z-index: 50; display: flex;
+          flex-direction: column; gap: var(--o-s2); max-width: min(24rem, calc(100% - 2 * var(--o-s4))); }
+.toasts[data-kind="error"] { bottom: auto; top: var(--o-s4); }
+.toast { display: flex; align-items: center; gap: var(--o-s2); padding: var(--o-s3);
+         border-radius: var(--o-radius-sm); border: 1px solid var(--o-border);
+         animation: toast-in var(--o-dur) ease-out; }
+.toast-text { flex: 1; overflow-wrap: anywhere; }
+.toast-close { background: transparent; border: 1px solid currentColor; color: inherit;
+               border-radius: var(--o-radius-sm); padding: 0 var(--o-s2); }
+@keyframes toast-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .toast { animation: none; } }

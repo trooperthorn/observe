@@ -611,3 +611,8 @@ token is present in the light block and both dark blocks, the two dark blocks ma
 text, status and focus colours meet WCAG contrast (4.5:1 for text, 3:1 for dots and the focus
 ring) in light and dark. The console theme (Auto, Light or Dark) is a per-browser choice kept in
 `localStorage` under `observe.theme`; the server never stores it.
+
+`observe/static/css/components.css` and the modules `js/chips.js`, `js/table.js`, `js/dialog.js`
+and `js/toast.js` are the shared building blocks for status chips (icon plus word), cards, KPI
+tiles, sortable tables, confirm dialogs and toasts. `tests/test_ui_components.py` checks them,
+and `node --test tests/js` runs the pure sort and chip tests where Node is available (CI only).

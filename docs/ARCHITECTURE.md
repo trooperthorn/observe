@@ -419,6 +419,12 @@ plugin entries. The user's role comes from `GET /api/session`; admin entries are
 viewer, which is tidiness only because the server enforces every admin route. The login page has
 no shell.
 
+Shared components: `css/components.css` plus `js/chips.js`, `js/table.js`, `js/dialog.js` and
+`js/toast.js`. They build every node with `el()` and `svg()` from `js/dom.js`, so text always
+goes in through `textContent`. Status is an icon and a word, never colour alone. The pure logic
+sits in `js/table-core.js`, `js/chip-states.js` and `js/dialog-logic.js` so it can be tested
+without a browser. No page loads them yet.
+
 ## Infrastructure map core
 
 Schema version 6 (and 7, below) adds `infra_switches`, `infra_ports`, `infra_jacks`, `infra_links`,
