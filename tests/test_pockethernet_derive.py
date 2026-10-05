@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from watchpost import auth
+from watchpost_pockethernet import derive
 from watchpost.portkey import switch_id
 
 from .test_pockethernet_upload import FIXTURE, Env, run
@@ -114,7 +115,8 @@ def test_replaced_revision_derives_again_and_duplicate_does_not(env):
     body = env.report(revision=2)
     body["properties"] = {**FIXTURE["properties"], "link_speed_mbps": 100}
     assert env.post(body).json()["result"] == "replaced"
-    assert [r[1] for r in props(env, "link_speed_mbps")] == ["1000", "100"]
+    # The superseded revision's rows are retracted, so only the newest values remain.
+    assert [r[1] for r in props(env, "link_speed_mbps")] == ["100"]
 
 
 def test_report_without_a_neighbour_is_stored_but_derives_nothing(env):
@@ -139,16 +141,70 @@ def test_cdp_neighbour_without_a_mac_uses_the_device_name(env):
     assert env.rows("SELECT confidence FROM infra_links") == [(0.8,)]
 
 
-def test_a_failed_derivation_does_not_fail_the_upload(env, monkeypatch):
+def test_a_failed_derivation_is_stored_flagged_and_not_a_clean_accept(env, monkeypatch):
+    real = derive.derive_report
+
     async def boom(*a, **k):
         raise RuntimeError("secret detail")
     monkeypatch.setattr("watchpost_pockethernet.upload.derive_report", boom)
     r = env.post(FIXTURE)
-    assert r.status_code == 200 and r.json()["result"] == "accepted"
-    assert len(env.rows("SELECT 1 FROM field_reports")) == 1
+    assert r.status_code == 202
+    assert r.json()["result"] == "accepted" and r.json()["derive_status"] == "failed"
+    assert "secret" not in r.text
+    assert env.rows("SELECT derive_status FROM field_reports") == [("failed",)]
     (a,) = env.rows("SELECT detail FROM audit WHERE path=?", "/api/v1/field-reports")
     detail = json.loads(a[0])
     assert detail["derive_failed"] == "RuntimeError" and "secret" not in a[0]
+    assert env.rows("SELECT 1 FROM port_properties") == []
+
+    # The cause is fixed; an admin retry derives it and the status becomes ok.
+    monkeypatch.setattr("watchpost_pockethernet.upload.derive_report", real)
+    headers = admin_headers(env)
+    r = env.client.post("/api/plugins/pockethernet/retry", headers=headers)
+    assert r.status_code == 200
+    assert r.json() == {"retried": 1, "derived": 1, "failed": 0}
+    assert env.rows("SELECT derive_status FROM field_reports") == [("ok",)]
+    assert props(env, "link_speed_mbps")
+    assert env.client.post("/api/plugins/pockethernet/retry",
+                           headers=headers).json()["retried"] == 0
+
+
+def test_revision_2_removes_a_property_only_revision_1_set_and_live_equals_rebuild(env):
+    env.post(FIXTURE)
+    env.clock.now += 60
+    newer = env.report(revision=FIXTURE["revision"] + 1)
+    newer["properties"] = {k: v for k, v in FIXTURE["properties"].items() if k != "vlan"}
+    assert "vlan" in FIXTURE["properties"]
+    assert env.post(newer).json()["result"] == "replaced"
+    assert env.rows("SELECT 1 FROM port_properties WHERE name='vlan'") == []
+    live = snapshot(env)
+    r = env.client.post("/api/plugins/pockethernet/rebuild", headers=admin_headers(env))
+    assert r.status_code == 200
+    assert env.rows("SELECT 1 FROM port_properties WHERE name='vlan'") == []
+    rebuilt = snapshot(env)
+    strip = lambda rows: [x[:6] + x[8:] for x in rows]  # noqa: E731  first_seen moves
+    assert [p[1:] for p in live["props"]] == [p[1:] for p in rebuilt["props"]]
+    assert strip(live["links"]) == strip(rebuilt["links"])
+
+
+def test_rebuild_rolls_back_and_lists_the_report_when_a_body_is_corrupt(env):
+    env.post(FIXTURE)
+    env.clock.now += 60
+    env.post(second_port(env, "r-2"))
+    before = snapshot(env)
+    assert before["props"]
+    db = sqlite3.connect(env.path)
+    db.execute("UPDATE field_reports SET body=? WHERE report_id='r-2'", (b"{not json",))
+    db.commit()
+    db.close()
+    r = env.client.post("/api/plugins/pockethernet/rebuild", headers=admin_headers(env))
+    assert r.status_code == 409
+    assert r.json()["detail"]["failed_reports"] == [
+        {"source": "sean-pixel", "report_id": "r-2"}]
+    assert snapshot(env) == before  # the old derived data is intact
+    (a,) = env.rows("SELECT detail FROM audit WHERE path=?",
+                    "/api/plugins/pockethernet/rebuild")
+    assert json.loads(a[0])["failed_reports"] == [{"source": "sean-pixel", "report_id": "r-2"}]
 
 
 def snapshot(env: Env) -> dict[str, Any]:
@@ -261,7 +317,7 @@ def test_rebuild_after_a_replaced_revision_keeps_the_newest_values_and_drops_old
     newer = env.report(revision=FIXTURE["revision"] + 1,
                        properties={**FIXTURE["properties"], "link_speed_mbps": 100})
     assert env.post(newer).json()["result"] == "replaced"
-    assert [r[1] for r in props(env, "link_speed_mbps")] == ["1000", "100"]
+    assert [r[1] for r in props(env, "link_speed_mbps")] == ["100"]
     current = [l[:6] + l[8:] for l in snapshot(env)["links"]]
 
     r = env.client.post("/api/plugins/pockethernet/rebuild", headers=admin_headers(env))
@@ -286,9 +342,9 @@ def test_migration_2_upgrades_a_version_1_database_with_rows(tmp_path):
     db.commit()
     migrate_plugins(db, {"pockethernet": MIGRATIONS})
     assert db.execute("SELECT version FROM plugin_schema WHERE plugin='pockethernet'"
-                      ).fetchone() == (2,)
-    assert db.execute("SELECT report_id, key_prefix, body FROM field_reports").fetchall() == [
-        ("old-1", "", b"{}")]
+                      ).fetchone() == (3,)
+    assert db.execute("SELECT report_id, key_prefix, body, derive_status "
+                      "FROM field_reports").fetchall() == [("old-1", "", b"{}", "ok")]
     db.close()
 
 

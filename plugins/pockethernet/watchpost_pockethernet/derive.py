@@ -75,6 +75,11 @@ class Derived:
         return d
 
 
+def recorded_by_for(key_prefix: str, device: str) -> str:
+    """The `recorded_by` of every property a report from this key and device writes."""
+    return f"{key_prefix}:{device}"[:64]
+
+
 def _clean(value: str | None) -> str:
     return (value or "").strip()
 
@@ -173,7 +178,7 @@ async def derive_report(infra: InfraService, report: Report, *, key_prefix: str,
     site = report.site
     jack = _clean(site.port_id if site else "") or _clean(report.location_label) \
         or _clean(report.properties.jack_label)
-    recorded_by = f"{key_prefix}:{device}"[:64]
+    recorded_by = recorded_by_for(key_prefix, device)
     seen = taken_ms / 1000.0  # the corrected observation time; `now` is only recorded_at
 
     # Field data never overwrites what live sources know: a switch or port that already exists
@@ -212,34 +217,76 @@ class RebuildResult:
     skipped: int = 0
     failed: int = 0
     pruned: int = 0
+    failures: list[dict[str, str]] = field(default_factory=list)
 
     def as_detail(self) -> dict[str, Any]:
-        return {"reports": self.reports, "derived": self.derived, "skipped": self.skipped,
-                "failed": self.failed, "pruned": self.pruned}
+        d: dict[str, Any] = {"reports": self.reports, "derived": self.derived,
+                             "skipped": self.skipped, "failed": self.failed,
+                             "pruned": self.pruned}
+        if self.failures:
+            d["failed_reports"] = self.failures
+        return d
 
 
-def _clear_sync(store: Store) -> tuple[list[tuple[Any, ...]], int]:
-    """Read the reports to replay and delete what they derived, in one transaction.
+class _InlineInfra(InfraService):
+    """InfraService that runs on the caller's thread inside the caller's open transaction.
 
-    Refuses (returns the pruned count with no rows) when a body was dropped by retention,
-    because those reports could not be replayed and their properties would be lost.
+    The rebuild holds the store lock and one transaction for its whole run, so each call here
+    must neither take the lock again nor commit.
     """
-    with store._lock, store._db:
-        pruned = store._db.execute(
-            "SELECT COUNT(*) FROM field_reports WHERE body IS NULL").fetchone()[0]
+
+    async def _run(self, fn: Any) -> Any:
+        return fn(self._store._db)
+
+
+def _rebuild_sync(store: Store) -> RebuildResult:
+    out = RebuildResult()
+    with store._lock:
+        db = store._db
+        pruned = db.execute("SELECT COUNT(*) FROM field_reports WHERE body IS NULL").fetchone()[0]
         if pruned:
-            return [], int(pruned)
-        rows = store._db.execute(
+            out.pruned = int(pruned)
+            return out
+        rows = db.execute(
             "SELECT source, report_id, key_prefix, taken_at_ms, updated_at, body "
             "FROM field_reports ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
-        store._db.execute("DELETE FROM port_properties WHERE source=?", (SOURCE,))
-        jacks = [r[0] for r in store._db.execute(
-            "SELECT a_ref FROM infra_links WHERE source=? AND a_kind='jack'", (LINK_SOURCE,))]
-        store._db.execute("DELETE FROM infra_links WHERE source=?", (LINK_SOURCE,))
-        store._db.executemany(
-            "UPDATE infra_jacks SET switch_id=NULL, port_key=NULL WHERE jack_key=?",
-            [(j,) for j in jacks])
-        return rows, 0
+        try:
+            db.execute("DELETE FROM port_properties WHERE source=?", (SOURCE,))
+            jacks = [r[0] for r in db.execute(
+                "SELECT a_ref FROM infra_links WHERE source=? AND a_kind='jack'", (LINK_SOURCE,))]
+            db.execute("DELETE FROM infra_links WHERE source=?", (LINK_SOURCE,))
+            db.executemany(
+                "UPDATE infra_jacks SET switch_id=NULL, port_key=NULL WHERE jack_key=?",
+                [(j,) for j in jacks])
+            infra = _InlineInfra(store)
+
+            async def replay() -> None:
+                for source, report_id, key_prefix, taken_ms, updated_at, body in rows:
+                    out.reports += 1
+                    try:
+                        report = parse_report(bytes(body))
+                        res = await derive_report(infra, report, key_prefix=key_prefix,
+                                                  device=source, taken_ms=taken_ms,
+                                                  now=updated_at)
+                    except (ReportError, InfraError, ValueError, sqlite3.Error):
+                        out.failed += 1
+                        out.failures.append({"source": source, "report_id": report_id})
+                        continue
+                    if res.skipped:
+                        out.skipped += 1
+                    else:
+                        out.derived += 1
+
+            asyncio.run(replay())
+            if out.failed:
+                db.rollback()  # keep the old derived data; the caller reports the failures
+                return out
+            db.execute("UPDATE field_reports SET derive_status='ok'")
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+    return out
 
 
 async def rebuild(store: Store) -> RebuildResult:
@@ -247,24 +294,65 @@ async def rebuild(store: Store) -> RebuildResult:
 
     Switches, ports and jacks stay (other sources may share them, and upserts are idempotent);
     this plugin's properties and `field_report` links are deleted and replayed in the order the
-    reports were observed. Refused with a nonzero `pruned` when retention dropped any body.
+    reports were observed, all in one transaction. When any body fails to parse or derive, the
+    transaction is rolled back, the old derived data stays and `failures` names the reports.
+    Refused with a nonzero `pruned` when retention dropped any body.
     """
-    out = RebuildResult()
-    rows, out.pruned = await asyncio.to_thread(_clear_sync, store)
-    if out.pruned:
-        return out
+    return await asyncio.to_thread(_rebuild_sync, store)
+
+
+@dataclass
+class RetryResult:
+    retried: int = 0
+    derived: int = 0
+    failed: int = 0
+    failures: list[dict[str, str]] = field(default_factory=list)
+
+    def as_detail(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"retried": self.retried, "derived": self.derived,
+                             "failed": self.failed}
+        if self.failures:
+            d["failed_reports"] = self.failures
+        return d
+
+
+def _pending_sync(store: Store) -> list[tuple[Any, ...]]:
+    with store._lock:
+        return store._db.execute(
+            "SELECT source, report_id, revision, key_prefix, taken_at_ms, updated_at, body "
+            "FROM field_reports WHERE derive_status != 'ok' "
+            "ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
+
+
+def _retract_sync(store: Store, report_id: str, recorded_by: str) -> None:
+    with store._lock, store._db:
+        store._db.execute(
+            "DELETE FROM port_properties WHERE source=? AND report_id=? AND recorded_by=?",
+            (SOURCE, report_id, recorded_by))
+
+
+async def retry_failed(store: Store) -> RetryResult:
+    """Derive again every stored report whose derivation failed or never finished."""
+    from .reports import mark_derive_status  # reports imports this module for its constants
+
+    out = RetryResult()
     infra = InfraService(store)
-    for source, _report_id, key_prefix, taken_ms, updated_at, body in rows:
-        out.reports += 1
+    for source, report_id, revision, key_prefix, taken_ms, updated_at, body in             await asyncio.to_thread(_pending_sync, store):
+        out.retried += 1
         try:
+            if body is None:
+                raise ReportError("the report body was dropped by retention", 400)
             report = parse_report(bytes(body))
-            res = await derive_report(infra, report, key_prefix=key_prefix, device=source,
-                                      taken_ms=taken_ms, now=updated_at)
-        except (ReportError, InfraError, ValueError, sqlite3.Error):
+            # Rows a half-finished attempt left are retracted first, so the retry is idempotent.
+            await asyncio.to_thread(_retract_sync, store, report_id,
+                                    recorded_by_for(key_prefix, source))
+            await derive_report(infra, report, key_prefix=key_prefix, device=source,
+                                taken_ms=taken_ms, now=updated_at)
+        except Exception:
             out.failed += 1
+            out.failures.append({"source": source, "report_id": report_id})
+            await mark_derive_status(store, source, report_id, revision, "failed")
             continue
-        if res.skipped:
-            out.skipped += 1
-        else:
-            out.derived += 1
+        out.derived += 1
+        await mark_derive_status(store, source, report_id, revision, "ok")
     return out

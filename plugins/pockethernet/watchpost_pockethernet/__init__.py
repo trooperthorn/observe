@@ -18,7 +18,7 @@ from watchpost.plugins import (KeyScope, Migration, NavEntry, PluginBase, Plugin
 from watchpost.store import Store
 
 from .keys import SCOPE
-from .derive import rebuild
+from .derive import rebuild, retry_failed
 from .pages import build_pages_router
 from .reports import MIGRATIONS, prune_evidence
 from .upload import build_router
@@ -53,6 +53,17 @@ def build_admin_router() -> APIRouter:
         if result.pruned:
             raise HTTPException(409, f"{result.pruned} report bodies were dropped by retention, "
                                 "so the derived data cannot be rebuilt from reports")
+        if result.failed:
+            # Rolled back: the old derived data is intact and these reports need attention.
+            raise HTTPException(409, {"message": "rebuild rolled back; the old derived data "
+                                      "was kept", "failed_reports": result.failures})
+        return result.as_detail()
+
+    @router.post("/retry")
+    async def retry_derivation(request: Request) -> dict[str, Any]:
+        """Derive again every stored report whose derivation failed. Admin and CSRF enforced."""
+        result = await retry_failed(request.app.state.plugin_store)
+        request.state.audit_detail = {"action": "retry", **result.as_detail()}
         return result.as_detail()
 
     return router

@@ -14,8 +14,9 @@ every upload, accepted or refused. This module adds the rest, cheapest check fir
 5. The clock is checked and corrected (see correct_clock).
 6. The report is stored by `(source, report_id)` and revision (reports.py).
 7. A new or replaced report is derived into port properties and map edges (derive.py). A
-   failure there never fails the upload: the evidence is stored, the audit row says the
-   derivation failed, and a rebuild can repeat it.
+   failure there never loses the evidence: the report is stored with derive_status `failed`,
+   the response is 202 with `derive_status: failed`, the audit row says so, and an admin retry
+   or rebuild derives it again.
 
 The stored body is the exact JSON the phone sent, after inflating, never the corrected
 version. The corrected time is a column beside it.
@@ -34,7 +35,7 @@ from fastapi.responses import JSONResponse
 from watchpost.infra import InfraService
 
 from .derive import derive_report
-from .reports import NewReport, store_report
+from .reports import NewReport, mark_derive_status, store_report
 from .schema import MAX_REPORT_BYTES, ReportError, parse_report
 
 log = logging.getLogger(__name__)
@@ -150,18 +151,30 @@ def build_router() -> APIRouter:
             "result": outcome.result, "report_id": report.report_id,
             "revision": report.revision, "stored_revision": outcome.revision,
             "clock_corrected": corrected, "bytes": len(body)}
+        derive_failed = False
         if outcome.result in ("accepted", "replaced"):
+            store = request.app.state.plugin_store
             try:
                 derived = await derive_report(
                     InfraService(request.app.state.plugin_store), report, key_prefix=prefix,
                     device=device, taken_ms=taken_ms, now=now)
                 request.state.audit_detail["derived"] = derived.as_detail()
+                await mark_derive_status(store, device, report.report_id, outcome.revision, "ok")
             except Exception as err:  # the evidence is stored; only the derivation is lost
+                derive_failed = True
                 request.state.audit_detail["derive_failed"] = type(err).__name__
                 log.exception("derivation failed for field report %s", report.report_id)
-        return JSONResponse({
+                await mark_derive_status(store, device, report.report_id, outcome.revision,
+                                         "failed")
+        payload: dict[str, Any] = {
             "result": outcome.result, "report_id": report.report_id,
             "revision": outcome.revision, "clock_corrected": corrected,
-            "taken_at_ms": taken_ms})
+            "taken_at_ms": taken_ms}
+        if derive_failed:
+            # Stored, but not a clean accept: 202 tells the phone the evidence is safe and the
+            # map data is not updated yet. An admin retry or rebuild derives it again.
+            payload["derive_status"] = "failed"
+            return JSONResponse(payload, status_code=202)
+        return JSONResponse(payload)
 
     return router

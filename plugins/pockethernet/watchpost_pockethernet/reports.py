@@ -25,6 +25,8 @@ from typing import Literal
 from watchpost.plugins import Migration
 from watchpost.store import Store
 
+from .derive import SOURCE, recorded_by_for
+
 Result = Literal["accepted", "replaced", "duplicate", "ignored"]
 
 MIGRATIONS = (
@@ -52,6 +54,10 @@ MIGRATIONS = (
     )),
     # The key prefix is kept so a rebuild can credit the same key as the live accept did.
     Migration(2, ("ALTER TABLE field_reports ADD COLUMN key_prefix TEXT NOT NULL DEFAULT ''",)),
+    # `ok` once the report is derived, `pending` between storing and deriving, `failed` when the
+    # derivation raised. Existing rows were derived by the version that stored them.
+    Migration(3, ("ALTER TABLE field_reports ADD COLUMN derive_status TEXT NOT NULL "
+                  "DEFAULT 'ok'",)),
 )
 
 
@@ -82,7 +88,7 @@ def _store_sync(store: Store, r: NewReport) -> Outcome:
     digest = hashlib.sha256(r.body).hexdigest()
     with store._lock, store._db:
         row = store._db.execute(
-            "SELECT revision FROM field_reports WHERE source=? AND report_id=?",
+            "SELECT revision, key_prefix FROM field_reports WHERE source=? AND report_id=?",
             (r.source, r.report_id)).fetchone()
         values = (r.revision, r.taken_at_ms, r.reported_taken_at_ms, int(r.clock_corrected),
                   r.tester_serial, r.status, r.site, r.port_id, digest, r.body, r.key_prefix)
@@ -90,20 +96,39 @@ def _store_sync(store: Store, r: NewReport) -> Outcome:
             store._db.execute(
                 "INSERT INTO field_reports (revision, taken_at_ms, reported_taken_at_ms, "
                 "clock_corrected, tester_serial, status, site, port_id, body_sha256, body, "
-                "key_prefix, source, report_id, received_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "key_prefix, source, report_id, received_at, updated_at, derive_status) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')",
                 (*values, r.source, r.report_id, r.received_at, r.received_at))
             return Outcome("accepted", r.revision)
         stored = int(row[0])
         if r.revision > stored:
+            # The earlier revision's derived rows go in the same transaction as its replacement,
+            # so live state never mixes two revisions and equals what a rebuild would produce.
+            store._db.execute(
+                "DELETE FROM port_properties WHERE source=? AND report_id=? AND recorded_by=?",
+                (SOURCE, r.report_id, recorded_by_for(row[1], r.source)))
             store._db.execute(
                 "UPDATE field_reports SET revision=?, taken_at_ms=?, reported_taken_at_ms=?, "
                 "clock_corrected=?, tester_serial=?, status=?, site=?, port_id=?, "
                 "body_sha256=?, body=?, key_prefix=?, body_pruned_at=NULL, updated_at=?, "
+                "derive_status='pending', "
                 "revisions_seen=revisions_seen+1 WHERE source=? AND report_id=?",
                 (*values, r.received_at, r.source, r.report_id))
             return Outcome("replaced", r.revision)
         return Outcome("duplicate" if r.revision == stored else "ignored", stored)
+
+
+def _mark_sync(store: Store, source: str, report_id: str, revision: int, status: str) -> None:
+    with store._lock, store._db:
+        store._db.execute(
+            "UPDATE field_reports SET derive_status=? WHERE source=? AND report_id=? "
+            "AND revision=?", (status, source, report_id, revision))
+
+
+async def mark_derive_status(store: Store, source: str, report_id: str, revision: int,
+                             status: str) -> None:
+    """Record how deriving a stored revision went; a newer revision is never touched."""
+    await asyncio.to_thread(_mark_sync, store, source, report_id, revision, status)
 
 
 async def store_report(store: Store, report: NewReport) -> Outcome:
