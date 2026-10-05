@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import asyncio
 
 import pytest
@@ -224,6 +225,10 @@ async def test_metrics_lines():
     assert ('observe_host_component_state{monitor="nas01",group="storage",host="nas01",'
             'component="hwmon.cpu_temp_c"} 1') in text
     assert 'observe_host_age_seconds{monitor="nas01",group="storage",host="nas01"} 0' in text
+    samples = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
+    assert samples and all(ln.startswith("observe_") for ln in samples)
+    typed = re.findall(r"^# TYPE (\S+) ", text, re.M)
+    assert typed and all(n.startswith("observe_") for n in typed)
 
 
 async def test_future_dated_sample_does_not_mask_later_reading():

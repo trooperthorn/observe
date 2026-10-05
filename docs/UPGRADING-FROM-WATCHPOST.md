@@ -25,11 +25,24 @@ Run these in the checkout. If your checkout is still in `~/watchpost`, rename th
 cd ~/observe
 docker compose down
 git pull
-mv config/watchpost.yaml config/observe.yaml
-mv data/watchpost.db data/observe.db
-mv secrets/watchpost_control_key secrets/observe_control_key   # only if the control key has that name
-sed -i 's#watchpost_control_key#observe_control_key#' config/observe.yaml
+ls config secrets data   # confirm the real file names before renaming anything
+mv -n config/watchpost.yaml config/observe.yaml
+mv -n data/watchpost.db data/observe.db
 sed -i 's/WATCHPOST_/OBSERVE_/g' .env config/observe.yaml
+```
+
+`mv -n` never overwrites: if the new file already exists, the old one stays and nothing is lost. After each `mv`, check that the old file is gone and the new one exists before going on.
+
+The control signing key keeps whatever file name you gave it. Look at `plugin_settings.control.signing_key_file` in `config/observe.yaml` and at `ls secrets`. Renaming the key is optional; if you want to, use the actual name you see (this example assumes `watchpost_control_key`) and change the setting to match:
+
+```bash
+mv -n secrets/watchpost_control_key secrets/observe_control_key
+sed -i 's#watchpost_control_key#observe_control_key#' config/observe.yaml
+```
+
+Then rebuild and start:
+
+```bash
 docker compose build
 docker compose up -d
 docker compose logs observe | head -20
@@ -39,7 +52,7 @@ Check three things after the edit:
 
 1. In `config/observe.yaml`, `plugin_settings.control.signing_key_file` points at the renamed key file, for example `/run/secrets/observe_control_key`.
 2. `server.db_path`, if you set it, reads `/data/observe.db`.
-3. Alert targets of type `mqtt` that relied on the default `topic_prefix` now publish under `observe/`. Set `topic_prefix: watchpost` on the target if Home Assistant or another subscriber still listens on the old topics.
+3. Alert targets of type `mqtt` that relied on the default `topic_prefix` now publish under `observe/`, and Observe logs one warning when such a target sends. Set `topic_prefix: watchpost` on the target if Home Assistant or another subscriber still listens on the old topics.
 
 Update Prometheus rules, Grafana panels and any scrape job that use `watchpost_` metric names to the `observe_` names. Remove the old image with `docker image rm watchpost:local` once the new container is healthy.
 

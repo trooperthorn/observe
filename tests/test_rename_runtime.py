@@ -144,3 +144,28 @@ def test_upgrade_guide_gives_the_pi_commands():
                    "signing_key_file", "docker compose down", "docker compose build",
                    "docker compose up -d"):
         assert needle in text
+
+
+def test_docker_cmd_default_path_still_falls_back(monkeypatch, tmp_path, caplog):
+    """The Dockerfile CMD passes the default path explicitly; the fallback must still run."""
+    _point_at(monkeypatch, tmp_path)
+    cmd = re.search(r'^CMD \["--config", "([^"]+)"\]$',
+                    (ROOT / "Dockerfile").read_text(encoding="utf-8"), re.M)
+    assert cmd and cmd.group(1) == "/config/observe.yaml"
+    old = tmp_path / "watchpost.yaml"
+    old.write_text("x: 1\n")
+    with caplog.at_level(logging.WARNING, logger="observe"):
+        assert compat.resolve_config_path(compat.DEFAULT_CONFIG) == str(old)
+    assert len(_warnings(caplog)) == 1
+
+
+def test_mqtt_default_prefix_warns_once(caplog):
+    from observe.config import MqttAlert
+    explicit = MqttAlert(type="mqtt", name="a", host="h", topic_prefix="watchpost")
+    default = MqttAlert(type="mqtt", name="b", host="h")
+    assert "topic_prefix" in explicit.model_fields_set
+    assert "topic_prefix" not in default.model_fields_set
+    with caplog.at_level(logging.WARNING, logger="observe"):
+        compat.warn_mqtt_default_prefix()
+        compat.warn_mqtt_default_prefix()
+    assert len(_warnings(caplog)) == 1

@@ -18,6 +18,7 @@ from typing import Any
 import aiomqtt
 import httpx
 
+from . import compat
 from .checks.mqtt import mqtt_client_kwargs
 from .config import Config, MqttAlert, NtfyAlert, SmtpAlert, WebhookAlert
 from .state import State, Transition
@@ -88,6 +89,8 @@ class Alerter:
             await asyncio.to_thread(self._smtp, target, title, body)
         elif isinstance(target, MqttAlert):
             cred = self.config.credentials.get(target.credential) if target.credential else None
+            if "topic_prefix" not in target.model_fields_set:
+                compat.warn_mqtt_default_prefix()
             async with aiomqtt.Client(**mqtt_client_kwargs(target, cred, 10)) as c:
                 base = f"{target.topic_prefix}/{body['slug']}"
                 await c.publish(f"{base}/state", body["state"], qos=1, retain=True)

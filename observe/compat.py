@@ -42,9 +42,10 @@ def getenv(name: str, default: str | None = None) -> str | None:
 
 
 def resolve_config_path(path: str | None) -> str:
-    """An explicit path is used as given. With none, prefer observe.yaml and fall back
+    """An explicit path is used as given, except the default path itself (which the
+    Docker CMD passes). With no path, or the default, prefer observe.yaml and fall back
     to the old watchpost.yaml next to it with a warning."""
-    if path:
+    if path and path != DEFAULT_CONFIG:
         return path
     if not Path(DEFAULT_CONFIG).exists() and Path(LEGACY_CONFIG).exists():
         _warn_once("config", f"using {LEGACY_CONFIG}, the old name; rename it to {DEFAULT_CONFIG} "
@@ -60,3 +61,10 @@ def resolve_db_path(path: str) -> str:
                          "(see docs/UPGRADING-FROM-WATCHPOST.md)")
         return LEGACY_DB
     return path
+
+
+def warn_mqtt_default_prefix() -> None:
+    """An MQTT target without an explicit topic_prefix now publishes under observe/."""
+    _warn_once("mqtt", "an mqtt alert target uses the default topic_prefix, which is now "
+                       "observe; set topic_prefix: watchpost on it if subscribers still "
+                       "listen on the old topics (see docs/UPGRADING-FROM-WATCHPOST.md)")
