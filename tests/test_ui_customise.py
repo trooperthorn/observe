@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -185,13 +186,58 @@ def test_modules_render_text_only_and_the_app_wires_them_in():
     assert "ha_Int_soc" in tiles and "ha_Int_soc" in logic
 
 
+def stored_bytes(rel: str) -> bytes:
+    """The bytes git stores for a tracked file; the working copy may carry CRLF from autocrlf."""
+    try:
+        return subprocess.run(["git", "-C", str(ROOT), "cat-file", "blob", f":{rel}"],
+                              capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return (ROOT / rel).read_bytes()
+
+
 def test_new_files_are_served_with_lf_endings(env):
     for rel in NEW_FILES:
         r = env.client.get(f"/static/{rel}")
         assert r.status_code == 200 and "javascript" in r.headers["content-type"]
-        assert bytes([13]) not in (STATIC / rel).read_bytes(), rel
+        assert bytes([13]) not in stored_bytes(f"observe/static/{rel}"), rel
     for rel in ("observe/layout.py", "tests/test_ui_customise.py", "tests/js/tiles.test.mjs"):
-        assert bytes([13]) not in (ROOT / rel).read_bytes(), rel
+        assert bytes([13]) not in stored_bytes(rel), rel
+
+
+def test_the_dashboard_still_loads_without_a_session_and_tiles_never_redirects(env):
+    # A basic-auth viewer has no session: the page loads and the layout API says 401, which
+    # tiles.js handles with plain fetches (it must not use whoami, which redirects to /login).
+    assert env.client.get(URL).status_code == 401
+    tiles = (STATIC / "js" / "tiles.js").read_text(encoding="utf-8")
+    assert "whoami" not in tiles and 'fetch("/api/session")' in tiles
+    assert "button.disabled = true" in tiles  # Customize is off until the saved layout has loaded
+    assert "window.confirm" in tiles
+
+
+def test_a_version_12_database_migrates_to_13(tmp_path):
+    path = str(tmp_path / "v12.db")
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+    db.commit()
+    from observe.store import migrate
+    newer = {v: m for v, m in MIGRATIONS.items() if v > 12}
+    assert newer
+    for v in newer:
+        del MIGRATIONS[v]
+    try:
+        migrate(db)
+    finally:
+        MIGRATIONS.update(newer)
+    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 12
+    assert not db.execute("SELECT name FROM sqlite_master WHERE name='ui_layouts'").fetchall()
+    db.close()
+    Store(path).close()
+    db = sqlite3.connect(path)
+    try:
+        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 13
+        assert db.execute("SELECT name FROM sqlite_master WHERE name='ui_layouts'").fetchall()
+    finally:
+        db.close()
 
 
 # The same rules as tests/js/tiles.test.mjs, in Python, so they run without node.

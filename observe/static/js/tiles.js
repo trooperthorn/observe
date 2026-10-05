@@ -2,7 +2,7 @@
 // The layout is stored per user on the server (/api/ui/layout/dashboard). A failed load keeps the
 // declared order and a failed save keeps the screen as the user left it, with a message.
 // Ported in spirit from customize.ts in ha_Int_soc (MIT, same owner). No drag and drop.
-import { api, whoami } from "/static/js/api.js";
+import { api } from "/static/js/api.js";
 import { el } from "/static/js/dom.js";
 import {
   declaredTiles, effectiveHidden, effectiveOrder, layoutBody, moveTile, toggleHidden,
@@ -15,6 +15,9 @@ let hidden = new Set();
 let declared = [];
 let editing = false;
 let csrf = "";
+let ready = false;  // true only when the saved layout was loaded, so a save can never overwrite it blindly
+let shown = [];     // the order on screen: the saved order limited to the declared tiles
+let saving = Promise.resolve();
 
 function say(text, bad) {
   const m = document.getElementById("customize-msg");
@@ -27,13 +30,25 @@ export function tileLabel(id) {
   return LABELS[id] || id.replace(/^group:/, "Group ");
 }
 
-async function save() {
-  try {
-    await api("PUT", URL, csrf, layoutBody(order, hidden));
-    say("Layout saved.", false);
-  } catch (err) {
-    say(`Could not save the layout (${err.message}). The screen keeps your changes until you reload.`, true);
-  }
+// Saves run one after another and each sends the newest state, so a slow earlier request can
+// never land after a later one.
+function save() {
+  saving = saving.then(async () => {
+    try {
+      await api("PUT", URL, csrf, layoutBody(order, hidden));
+      say("Layout saved.", false);
+    } catch (err) {
+      say(`Could not save the layout (${err.message}). The screen keeps your changes until you reload.`, true);
+    }
+  });
+  return saving;
+}
+
+// Move within the visible order and keep saved ids of tiles that are not declared right now
+// (a group with no monitors for the moment) at the end, so their saved place is not lost.
+function moved(id, delta) {
+  const next = moveTile(shown, id, delta);
+  return [...next, ...order.filter((x) => !next.includes(x))];
 }
 
 function controls(id, index) {
@@ -46,14 +61,14 @@ function controls(id, index) {
     b.dataset.ctl = `${dir}:${id}`;
     b.disabled = disabled;
     b.addEventListener("click", () => {
-      order = moveTile(order, id, delta);
+      order = moved(id, delta);
       save();
       applyLayout(`${dir}:${id}`);
     });
     return b;
   };
   box.append(el("span", "tile-name", tileLabel(id)),
-    mk("Up", "Move up", -1, index === 0), mk("Down", "Move down", 1, index === order.length - 1));
+    mk("Up", "Move up", -1, index === 0), mk("Down", "Move down", 1, index === shown.length - 1));
   const label = el("label", "tile-hide");
   const cb = el("input");
   cb.type = "checkbox";
@@ -75,20 +90,21 @@ function controls(id, index) {
 // which is the only way to order them without inline styles (the CSP forbids those). The control that
 // had focus gets it back, or its neighbour when it is now disabled at the edge of the list.
 export function applyLayout(focus) {
-  order = effectiveOrder(declared, order);
-  hidden = effectiveHidden(declared, hidden);
+  // The saved order and hidden set are kept as loaded; only what is shown is limited to declared tiles.
+  shown = effectiveOrder(declared, order);
+  const live = effectiveHidden(declared, hidden);
   for (const node of document.querySelectorAll("[data-tile]")) {
     const id = node.dataset.tile;
-    const index = order.indexOf(id);
-    node.classList.toggle("tile-off", hidden.has(id));
-    node.classList.toggle("tile-hidden", hidden.has(id) && !editing);
+    const index = shown.indexOf(id);
+    node.classList.toggle("tile-off", live.has(id));
+    node.classList.toggle("tile-hidden", live.has(id) && !editing);
     node.classList.toggle("tile-edit", editing);
     for (const old of node.querySelectorAll(":scope > .tile-ctl")) old.remove();
     if (editing) node.append(controls(id, index));
   }
   const area = document.getElementById("sections");
   const byId = new Map([...document.querySelectorAll("[data-tile]")].map((n) => [n.dataset.tile, n]));
-  for (const id of order) if (byId.has(id)) area.append(byId.get(id));
+  for (const id of shown) if (byId.has(id)) area.append(byId.get(id));
   if (!focus) return;
   const find = (key) => document.querySelector(`[data-ctl="${CSS.escape(key)}"]`);
   const flip = focus.replace(/^(up|down):/, (_, d) => (d === "up" ? "down:" : "up:"));
@@ -103,7 +119,9 @@ export function setDeclared(groupNames) {
 export async function initTiles(rerender) {
   const button = document.getElementById("customize");
   const tools = document.getElementById("customize-tools");
+  button.disabled = true;
   button.addEventListener("click", () => {
+    if (!ready) return;
     editing = !editing;
     button.setAttribute("aria-pressed", String(editing));
     button.textContent = editing ? "Done" : "Customize";
@@ -112,6 +130,7 @@ export async function initTiles(rerender) {
     applyLayout();
   });
   document.getElementById("customize-reset").addEventListener("click", async () => {
+    if (!ready || !window.confirm("Reset the dashboard to the default layout?")) return;
     order = [];
     hidden = new Set();
     try { await api("DELETE", URL, csrf); say("Back to the default layout.", false); }
@@ -119,13 +138,22 @@ export async function initTiles(rerender) {
     applyLayout();
   });
   try {
-    csrf = (await whoami()).csrf;
-    const got = await api("GET", URL);
+    // Plain fetches: a viewer with basic auth, or an open dashboard, has no session and must stay on this page.
+    const s = await fetch("/api/session");
+    if (!s.ok) throw new Error("no session");
+    csrf = (await s.json()).csrf || "";
+    const r = await fetch(URL);
+    if (!r.ok) throw new Error(`layout request failed (${r.status})`);
+    const got = await r.json();
     order = Array.isArray(got.order) ? got.order : [];
     hidden = new Set(Array.isArray(got.hidden) ? got.hidden : []);
-  } catch (_) {
-    order = [];  // the declared order; the page still works
+    ready = true;
+    button.disabled = false;
+  } catch (err) {
+    // The declared order is shown and Customize stays off, so nothing can overwrite a saved layout.
+    order = [];
     hidden = new Set();
+    if (err.message !== "no session") say("Your saved layout could not be loaded, so Customize is off. Reload to try again.", true);
   }
   if (rerender) rerender();
 }
