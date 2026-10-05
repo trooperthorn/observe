@@ -301,6 +301,8 @@ def test_audit_rows_for_accepted_refused_and_denied_uploads(env):
         assert actor == env.info.prefix and method == "POST" and path == URL
         assert remote
     first, second, third = (json.loads(r[5]) for r in rows)
+    assert first.pop("derived") == {"properties_added": 20, "properties_verified": 0,
+                                    "jack_linked": True}
     assert first == {"plugin": "pockethernet", "device": "sean-pixel", "result": "accepted",
                      "report_id": FIXTURE["report_id"], "revision": 1, "stored_revision": 1,
                      "clock_corrected": False, "bytes": len(dump(FIXTURE))}

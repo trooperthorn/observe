@@ -13,6 +13,9 @@ every upload, accepted or refused. This module adds the rest, cheapest check fir
 4. The schema (watchpost_pockethernet/schema.py) validates the report (400, 413 or 422).
 5. The clock is checked and corrected (see correct_clock).
 6. The report is stored by `(source, report_id)` and revision (reports.py).
+7. A new or replaced report is derived into port properties and map edges (derive.py). A
+   failure there never fails the upload: the evidence is stored, the audit row says the
+   derivation failed, and a rebuild can repeat it.
 
 The stored body is the exact JSON the phone sent, after inflating, never the corrected
 version. The corrected time is a column beside it.
@@ -27,6 +30,9 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from watchpost.infra import InfraService
+
+from .derive import derive_report
 from .reports import NewReport, store_report
 from .schema import MAX_REPORT_BYTES, ReportError, parse_report
 
@@ -108,7 +114,7 @@ def build_router() -> APIRouter:
 
     @router.post("/field-reports")
     async def upload(request: Request) -> JSONResponse:
-        _, device = request.state.plugin_key
+        prefix, device = request.state.plugin_key
         body = await _read_capped(request)
         if body is None:
             return _refuse(request, 413, "body too large")
@@ -135,11 +141,20 @@ def build_router() -> APIRouter:
             taken_at_ms=taken_ms, reported_taken_at_ms=report.taken_at_ms,
             clock_corrected=corrected, tester_serial=report.device.serial,
             status=report.status, site=site.site if site else "",
-            port_id=site.port_id if site else "", body=body, received_at=now))
+            port_id=site.port_id if site else "", body=body, received_at=now,
+            key_prefix=prefix))
         request.state.audit_detail = {
             "result": outcome.result, "report_id": report.report_id,
             "revision": report.revision, "stored_revision": outcome.revision,
             "clock_corrected": corrected, "bytes": len(body)}
+        if outcome.result in ("accepted", "replaced"):
+            try:
+                derived = await derive_report(
+                    InfraService(request.app.state.plugin_store), report, key_prefix=prefix,
+                    device=device, taken_ms=taken_ms, now=now)
+                request.state.audit_detail["derived"] = derived.as_detail()
+            except Exception as err:  # the evidence is stored; only the derivation is lost
+                request.state.audit_detail["derive_failed"] = type(err).__name__
         return JSONResponse({
             "result": outcome.result, "report_id": report.report_id,
             "revision": outcome.revision, "clock_corrected": corrected,

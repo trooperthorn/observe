@@ -1,19 +1,22 @@
 """The Pockethernet plugin: field reports from the Pockethernet Android app.
 
-This holds the report schema, the wpf key scope and the upload endpoint with its report
-store. The mapping to port properties and the pages follow (docs/FIELD-DATA.md).
+This holds the report schema, the wpf key scope, the upload endpoint with its report store,
+and the mapping from reports to port properties and map edges, with an admin rebuild. The
+pages follow (docs/FIELD-DATA.md).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from watchpost.plugins import KeyScope, Migration, PluginBase, PluginRouter
 from watchpost.store import Store
 
 from .keys import SCOPE
+from .derive import rebuild
 from .reports import MIGRATIONS, prune_evidence
 from .upload import build_router
 
@@ -27,6 +30,26 @@ class PockethernetSettings(BaseModel):
     # Report bodies are the evidence. After this many days without an update the body is
     # dropped; the summary row stays so a replay is still recognised as a duplicate.
     evidence_retention_days: int = Field(default=365, ge=1, le=3650)
+
+
+def build_admin_router() -> APIRouter:
+    router = APIRouter()
+
+    @router.post("/rebuild")
+    async def rebuild_derived(request: Request) -> dict[str, Any]:
+        """Clear what field reports derived and derive it again from the stored bodies.
+
+        Admin session and CSRF token are enforced by the core; the core audits the request and
+        this adds the counts. Refused (409) when retention has dropped any report body.
+        """
+        result = await rebuild(request.app.state.plugin_store)
+        request.state.audit_detail = {"action": "rebuild", **result.as_detail()}
+        if result.pruned:
+            raise HTTPException(409, f"{result.pruned} report bodies were dropped by retention, "
+                                "so the derived data cannot be rebuilt from reports")
+        return result.as_detail()
+
+    return router
 
 
 class PockethernetPlugin(PluginBase):
@@ -46,7 +69,8 @@ class PockethernetPlugin(PluginBase):
 
     def routers(self) -> list[PluginRouter]:
         # Key-authenticated by the core with the wpf scope, mounted at /api/v1.
-        return [PluginRouter(build_router(), key_scope=SCOPE, public_prefix="/api/v1")]
+        return [PluginRouter(build_router(), key_scope=SCOPE, public_prefix="/api/v1"),
+                PluginRouter(build_admin_router(), admin=True)]
 
     def migrations(self) -> list[Migration]:
         return list(MIGRATIONS)

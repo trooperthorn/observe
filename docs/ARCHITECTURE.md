@@ -354,7 +354,7 @@ compressed byte (413, the ratio is checked above 16 KiB), and refused when trunc
 or followed by more data (400). The schema then validates the report. The ping
 route checks a key and returns the server time and the limits.
 
-Reports are stored in the plugin's `field_reports` table (plugin schema version 1),
+Reports are stored in the plugin's `field_reports` table (plugin schema versions 1 and 2),
 keyed by `(source, report_id)` where the source is the key's device label, so one
 phone's key cannot replace another phone's report. The row holds summary columns
 and the exact inflated body. A higher revision replaces the row, an equal revision
@@ -373,6 +373,25 @@ purpose.
 Retention is `plugin_settings.pockethernet.evidence_retention_days` (default 365).
 After that long without an update the body is set to null by the plugin's `prune`
 hook and the summary row stays, so a late replay is still a duplicate.
+
+### Pockethernet derivation
+
+`derive.py` runs after an upload that is `accepted` or `replaced`. It picks the LLDP
+(else CDP) neighbour that names a switch and a port, then calls `InfraService` to upsert
+the switch, the port (role `access`) and the jack, to link jack and port with source
+`field_report`, and to append each allowlisted property with the report id and
+`recorded_by` set to `<key prefix>:<device>`. `upsert_link` closes the jack's earlier
+link when the port changes, and `append_property` turns an unchanged value into a
+`last_verified` bump. The time passed as `now` is the report's receive time, which the
+store keeps as `updated_at`, so the live path and the rebuild write identical rows.
+A derivation error is caught in the upload route and recorded in the audit detail, and
+the upload still succeeds because the body is stored first.
+
+`POST /api/plugins/pockethernet/rebuild` is an admin-only plugin router. `rebuild()`
+checks for dropped bodies, then in one transaction reads the reports and deletes the
+plugin's properties and `field_report` links and unpatches their jacks, and finally
+replays each report through `derive_report` in `updated_at` order. Plugin schema version
+2 adds `field_reports.key_prefix` for that replay.
 
 ## Infrastructure map core
 

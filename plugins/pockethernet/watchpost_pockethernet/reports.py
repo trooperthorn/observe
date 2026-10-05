@@ -2,8 +2,8 @@
 
 A report is keyed by `(source, report_id)`. The source is the device label the upload key is
 bound to, so a key for one phone can never replace or hide a report of another phone, even
-with a guessed report id. Port properties and links are derived from these rows by a later
-slice, so the body is the evidence they can be rebuilt from.
+with a guessed report id. Port properties and links are derived from these rows (derive.py), so the body is the
+evidence they can be rebuilt from.
 
 Revisions decide what an upload does: a higher revision replaces the stored report, an equal
 revision is a duplicate and changes nothing, and a lower revision is ignored. The decision and
@@ -50,6 +50,8 @@ MIGRATIONS = (
 )""",
         "CREATE INDEX IF NOT EXISTS field_reports_updated ON field_reports (updated_at)",
     )),
+    # The key prefix is kept so a rebuild can credit the same key as the live accept did.
+    Migration(2, ("ALTER TABLE field_reports ADD COLUMN key_prefix TEXT NOT NULL DEFAULT ''",)),
 )
 
 
@@ -67,6 +69,7 @@ class NewReport:
     port_id: str
     body: bytes
     received_at: float
+    key_prefix: str = ""
 
 
 @dataclass(frozen=True)
@@ -82,12 +85,12 @@ def _store_sync(store: Store, r: NewReport) -> Outcome:
             "SELECT revision FROM field_reports WHERE source=? AND report_id=?",
             (r.source, r.report_id)).fetchone()
         values = (r.revision, r.taken_at_ms, r.reported_taken_at_ms, int(r.clock_corrected),
-                  r.tester_serial, r.status, r.site, r.port_id, digest, r.body)
+                  r.tester_serial, r.status, r.site, r.port_id, digest, r.body, r.key_prefix)
         if row is None:
             store._db.execute(
                 "INSERT INTO field_reports (revision, taken_at_ms, reported_taken_at_ms, "
-                "clock_corrected, tester_serial, status, site, port_id, body_sha256, body, "
-                "source, report_id, received_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "clock_corrected, tester_serial, status, site, port_id, body_sha256, body, key_prefix, "
+                "source, report_id, received_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (*values, r.source, r.report_id, r.received_at, r.received_at))
             return Outcome("accepted", r.revision)
         stored = int(row[0])
@@ -95,7 +98,7 @@ def _store_sync(store: Store, r: NewReport) -> Outcome:
             store._db.execute(
                 "UPDATE field_reports SET revision=?, taken_at_ms=?, reported_taken_at_ms=?, "
                 "clock_corrected=?, tester_serial=?, status=?, site=?, port_id=?, "
-                "body_sha256=?, body=?, body_pruned_at=NULL, updated_at=?, "
+                "body_sha256=?, body=?, key_prefix=?, body_pruned_at=NULL, updated_at=?, "
                 "revisions_seen=revisions_seen+1 WHERE source=? AND report_id=?",
                 (*values, r.received_at, r.source, r.report_id))
             return Outcome("replaced", r.revision)

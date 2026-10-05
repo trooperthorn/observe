@@ -1,6 +1,6 @@
 # Field data from the Pockethernet app
 
-Status: design; the Pockethernet report schema and key scope, the plugin loader, per-plugin migrations, plugin pages, the upload endpoint, the infrastructure tables with port keys and property history, monitor matching with conflict findings, map data with ageing and inferred dependencies, and the map, port and map admin pages are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
+Status: design; the Pockethernet report schema and key scope, the plugin loader, per-plugin migrations, plugin pages, the upload endpoint, the infrastructure tables with port keys and property history, monitor matching with conflict findings, map data with ageing and inferred dependencies, and the map, port and map admin pages are built, as are the mapping from reports to port properties and map edges and its rebuild; the report and jack pages and the dashboard findings are not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
 Pockethernet Android app (repo `pocketethernet-app`) become properties of switch
 ports in watchpost, and how the mapping data in those results builds an
 infrastructure map with live availability and health.
@@ -214,7 +214,7 @@ The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `poc
 - **Caps.** 256 KiB per body (413), JSON nesting 16 (400), strings 1024 characters (names 128, notes 4096), 64 steps and fields, 8 neighbours, 32 tool results, 16 addresses per list. Control characters are refused (notes may keep a newline), and NaN and the infinities are refused, both as JSON literals and as floats.
 - **Location and Wi-Fi** are accepted, as decided. They are stored with the report and never become port properties.
 - **Key scope.** `wpf_<prefix>_<secret>` keys are stored in `ingest_keys` with scope `wpf`, bound to a device label in the host column. The core checks the marker and the stored scope, so `verify_key` and `key_host` for `wpi` refuse a `wpf` key and the plugin's `verify_field_key` refuses a `wpi` key. Admins issue them from the admin create route with `scope: "wpf"` or with `--ingest-key-scope wpf`, and only when the plugin is listed.
-- **Not built yet.** The mapping to properties and links, and the pages. The plugin is not yet copied into the Docker image.
+- **Not built yet.** The pages. The plugin is not yet copied into the Docker image.
 
 ### Built: upload endpoint (plugin slice 3)
 
@@ -228,6 +228,18 @@ The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `poc
 - **Clock.** The sketch said only "correction beyond 300 s". A phone cannot be corrected from its own report time alone, so the phone may send `X-Report-Sent-Ms` (its clock at send). A difference over 300 s from the server clock is added to the report time. A report time more than 300 s ahead of the server is set to now regardless. `clock_corrected` is returned and stored, with both times kept. A bad header value is 400.
 - **Audit.** Every state-changing request with a valid key is a `plugin_request` row (actor is the key prefix, detail has the device, result, report id, revisions, `clock_corrected` and size, or the reason for a refusal); 401 and 429 are `plugin_denied`. No key and no report content is written.
 - **Retention.** `plugin_settings.pockethernet.evidence_retention_days` (default 365, 1 to 3650) drops the body of a report not updated for that long and keeps the summary row.
+
+### Built: report to properties and edges (plugin slice 4)
+
+`derive.py` in the plugin turns each accepted or replaced report into core data through `InfraService`, and `POST /api/plugins/pockethernet/rebuild` repeats it from the stored bodies. Details that the sketch above left open:
+
+- **Neighbour.** LLDP is preferred over CDP, and the first neighbour that names both a switch and a port is used. The switch is the LLDP chassis MAC when the chassis id or device id is a MAC, else the system name (for CDP, the device id). The port is read with the LLDP port id subtype when there is one, else normalised as a plain name. A report with no such neighbour is stored and derives nothing; the audit row says `skipped`.
+- **Entities.** The switch gets its name, management addresses, vendor and platform. The port is created with role `access`. The jack key is the site port id, else the location label, else the `jack_label` property. The jack is patched to the port and joined to it by a `field_report` link (confidence 0.9 for LLDP, 0.8 for CDP). No other kind of link or endpoint is written, so a report alone never produces an edge that the dependency plan treats as strong.
+- **Re-patching.** A report that puts the jack on another port closes the earlier link at once, through the core's contradiction rule. The old port keeps its properties and history.
+- **Properties.** Every allowlisted property in the report is appended to the port. `jack_label`, `panel`, `room` and `site` fall back to the site model, `tester_serial` to the device serial, and `last_tested_at` to the corrected report time. `last_tested_at_ms` becomes `last_tested_at` in seconds, and `poe_class` and `tester_serial` are stored as text, as the core defines them. Units are `m`, `Mbps`, `V`, `W` and `s`. A value equal to the newest one only moves `last_verified`.
+- **Provenance.** Each row has source `pockethernet`, the report id, `observed_at` from the corrected report time, `recorded_at` from the time the report was received, and `recorded_by` of `<key prefix>:<device label>`. The tester is the `tester_serial` property. Plugin schema version 2 adds `field_reports.key_prefix` so a rebuild can credit the same key.
+- **Failure.** A failed derivation never fails the upload. The evidence is stored, the audit row has `derive_failed` with the error class only, and a rebuild can repeat it.
+- **Rebuild.** Admin session and CSRF token, audited as `plugin_request` with the counts. In one transaction it deletes the properties with source `pockethernet` and the `field_report` links and unpatches those jacks, and then it replays every stored report in the order received, with the original receive time as the clock, so the result is the same apart from row ids. Switches, ports and jacks are kept because other sources may share them. Only the newest stored revision of each report is replayed, so a superseded revision's history is not recreated. When retention has dropped any report body the rebuild is refused (409) before anything is deleted, because those reports could not be replayed.
 
 ## Build order
 
@@ -244,7 +256,7 @@ The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `poc
 1. Report schema (built).
 2. Key scope (built).
 3. Upload endpoint (built).
-4. Report to properties and edges.
+4. Report to properties and edges (built).
 5. Report and jack pages.
 6. Findings on the dashboard.
 

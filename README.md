@@ -502,7 +502,13 @@ off is corrected, using the optional `X-Report-Sent-Ms` header, and the report i
 flagged `clock_corrected`. Each upload counts against `server.plugin_rate_per_minute`
 and is audited. The raw report is evidence and is kept for
 `plugin_settings.pockethernet.evidence_retention_days` (default 365) before the body
-is dropped.
+is dropped. Each accepted report is also turned into map data: the LLDP or CDP neighbour
+gives a switch and port, the site port id gives a jack patched to that port, and the
+report's measured properties are added to the port's history with the report, key and
+tester recorded. A jack that turns up on another port closes its old link. An admin can
+clear and recreate all of it from the stored reports with
+`POST /api/plugins/pockethernet/rebuild` (admin session and CSRF token, audited); it is
+refused if retention has already dropped any report body.
 
 ```yaml
 plugin_settings:
