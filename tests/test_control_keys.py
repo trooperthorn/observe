@@ -493,3 +493,18 @@ def test_files_use_lf_and_the_writing_rules():
         assert chr(0x2014) not in text, path
         assert not re.search("|".join(("cla" + "ude", "op" + "us", "son" + "net", "hai" + "ku")),
                              text, re.I), path
+
+
+def test_control_doc_carries_the_test_vector_and_follows_the_writing_rules():
+    from .test_field_docs import stored_bytes
+    names = ("docs/CONTROL.md", "THREAT-MODEL.md", "README.md")
+    for name in names[:2]:
+        raw = stored_bytes(ROOT / name)
+        assert b"\r" not in raw, name
+        assert chr(0x2014) not in raw.decode("utf-8"), name
+    doc = stored_bytes(ROOT / "docs/CONTROL.md").decode("utf-8")
+    for value in (base64.b64encode(VECTOR_SEED).decode(), VECTOR_PUBLIC, VECTOR_CANONICAL,
+                  VECTOR_SIGNATURE, json.dumps(VECTOR_COMMAND, separators=(",", ":"))):
+        assert value in doc
+    for step in ("--control-keygen", "--ingest-key-scope wpc", "watchpost_public_key"):
+        assert step in doc

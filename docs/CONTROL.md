@@ -1,6 +1,6 @@
 # Control actions
 
-Status: design, being built. Built so far: the plugin skeleton, the signing key and `wpc_` keys (see Signing and keys), and the command queue with expiry, seq, rate limits, the pull route and the results route (see Queue, pull and results). The action catalogue, the admin request routes with confirmation, cancel and the Control section of the host page are built too (see Admin requests and history). watchpost can ask a host to:
+Status: the watchpost side is built (the `control` plugin). The hostwatch-control daemon and the thermalctl overrides file are built in their own repos. watchpost can ask a host to:
 
 - change a fan floor;
 - switch a fan controller between dry run and active;
@@ -81,6 +81,26 @@ These routes need an admin session, and every POST needs the CSRF token (`X-CSRF
 - **Capabilities:** watchpost compares a request with what the host last reported. When thermalctl has reported fans, a thermalctl `header` must be one of them, and `fan.set_mode` for thermalctl needs a thermalctl source. When the host has reported nothing about a controller, nothing is checked beyond the shape, and the host's allowlist decides. `GET /api/plugins/control/capabilities?host=` returns the actions, controllers, modes and the reported headers, so the page can offer valid choices.
 - **Cancel:** `POST /api/plugins/control/commands/{id}/cancel` changes a `scheduled` `host.reboot` to `cancelled` with one guarded update. Any other state, another action or an expired command gets 409, and an unknown id gets 404. Both are audited (`control_cancelled`, `control_cancel_refused`). A cancelled command is final, so a later result is refused with 409, and it no longer appears in the pull list. The daemon treats a scheduled reboot that has left the pull list as cancelled and cancels it locally.
 - **History:** `GET /api/plugins/control/commands?host=` lists that host's commands, newest first, with state and latest result. The Control section of the host page (`/host?name=`) shows it for admins, offers the four actions, asks for confirmation in a dialog, and shows a Cancel reboot button while a reboot is scheduled. All text on the page is written with `textContent`.
+
+## Endpoints
+
+| Route | Auth | Purpose |
+|---|---|---|
+| `GET /api/v1/control/commands?host=` | `wpc_` key for that host | The daemon pulls its pending signed commands |
+| `POST /api/v1/control/results` | `wpc_` key for that host | The daemon reports an outcome |
+| `POST /api/plugins/control/request` | admin session and CSRF | Request an action, with confirmation |
+| `POST /api/plugins/control/commands/{id}/cancel` | admin session and CSRF | Cancel a scheduled reboot |
+| `GET /api/plugins/control/commands?host=` | admin session | Command history with state and result |
+| `GET /api/plugins/control/capabilities?host=` | admin session | Valid actions and reported fan headers |
+
+## Setup
+
+1. Install the plugin into the watchpost image (`pip install ./plugins/control`) and list it as `plugins: [control]` in the watchpost config.
+2. Create the signing key: `python -m watchpost --control-keygen /run/secrets/watchpost_control_key`. The command prints only the public key. Keep the file readable by the watchpost user alone.
+3. Put the printed `ed25519:...` public key in each host's `control.toml` as `watchpost_public_key`, together with that host's allowlist.
+4. Create one control key per host: `python -m watchpost --config CONFIG --ingest-key-create HOST --ingest-key-scope wpc`. The `wpc_` key is shown once. Store it in the daemon's root-owned config on that host.
+5. Start the hostwatch-control daemon on the host. It pulls every 5 seconds and refuses anything its own allowlist does not permit.
+6. To rotate the signing key, run keygen with a new path, update `watchpost_public_key` on every host, then point `signing_key_file` at the new file. To revoke a host key, use `--ingest-key-revoke ID`.
 
 ### Test vector
 
