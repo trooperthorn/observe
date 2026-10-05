@@ -15,3 +15,7 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local wheel builds
+build/
+*.egg-info/
