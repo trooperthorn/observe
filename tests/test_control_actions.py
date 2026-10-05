@@ -234,15 +234,36 @@ def test_cancel_works_only_while_scheduled(env):
     r = post(env, csrf, {}, f"/commands/{cid}/cancel")
     assert r.status_code == 200 and r.json()["state"] == "cancelled"
     assert env.state(cid) == "cancelled"
-    # Cancelled is final: a second cancel and a late result are refused.
+    # A second cancel and a refused result are rejected.
     assert post(env, csrf, {}, f"/commands/{cid}/cancel").status_code == 409
-    assert env.result(env.key(), {"id": cid, "state": "done"}).status_code == 409
+    assert env.result(env.key(), {"id": cid, "state": "refused"}).status_code == 409
     assert env.state(cid) == "cancelled"
-    # The daemon is told through the cancel list.
+    # The daemon is told through the cancel list until it acknowledges, even days later.
+    env.clock.now += 3 * 86400
     got = env.pull(env.key()).json()
     assert got["commands"] == [] and got["cancel"] == [cid]
+    assert env.result(env.key(), {"id": cid, "state": "cancelled"}).status_code == 200
+    assert env.state(cid) == "cancelled"
+    assert env.pull(env.key()).json()["cancel"] == []
     assert env.audit("control_cancelled") == [{"command_id": cid, "host": HOST}]
     assert len(env.audit("control_cancel_refused")) == 1
+
+
+def test_a_late_cancel_still_records_what_the_host_did(env):
+    # The host may have rebooted before it saw the cancel; it reports the truth.
+    csrf = login(env)
+    cid = schedule(env, csrf)
+    assert env.answer(env.key(), {"id": cid, "state": "scheduled"}).status_code == 200
+    assert post(env, csrf, {}, f"/commands/{cid}/cancel").status_code == 200
+    assert env.result(env.key(), {"id": cid, "state": "done"}).status_code == 200
+    assert env.state(cid) == "done"
+    assert env.pull(env.key()).json()["cancel"] == []
+
+
+def test_only_a_reboot_cancelled_while_scheduled_can_be_reported_cancelled(env):
+    csrf = login(env)
+    other = env.enqueue(HOST)["command"]["id"]
+    assert env.answer(env.key(), {"id": other, "state": "cancelled"}).status_code == 409
 
 
 def test_cancel_is_refused_after_done_and_for_other_actions(env):

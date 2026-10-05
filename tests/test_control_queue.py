@@ -209,7 +209,8 @@ def test_result_is_final_once_and_bad_results_are_refused(env):
     assert env.state(cmd["id"]) == "failed"
     c2 = env.enqueue("nas01", "service.restart", {"name": "x"})["command"]
     env.pull(key)
-    for bad in ({"id": c2["id"], "state": "cancelled"}, {"id": c2["id"], "state": "unknown"},
+    assert env.result(key, {"id": c2["id"], "state": "cancelled"}).status_code == 409
+    for bad in ({"id": c2["id"], "state": "unknown"},
                 {"id": c2["id"], "state": "done", "extra": 1},
                 {"id": c2["id"], "state": "done", "started_at": 5, "finished_at": 1},
                 {"id": c2["id"], "state": "done", "started_at": -1},

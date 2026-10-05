@@ -38,8 +38,8 @@ OPEN_STATES = ("requested", "pulled", "scheduled")
 EXPIRABLE_STATES = ("requested", "pulled")  # a scheduled command has already been answered
 SERVED_STATES = ("requested", "pulled")  # a scheduled command is never served again
 CANCEL_STATES = ("requested", "scheduled")
-CANCEL_LIST_WINDOW_S = 3600  # how long a cancelled-while-scheduled id stays in the pull list
-RESULT_STATES = ("done", "failed", "refused", "scheduled")
+CANCEL_LIST_WINDOW_S = 7 * 86400  # a cancelled-while-scheduled id stays listed until the host acknowledges it, at most this long
+RESULT_STATES = ("done", "failed", "refused", "scheduled", "cancelled")
 MAX_PARAMS_BYTES = 2048
 MAX_OUTPUT_CHARS = 4096
 MAX_HOST = 128
@@ -234,7 +234,9 @@ def _pull_sync(store: Store, host: str, now: float) -> tuple[list[dict[str, Any]
                               "WHERE id=? AND state='requested'", (now, cid))
         cancel = [r[0] for r in store._db.execute(
             "SELECT id FROM control_commands WHERE host=? AND state='cancelled' "
-            "AND cancelled_from='scheduled' AND cancelled_at>? ORDER BY seq",
+            "AND cancelled_from='scheduled' AND cancelled_at>? AND NOT EXISTS (SELECT 1 FROM "
+            "control_results r WHERE r.command_id=control_commands.id AND r.state='cancelled') "
+            "ORDER BY seq",
             (host, now - CANCEL_LIST_WINDOW_S)).fetchall()]
     return ([{"command": _command_object(r[:8]), "signature": r[8]} for r in rows], fresh,
             expired, cancel)
@@ -245,7 +247,8 @@ async def pull_commands(store: Store, host: str, key_prefix: str, remote: str,
     """The host's unexpired commands that are requested or pulled, in seq order, plus the ids
     of its commands an admin cancelled while they were scheduled.
 
-    A scheduled command is not served again. The cancel list keeps an id for one hour.
+    A scheduled command is not served again. The cancel list keeps an id until the host posts
+    a `cancelled` result for it, for at most seven days.
 
     Only this host's rows are ever selected. A first delivery is audited (`control_pull`), so a
     5 second poll with an empty queue writes nothing.
@@ -295,16 +298,23 @@ def _result_sync(store: Store, host: str, key_prefix: str, command_id: str, stat
     with store._lock, store._db:
         expired = _expire_sync(store, now)
         row = store._db.execute(
-            "SELECT state, action FROM control_commands WHERE id=? AND host=?",
+            "SELECT state, action, cancelled_from FROM control_commands WHERE id=? AND host=?",
             (command_id, host)).fetchone()
         if row is None:
             # An unknown id and another host's id look the same, so ids cannot be probed.
             raise QueueError("no such command for this host", 404)
+        # A reboot cancelled while scheduled: the host acknowledges the cancel, or reports the
+        # truth if the cancel came too late (done or failed). Anything else is refused.
+        after_cancel = row[0] == "cancelled" and row[2] == "scheduled"
+        if state == "cancelled" and not after_cancel:
+            raise QueueError("only a reboot cancelled while scheduled can be reported cancelled", 409)
+        if after_cancel and state not in ("cancelled", "done", "failed"):
+            raise QueueError("the command is already cancelled", 409)
         if row[0] == "unknown":
             raise QueueError("the command expired before a result arrived", 409)
         if row[0] == "requested":
             raise QueueError("the command has not been pulled by this host", 409)
-        if row[0] not in OPEN_STATES:
+        if row[0] not in OPEN_STATES and not after_cancel:
             raise QueueError(f"the command is already {row[0]}", 409)
         if state == "scheduled" and row[0] == "scheduled":
             raise QueueError("the command is already scheduled", 409)
@@ -318,7 +328,8 @@ def _result_sync(store: Store, host: str, key_prefix: str, command_id: str, stat
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (command_id, host, state, text, int(truncated), started, finished, duration, now,
              key_prefix))
-        store._db.execute("UPDATE control_commands SET state=? WHERE id=?", (state, command_id))
+        if state != "cancelled":
+            store._db.execute("UPDATE control_commands SET state=? WHERE id=?", (state, command_id))
     return truncated, expired
 
 
