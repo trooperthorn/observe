@@ -1,26 +1,32 @@
 """The Pockethernet plugin: field reports from the Pockethernet Android app.
 
 This holds the report schema, the wpf key scope, the upload endpoint with its report store,
-and the mapping from reports to port properties and map edges, with an admin rebuild. The
-pages follow (docs/FIELD-DATA.md).
+the mapping from reports to port properties and map edges with an admin rebuild, and the report
+list, report detail and jack pages (docs/FIELD-DATA.md).
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from watchpost.plugins import KeyScope, Migration, PluginBase, PluginRouter
+from watchpost.plugins import (KeyScope, Migration, NavEntry, PluginBase, PluginPage,
+                               PluginRouter)
 from watchpost.store import Store
 
 from .keys import SCOPE
 from .derive import rebuild
+from .pages import build_pages_router
 from .reports import MIGRATIONS, prune_evidence
 from .upload import build_router
 
 __version__ = "0.1.0"
+
+HERE = Path(__file__).parent
+BASE = "/plugins/pockethernet"
 
 
 class PockethernetSettings(BaseModel):
@@ -70,7 +76,20 @@ class PockethernetPlugin(PluginBase):
     def routers(self) -> list[PluginRouter]:
         # Key-authenticated by the core with the wpf scope, mounted at /api/v1.
         return [PluginRouter(build_router(), key_scope=SCOPE, public_prefix="/api/v1"),
+                PluginRouter(build_pages_router()),  # a login session, enforced by the core
                 PluginRouter(build_admin_router(), admin=True)]
+
+    def pages(self) -> list[PluginPage]:
+        # Static shells with no data; their script reads the session-guarded routes above.
+        return [PluginPage(BASE, HERE / "pages" / "reports.html"),
+                PluginPage(f"{BASE}/report", HERE / "pages" / "report.html"),
+                PluginPage(f"{BASE}/jack", HERE / "pages" / "jack.html")]
+
+    def static_dir(self) -> Path:
+        return HERE / "static"
+
+    def nav_entries(self) -> list[NavEntry]:
+        return [NavEntry("Field reports", BASE)]
 
     def migrations(self) -> list[Migration]:
         return list(MIGRATIONS)

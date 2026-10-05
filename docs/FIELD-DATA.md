@@ -1,6 +1,6 @@
 # Field data from the Pockethernet app
 
-Status: design; the Pockethernet report schema and key scope, the plugin loader, per-plugin migrations, plugin pages, the upload endpoint, the infrastructure tables with port keys and property history, monitor matching with conflict findings, map data with ageing and inferred dependencies, and the map, port and map admin pages are built, as are the mapping from reports to port properties and map edges and its rebuild; the report and jack pages and the dashboard findings are not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
+Status: design; the Pockethernet report schema and key scope, the plugin loader, per-plugin migrations, plugin pages, the upload endpoint, the infrastructure tables with port keys and property history, monitor matching with conflict findings, map data with ageing and inferred dependencies, and the map, port and map admin pages are built, as are the mapping from reports to port properties and map edges and its rebuild; the report list, report detail and jack pages and the field change findings on the dashboard, port page and map are built too. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
 Pockethernet Android app (repo `pocketethernet-app`) become properties of switch
 ports in watchpost, and how the mapping data in those results builds an
 infrastructure map with live availability and health.
@@ -200,7 +200,7 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 
 - **Pages.** `/map`, `/port?switch_id=&port=` and `/admin/infra` are static files with no data. Their scripts send a visitor without a session to `/login`, and the admin page shows nothing without an admin session. All text is written with `textContent`, and there is no `innerHTML`, inline script or inline style.
 - **Map page.** Switches are placed by uplink depth from the map's port links: a switch with nothing above it but switches below is core, the deepest is access, and anything between is distribution. A switch with no uplink links is shown as access. Each node shows its state in words (Up, Warning, Down, Unreachable with the blocking ancestor, Pending, State unknown) as well as colour. Stale links are dashed, and a links table repeats every edge as text. The site and building filters are filled from the jacks in the unfiltered map.
-- **Port page.** `GET /api/infra/port` returns live values and state of the matched monitors, the current properties, up to 50 history rows per property, and the findings for the port. The field report list and jack pages come with the Pockethernet plugin slices.
+- **Port page.** `GET /api/infra/port` returns live values and state of the matched monitors, the current properties, up to 50 history rows per property, and the findings for the port. The field report list, report detail and jack pages are in the Pockethernet plugin (see "Built: report and jack pages and field change findings").
 - **Acknowledging findings.** `POST /api/admin/infra/findings/ack` (admin session, CSRF token, body `switch_id`, `port_key`, `kind`) stores the acknowledged message in `infra_finding_acks`. It is audited as `infra_finding_acknowledged` or `infra_finding_ack_failed`. A finding that no longer exists cannot be acknowledged, and when the facts change the message changes and the finding shows as new. An acknowledged warning no longer turns a passing port to Warning. Acknowledging sends no alert.
 - **Map admin page.** It lists the unlinked switch queue with a choice of snmp, unifi_network, ping or tcp monitors, and the pending, rejected and refused dependency proposals. Accept and Reject use the existing routes; a rejected proposal can still be accepted.
 
@@ -214,7 +214,7 @@ The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `poc
 - **Caps.** 256 KiB per body (413), JSON nesting 16 (400), strings 1024 characters (names 128, notes 4096), 64 steps and fields, 8 neighbours, 32 tool results, 16 addresses per list. Control characters are refused (notes may keep a newline), and NaN and the infinities are refused, both as JSON literals and as floats.
 - **Location and Wi-Fi** are accepted, as decided. They are stored with the report and never become port properties.
 - **Key scope.** `wpf_<prefix>_<secret>` keys are stored in `ingest_keys` with scope `wpf`, bound to a device label in the host column. The core checks the marker and the stored scope, so `verify_key` and `key_host` for `wpi` refuse a `wpf` key and the plugin's `verify_field_key` refuses a `wpi` key. Admins issue them from the admin create route with `scope: "wpf"` or with `--ingest-key-scope wpf`, and only when the plugin is listed.
-- **Not built yet.** The pages. The plugin is not yet copied into the Docker image.
+- **Not built yet.** The plugin is not yet copied into the Docker image.
 
 ### Built: upload endpoint (plugin slice 3)
 
@@ -241,6 +241,29 @@ The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `poc
 - **Failure.** A failed derivation never fails the upload. The evidence is stored, the audit row has `derive_failed` with the error class only, and a rebuild can repeat it.
 - **Rebuild.** Admin session and CSRF token, audited as `plugin_request` with the counts. In one transaction it deletes the properties with source `pockethernet` and the `field_report` links and unpatches those jacks, and then it replays every stored report in the order received, with the original receive time as the clock, so the result is the same apart from row ids. Switches, ports and jacks are kept because other sources may share them. Only the newest stored revision of each report is replayed, so a superseded revision's history is not recreated. When retention has dropped any report body the rebuild is refused (409) before anything is deleted, because those reports could not be replayed.
 
+### Built: report and jack pages and field change findings (plugin slices 5 and 6)
+
+`pages.py`, three page files and `static/pockethernet.js` in the plugin, and `watchpost/infra_changes.py` in the core. Details that the sketch above left open:
+
+- **Pages.** The plugin registers `/plugins/pockethernet` (report list), `/plugins/pockethernet/report?source=&report_id=` (report detail) and `/plugins/pockethernet/jack?key=` (jack) through the core's page hook, and one navigation entry, "Field reports", which the dashboard shows from `GET /api/plugins`. The pages are static shells with no data and sit outside the plugin's static folder. Their data routes are `GET /api/plugins/pockethernet/reports`, `/report` and `/jack`, which the core mounts behind a login session, so a visitor without one gets 401 and the script sends them to `/login`. When basic auth is configured the page shells ask for it as well, like `/host`. All text is written with `textContent`, and there is no `innerHTML`, inline script or inline style. The package data lists the page and script files so an install carries them.
+- **Report list.** Newest first, 50 a page (at most 200), with the corrected taken time, source, jack, status, revision, tester serial, the ports the report produced and a link. A report whose body retention dropped still shows its summary.
+- **Report detail.** The ports the report produced, then the typed sections (where, verdict and properties, link, PoE, DHCP, neighbours, tester, warnings, location, Wi-Fi), then the raw steps and tool results. A dropped body shows the summary and says so.
+- **Jack page.** Room and site, the port the jack is patched to now, the patch history from its `jack_label` rows (newest first), its links with open or closed state, and its reports.
+- **Field change findings.** Computed with the other findings on each read, from the last two values of a property in the port's history, whatever source wrote them. A property with one value is a baseline and produces nothing. A change stays until the value changes again, so a later report that restores the value clears it. At most one finding per kind per port.
+
+  | Kind | Severity | Fires when |
+  |---|---|---|
+  | `speed_drop` | warning | `link_speed_mbps` is lower than before |
+  | `cable_fault` | warning | `pair_fault` names a fault that differs from the earlier value |
+  | `length_change` | warning | a pair length moved by more than 2 m |
+  | `poe_drop` | warning | `poe_class` is lower, or `poe_load_w` fell below half of a positive earlier load |
+  | `vlan_change` | info | `vlan` or `voice_vlan` differs |
+  | `dhcp_fail` | warning | `dhcp_ok` went from true to false |
+  | `verdict_worse` | warning | `cable_verdict` moved from pass to warn or fail, or warn to fail |
+
+- **Where they show.** `GET /api/infra/findings` feeds a "Field findings" list on the dashboard, with a link to each port. The port page and the map use the same findings. An unacknowledged warning turns a port whose live check passes to Warning on both the port page and the map; an info finding or an acknowledged warning does not. This also changed the map: before, any finding turned a passing port to Warning, ignoring severity and acknowledgement.
+- **No alerts.** Nothing in the findings code reaches the alerter, and a test fails if an alert target is called while findings are produced.
+
 ## Build order
 
 **watchpost core.**
@@ -257,8 +280,8 @@ The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `poc
 2. Key scope (built).
 3. Upload endpoint (built).
 4. Report to properties and edges (built).
-5. Report and jack pages.
-6. Findings on the dashboard.
+5. Report and jack pages (built).
+6. Findings on the dashboard (built).
 
 **Later.** LLDP-MIB polling for uplinks (core).
 

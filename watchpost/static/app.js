@@ -210,16 +210,46 @@ async function renderEvents() {
   }));
 }
 
+async function renderFindings() {
+  const r = await fetch("/api/infra/findings");
+  if (!r.ok) return;
+  const list = (await r.json()).findings;
+  document.getElementById("findings-panel").hidden = list.length === 0;
+  document.getElementById("findings").replaceChildren(...list.map((f) => {
+    const li = el("li", `finding ${f.severity}`);
+    li.append(el("span", `pill ${f.severity === "warning" ? "warn" : "pending"}`, f.severity), " ");
+    const a = el("a", null, `${f.port_key} on ${f.switch_id}`);
+    a.href = `/port?switch_id=${encodeURIComponent(f.switch_id)}&port=${encodeURIComponent(f.port_key)}`;
+    li.append(a, ` ${f.message}`);
+    return li;
+  }));
+}
+
 async function refresh() {
   try {
     const r = await fetch("/api/monitors");
     if (r.ok) render(await r.json());
     await renderEvents();
+    await renderFindings();
   } catch (_) {
     document.getElementById("footer").textContent = "watchpost unreachable, retrying";
   }
 }
 
+async function renderPluginNav() {
+  // Pages that listed plugins registered through the core navigation hook.
+  try {
+    const r = await fetch("/api/plugins");
+    if (!r.ok) return;
+    document.getElementById("plugin-nav").replaceChildren(...(await r.json()).nav.map((n) => {
+      const a = el("a", "home", n.label);
+      a.href = n.path;
+      return a;
+    }));
+  } catch (_) { /* the dashboard works without it */ }
+}
+
 problemsOnly.addEventListener("change", refresh);
+renderPluginNav();
 refresh();
 setInterval(refresh, 10000);

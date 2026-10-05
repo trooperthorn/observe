@@ -10,5 +10,8 @@ pockethernet = "watchpost_pockethernet:plugin"
 [tool.setuptools]
 packages = ["watchpost_pockethernet"]
 
+[tool.setuptools.package-data]
+watchpost_pockethernet = ["pages/*.html", "static/*.js"]
+
 [tool.setuptools.dynamic]
 version = {attr = "watchpost_pockethernet.__version__"}

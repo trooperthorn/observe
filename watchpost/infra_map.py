@@ -344,9 +344,18 @@ class MapService:
             keep_switches = {s for s, _ in d["switches"]}
 
         findings: dict[str, list[str]] = {}
+        loud: set[str] = set()  # ports with an unacknowledged warning, as on the port page
         if live is not None:
+            def acks(db: Any) -> dict[tuple[str, str, str], str]:
+                return {(k, s, p): m for k, s, p, m in db.execute(
+                    "SELECT kind, switch_id, port_key, message FROM infra_finding_acks")}
+            acked = await self._infra._run(acks)
             for f in await self._matcher.findings(live):
-                findings.setdefault(f"{f.switch_id}|{f.port_key}", []).append(f.kind)
+                ref = f"{f.switch_id}|{f.port_key}"
+                findings.setdefault(ref, []).append(f.kind)
+                said = acked.get((f.kind, f.switch_id, f.port_key))
+                if f.severity == "warning" and said != f.message:
+                    loud.add(ref)
 
         nodes: list[dict[str, Any]] = []
         names = dict(d["switches"])
@@ -367,7 +376,7 @@ class MapService:
             node = {"id": f"port:{pref}", "kind": "port", "label": pkey, "parent": f"switch:{sid}",
                     "role": roles[pref], "monitor": pm[0].monitor if pm else None, **worst,
                     "findings": findings.get(pref, [])}
-            if node["findings"] and node["state"] == "up":
+            if pref in loud and node["state"] == "up":
                 node["state"] = "warn"  # a passing check does not hide a field fault
             nodes.append(node)
         for key, j in jacks.items():

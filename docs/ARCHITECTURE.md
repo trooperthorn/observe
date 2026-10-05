@@ -393,6 +393,19 @@ plugin's properties and `field_report` links and unpatches their jacks, and fina
 replays each report through `derive_report` in `updated_at` order. Plugin schema version
 2 adds `field_reports.key_prefix` for that replay.
 
+### Pockethernet pages
+
+`pages.py` builds one plugin router with three read-only routes, `GET /reports`, `/report` and
+`/jack`, which the core mounts under `/api/plugins/pockethernet/` behind the session check and
+the rate limit. They read `field_reports`, `port_properties` and `infra_jacks` through the
+store's lock and return JSON, never markup. A report is joined to its ports through the
+property rows that carry its report id, and a jack to its history through its `jack_label`
+rows. The plugin's `pages()` hook registers three static files from `pages/` at
+`/plugins/pockethernet`, `/report` and `/jack`, `nav_entries()` registers "Field reports", and
+`static_dir()` serves `static/pockethernet.js` at `/plugins/pockethernet/static`. The script
+shares `infra-common.js` with the core pages and writes every string with `textContent`.
+`index.html` and `app.js` read `GET /api/plugins` for the navigation links.
+
 ## Infrastructure map core
 
 Schema version 6 (and 7, below) adds `infra_switches`, `infra_ports`, `infra_jacks`, `infra_links`,
@@ -440,7 +453,7 @@ index. Nothing creates a monitor. Switches with no match form the unlinked queue
 (`speed_mbps` from the SNMP interface check, and `vlan` and `poe_w` where a check reports them).
 An unknown live value never produces a finding. The kinds are `speed_above_live`,
 `vlan_mismatch`, `poe_no_power` (all warnings) and `repatched` (info, from a jack label that
-moved to another port). Findings are not stored and never reach the alerter. Routes:
+moved to another port). `watchpost/infra_changes.py` adds the field change kinds `speed_drop`, `cable_fault`, `length_change`, `poe_drop`, `dhcp_fail` and `verdict_worse` (warnings) and `vlan_change` (info). `Matcher.findings` reads the newest two rows of each tracked property in one window query and passes them to the pure function `port_changes`, so a change needs two history rows and clears when the value is restored. Findings are not stored and never reach the alerter. Routes:
 `GET /api/admin/infra/unlinked` (admin session), `POST /api/admin/infra/link` (admin session and
 CSRF token) and `GET /api/infra/findings` (session).
 
@@ -463,7 +476,9 @@ Map pages. `watchpost/infra_port.py` (`PortPages`) builds `GET /api/infra/port?s
 (session): the port's switch, role, the matched monitors with their state and last polled
 speed, VLAN and PoE, the current properties, up to 50 history rows per property, and the
 findings for that port. A port is `up` only when no matched monitor is worse and no
-unacknowledged warning finding exists. Schema version 8 adds `infra_finding_acks`, keyed by
+unacknowledged warning finding exists; the map applies the same rule through the same
+acknowledgement rows, so an info finding or an acknowledged warning does not turn it to
+Warning there either. Schema version 8 adds `infra_finding_acks`, keyed by
 finding kind and port, which stores the message acknowledged; `acknowledge` refuses a finding
 that does not exist now, and a finding whose message changed is shown as unacknowledged. The
 route is `POST /api/admin/infra/findings/ack` (admin session and CSRF token, audited as

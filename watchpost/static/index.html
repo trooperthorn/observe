@@ -11,12 +11,18 @@
   <h1>watchpost</h1>
   <div id="summary" aria-live="polite"></div>
   <a href="/map" class="home">map</a>
+  <span id="plugin-nav"></span>
   <label class="filter"><input type="checkbox" id="problems-only"> problems only</label>
 </header>
 <main id="groups"></main>
 <section id="capacity-panel" hidden>
   <h2>Capacity outlook</h2>
   <ol id="capacity"></ol>
+</section>
+<section id="findings-panel" hidden>
+  <h2>Field findings</h2>
+  <p class="note">From field tests. These never send alerts.</p>
+  <ul id="findings" class="findings"></ul>
 </section>
 <section id="events-panel">
   <h2>Recent state changes</h2>

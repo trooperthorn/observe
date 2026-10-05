@@ -15,7 +15,8 @@ It matches a UniFi device port when the device MAC is the switch's chassis MAC a
 has a UniFi port index.
 
 Findings are computed when asked for, from the port properties and the live state that a
-LiveReader returns. They are shown on the dashboard and port page only. Nothing here calls
+LiveReader returns, plus the changes between the last two values of a property
+(infra_changes.py). They are shown on the dashboard, port page and map only. Nothing here calls
 an alert target.
 """
 
@@ -29,6 +30,7 @@ from typing import Any
 from . import audit
 from .config import Config
 from .infra import InfraError, InfraService
+from .infra_changes import TRACKED, port_changes
 from .portkey import mac_digits, port_key
 
 SWITCH_TYPES = ("snmp", "unifi_network", "ping", "tcp")
@@ -232,7 +234,7 @@ class Matcher:
         """Conflicts between the newest field properties and the live state, computed now."""
         linked = await self.effective_matches()
 
-        def go(db: Any) -> tuple[list[Any], list[Any], list[Any]]:
+        def go(db: Any) -> tuple[list[Any], list[Any], list[Any], list[Any]]:
             ports = db.execute(
                 "SELECT p.switch_id, p.port_key, s.mgmt_addresses, "
                 "p.if_index, p.unifi_index FROM infra_ports p "
@@ -245,8 +247,19 @@ class Matcher:
             labels = db.execute(
                 "SELECT id, switch_id, port_key, value FROM port_properties "
                 "WHERE name='jack_label' ORDER BY id").fetchall()
-            return ports, props, labels
-        ports, props, labels = await self._infra._run(go)
+            marks = ",".join("?" * len(TRACKED))
+            last_two = db.execute(
+                "SELECT switch_id, port_key, name, value, rn FROM ("
+                "SELECT switch_id, port_key, name, value, id, ROW_NUMBER() OVER ("
+                "PARTITION BY switch_id, port_key, name ORDER BY id DESC) AS rn "
+                f"FROM port_properties WHERE name IN ({marks})) WHERE rn <= 2", TRACKED
+            ).fetchall()
+            return ports, props, labels, last_two
+        ports, props, labels, last_two = await self._infra._run(go)
+        newest: dict[tuple[str, str], dict[str, Any]] = {}
+        earlier: dict[tuple[str, str], dict[str, Any]] = {}
+        for sid, key, name, value, rn in last_two:
+            (newest if rn == 1 else earlier).setdefault((sid, key), {})[name] = json.loads(value)
         cur: dict[tuple[str, str], dict[str, Any]] = {}
         for sid, key, name, value in props:
             cur.setdefault((sid, key), {})[name] = json.loads(value)
@@ -259,6 +272,8 @@ class Matcher:
             found = self.match_port(sid, linked.get(sid), json.loads(addrs), key, if_index,
                                     unifi_index)
             out.extend(self._compare(sid, key, field, self._live_of(found, live)))
+            out.extend(Finding(kind, severity, sid, key, message) for kind, severity, message
+                       in port_changes(earlier.get((sid, key), {}), newest.get((sid, key), {})))
         out.extend(_repatched(labels))
         return out
 

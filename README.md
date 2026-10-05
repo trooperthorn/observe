@@ -525,8 +525,10 @@ or a UniFi device port. Matching never creates a monitor, and an ambiguous match
 an admin. Switches that match nothing are listed at `GET /api/admin/infra/unlinked` and an
 admin links one with `POST /api/admin/infra/link` (audited). `GET /api/infra/findings` lists
 conflicts between field results and live state: speed above live, VLAN mismatch, PoE verified
-but no power, and re-patched. Findings are computed on request, are for the dashboard only,
-and never send alerts.
+but no power, and re-patched. It also lists field changes between the last two reports of a
+port: speed drop, new cable fault, length change, PoE drop, VLAN change, DHCP fail and a worse
+cable verdict. Findings are computed on request, are shown on the dashboard, port page and map
+only, and never send alerts.
 
 `GET /api/infra/map` returns nodes and edges with live state from the matched monitors and
 can be filtered by `site` and `building`. A link nobody has confirmed for `map.stale_days`
@@ -546,6 +548,14 @@ matched monitors. An admin can acknowledge a finding there (`POST /api/admin/inf
 audited); an acknowledgement covers that finding's current message only, so a changed finding
 shows as new again, and it never sends an alert. `/admin/infra` lists the unlinked switch queue
 with a monitor choice for each, and the pending dependency proposals with Accept and Reject.
+
+The Pockethernet plugin adds pages that need a login: `/plugins/pockethernet` lists field
+reports, `/plugins/pockethernet/report?source=...&report_id=...` shows one report with its
+typed sections first and then the raw steps and tool results, and
+`/plugins/pockethernet/jack?key=...` shows a jack, the ports it has been patched to over time and
+its reports. The dashboard links to the list as "Field reports" and shows a "Field findings"
+list; a warning that nobody has acknowledged turns a port that passes its live check to
+Warning on the port page and the map.
 
 ## Not implemented
 
