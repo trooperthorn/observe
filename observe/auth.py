@@ -7,7 +7,7 @@ The CSRF token is not stored in a form the client can replay from the
 database: it is an HMAC of the session identifier, so it exists only for
 someone who holds the session, and it is checked in constant time.
 
-The optional basic auth in watchpost/web.py is a separate, weaker credential
+The optional basic auth in observe/web.py is a separate, weaker credential
 for the read-only API and /metrics. Nothing in this module accepts it, so it
 can never reach a route that requires a session, which includes every admin,
 ingest-key, user and future action route. Adapted from hostwatch/auth.py

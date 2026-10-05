@@ -1,7 +1,7 @@
 """The data behind the report list, report detail and jack pages.
 
 These are read-only routes for a logged-in user; the core mounts them behind its session check
-(watchpost/web.py), so nothing here handles authentication. Every string in a report came from a
+(observe/web.py), so nothing here handles authentication. Every string in a report came from a
 phone, so the pages write it with textContent only (static/pockethernet.js) and this module only
 hands it over as JSON. A report body dropped by retention is reported as `body: null` with the
 summary row still present.
@@ -19,7 +19,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from watchpost.store import Store
+from observe.store import Store
 
 from .derive import SOURCE
 

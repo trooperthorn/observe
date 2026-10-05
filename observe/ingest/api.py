@@ -38,7 +38,7 @@ from .boot import classify_events
 from .keys import key_host, verify_key
 from .schema import MAX_BODY_BYTES, MAX_JSON_DEPTH, Batch
 
-log = logging.getLogger("watchpost.ingest")
+log = logging.getLogger("observe.ingest")
 
 
 class DenialAggregator:

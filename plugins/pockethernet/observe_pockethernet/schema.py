@@ -7,7 +7,7 @@ holds a measurement carries its unit (`speed_mbps`, `length_m`, `poe_load_w`).
 
 The rules, all enforced here and tested:
 
-- Unknown fields are rejected, not ignored. The phone and watchpost ship
+- Unknown fields are rejected, not ignored. The phone and Observe ship
   together, so a field this schema does not name is a mistake or an attack.
 - SSH transcripts and script values are never accepted, at any depth. They are
   refused by name before validation, so a future model change cannot let one in.

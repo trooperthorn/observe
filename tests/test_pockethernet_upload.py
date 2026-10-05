@@ -15,17 +15,17 @@ import pytest
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
 
-from watchpost.alerts import Alerter
-from watchpost.ingest.keys import create_key
-from watchpost.plugins import (GROUP, KeyScope, PluginBase, PluginError, PluginRouter,
+from observe.alerts import Alerter
+from observe.ingest.keys import create_key
+from observe.plugins import (GROUP, KeyScope, PluginBase, PluginError, PluginRouter,
                                load_plugins)
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
-from watchpost_pockethernet import schema
-from watchpost_pockethernet.keys import create_field_key
-from watchpost_pockethernet.reports import prune_evidence
-from watchpost_pockethernet.upload import MAX_RATIO, correct_clock, inflate
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
+from observe_pockethernet import schema
+from observe_pockethernet.keys import create_field_key
+from observe_pockethernet.reports import prune_evidence
+from observe_pockethernet.upload import MAX_RATIO, correct_clock, inflate
 
 from .conftest import make_config
 from .test_auth import Clock
@@ -53,7 +53,7 @@ class Env:
             plugin_settings={"pockethernet": settings or {}},
             server={"db_path": self.path, "plugin_rate_per_minute": rate})
         loaded = load_plugins(self.cfg, lambda: [EntryPoint(
-            "pockethernet", "watchpost_pockethernet:plugin", GROUP)])
+            "pockethernet", "observe_pockethernet:plugin", GROUP)])
         self.store = Store(self.path, loaded)
         alerter = Alerter(self.cfg)
         sched = Scheduler(self.cfg, self.store, alerter)
@@ -222,7 +222,7 @@ def test_gzip_bomb_is_refused_on_ratio_under_the_size_cap(env):
 
 
 def test_inflate_never_allocates_beyond_the_cap_and_refuses_bad_framing():
-    from watchpost_pockethernet.schema import ReportError
+    from observe_pockethernet.schema import ReportError
     with pytest.raises(ReportError) as err:
         inflate(gzip.compress(b"0" * (50 * 1024 * 1024)))
     assert err.value.status == 413
@@ -246,7 +246,7 @@ def test_missing_wrong_revoked_and_host_keys_are_401(env):
     host_key, _ = run(create_key(env.store, "somehost"))
     r = env.post(FIXTURE, key=host_key)
     assert r.status_code == 401 and r.headers["www-authenticate"] == "Bearer"
-    from watchpost.ingest.keys import revoke_key
+    from observe.ingest.keys import revoke_key
     run(revoke_key(env.store, env.info.prefix))
     assert env.post(FIXTURE).status_code == 401
     assert env.rows("SELECT * FROM field_reports") == []
@@ -388,7 +388,7 @@ def test_plugin_prune_hook_uses_the_configured_retention(tmp_path):
     e = Env(tmp_path, settings={"evidence_retention_days": 2})
     try:
         e.post(FIXTURE)
-        from watchpost_pockethernet import plugin
+        from observe_pockethernet import plugin
         assert plugin.settings.evidence_retention_days == 2
         assert run(plugin.prune(e.store, e.clock.now + 3 * 86400)) == 1
     finally:
@@ -401,7 +401,7 @@ def test_retention_setting_is_validated_without_echoing_the_value(tmp_path):
                           plugins=["pockethernet"], plugin_settings={"pockethernet": bad})
         with pytest.raises(PluginError, match="plugin_settings.pockethernet"):
             load_plugins(cfg, lambda: [EntryPoint(
-                "pockethernet", "watchpost_pockethernet:plugin", GROUP)])
+                "pockethernet", "observe_pockethernet:plugin", GROUP)])
 
 
 # ---- the core's rules for key-authenticated plugin routers --------------------------------

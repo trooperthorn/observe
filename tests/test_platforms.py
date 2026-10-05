@@ -15,10 +15,10 @@ import time
 import pytest
 import yaml
 
-from watchpost.checks import build_check
-from watchpost.checks.base import Result
-from watchpost.config import Config
-from watchpost.discovery import discover
+from observe.checks import build_check
+from observe.checks.base import Result
+from observe.config import Config
+from observe.discovery import discover
 
 from .fakes.servers import TrueNASFake, leaf_cert, proxmox_server
 

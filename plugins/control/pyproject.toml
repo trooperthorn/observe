@@ -1,15 +1,15 @@
 [project]
-name = "watchpost-control"
+name = "observe-control"
 dynamic = ["version"]
-description = "Signed control actions for watchpost"
+description = "Signed control actions for Observe"
 requires-python = ">=3.12"
 dependencies = ["cryptography"]
 
-[project.entry-points."watchpost.plugins"]
-control = "watchpost_control:plugin"
+[project.entry-points."observe.plugins"]
+control = "observe_control:plugin"
 
 [tool.setuptools]
-packages = ["watchpost_control"]
+packages = ["observe_control"]
 
 [tool.setuptools.dynamic]
-version = {attr = "watchpost_control.__version__"}
+version = {attr = "observe_control.__version__"}

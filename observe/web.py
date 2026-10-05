@@ -3,7 +3,7 @@
 The dashboard and monitor endpoints do not change state. Adding, removing, or
 editing a monitor means editing the YAML and restarting the container, so a
 stolen session can read your inventory but can not change what is watched or
-silence an alert. The write paths are POST /api/ingest (watchpost/ingest/api.py,
+silence an alert. The write paths are POST /api/ingest (observe/ingest/api.py,
 host-bound ingest key, does not touch monitors) and the login surface below.
 
 Two credentials exist and they do not mix. The optional basic auth, and a
@@ -11,7 +11,7 @@ login session, both open the read-only API and /metrics. The host views
 (/host, /api/hosts) hold hardware inventory and need a login session; basic
 auth does not open them. Only a session with a
 CSRF token reaches /api/logout and /api/admin/*, and an admin session is needed
-for the admin routes; basic auth is never accepted there (watchpost/auth.py).
+for the admin routes; basic auth is never accepted there (observe/auth.py).
 """
 
 from __future__ import annotations
@@ -98,7 +98,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                auth_clock: Callable[[], float] = time.time,
                plugins: LoadedPlugins | None = None,
                map_clock: Callable[[], float] = time.time) -> FastAPI:
-    app = FastAPI(title="watchpost", version=__version__, docs_url=None, redoc_url=None,
+    app = FastAPI(title="Observe", version=__version__, docs_url=None, redoc_url=None,
                   openapi_url=None)
     user, pw = config.server.basic_auth_user, config.server.basic_auth_password
 
@@ -121,7 +121,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             except (ValueError, UnicodeDecodeError):
                 ok = False
         if not ok:
-            raise HTTPException(401, headers={"WWW-Authenticate": 'Basic realm="watchpost"'})
+            raise HTTPException(401, headers={"WWW-Authenticate": 'Basic realm="Observe"'})
 
     guarded = [Depends(auth)]
     app.include_router(build_router(config, store, ingest_clock))

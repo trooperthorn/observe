@@ -1,17 +1,17 @@
 [project]
-name = "watchpost-pockethernet"
+name = "observe-pockethernet"
 dynamic = ["version"]
-description = "Pockethernet field reports for watchpost"
+description = "Pockethernet field reports for Observe"
 requires-python = ">=3.12"
 
-[project.entry-points."watchpost.plugins"]
-pockethernet = "watchpost_pockethernet:plugin"
+[project.entry-points."observe.plugins"]
+pockethernet = "observe_pockethernet:plugin"
 
 [tool.setuptools]
-packages = ["watchpost_pockethernet"]
+packages = ["observe_pockethernet"]
 
 [tool.setuptools.package-data]
-watchpost_pockethernet = ["pages/*.html", "static/*.js"]
+observe_pockethernet = ["pages/*.html", "static/*.js"]
 
 [tool.setuptools.dynamic]
-version = {attr = "watchpost_pockethernet.__version__"}
+version = {attr = "observe_pockethernet.__version__"}

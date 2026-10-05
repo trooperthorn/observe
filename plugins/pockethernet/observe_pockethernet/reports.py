@@ -22,8 +22,8 @@ import hashlib
 from dataclasses import dataclass
 from typing import Literal
 
-from watchpost.plugins import Migration
-from watchpost.store import Store
+from observe.plugins import Migration
+from observe.store import Store
 
 from .derive import Footprint, footprint, recorded_by_for, retract_rows
 

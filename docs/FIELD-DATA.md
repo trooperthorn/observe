@@ -2,7 +2,7 @@
 
 Status: design; the Pockethernet report schema and key scope, the plugin loader, per-plugin migrations, plugin pages, the upload endpoint, the infrastructure tables with port keys and property history, monitor matching with conflict findings, map data with ageing and inferred dependencies, and the map, port and map admin pages are built, as are the mapping from reports to port properties and map edges and its rebuild; the report list, report detail and jack pages and the field change findings on the dashboard, port page and map are built too. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
 Pockethernet Android app (repo `pocketethernet-app`) become properties of switch
-ports in watchpost, and how the mapping data in those results builds an
+ports in Observe, and how the mapping data in those results builds an
 infrastructure map with live availability and health.
 
 ## Goals
@@ -13,7 +13,7 @@ infrastructure map with live availability and health.
    VLAN, DHCP and DNS result, and when and with which tester it was last tested.
 2. LLDP and CDP neighbour data, the app's site model (site, building, room,
    panel, port) and its port map build a topology of switches, ports, jacks,
-   endpoints and uplinks. watchpost overlays live state from its existing
+   endpoints and uplinks. Observe overlays live state from its existing
    monitors and infers dependencies from that topology.
 
 ## Data model
@@ -29,7 +29,7 @@ except a new `scope` column on `ingest_keys`.
 | `infra_ports` | `(switch_id, port_key)` | `port_key` is the normalised port name, so `GigabitEthernet1/0/5`, `Gi1/0/5` and an SNMP ifName of the same port compare equal. Also the raw LLDP port id, SNMP ifIndex and UniFi port index when matched, and `role` (access, uplink, unknown). |
 | `infra_jacks` | `jack_key` | The app's site port id (`site/building/room/panel/NN`), else the user's label. Room, site and the current `(switch_id, port_key)` it is patched to. |
 | `infra_links` | `id` | An edge between two of: port, port (uplink), jack, endpoint. Each edge has a source (`lldp`, `cdp`, `field_report`, `snmp_lldp`, `config`), first seen, last seen, and confidence. |
-| `infra_endpoints` | `id` | A device seen on a port: a watchpost monitor, a pushed host, or a MAC and DHCP address learned in the field. |
+| `infra_endpoints` | `id` | A device seen on a port: an Observe monitor, a pushed host, or a MAC and DHCP address learned in the field. |
 
 ### Custom properties with history
 
@@ -94,7 +94,7 @@ except a new `scope` column on `ingest_keys`.
 - **Phone-side delivery.**
   - Reports go into a queue on the phone that survives restarts.
   - The queue is sent when the phone is on Wi-Fi or a VPN, with backoff between retries.
-  - Nothing is queued unless you tap "Send to watchpost", or turn on automatic queueing in settings.
+  - Nothing is queued unless you tap "Send to Observe", or turn on automatic queueing in settings.
 - **Privacy defaults.**
   - Location and Wi-Fi SSID and BSSID are sent by default (owner decision). Each can be turned off in the app.
   - Left out unless you opt in: survey and BLE data, the phone's own addresses, and the lists of LAN hosts it discovered.
@@ -114,7 +114,7 @@ except a new `scope` column on `ingest_keys`.
 ## Owner decisions (2026-10-04)
 
 - Inferred dependencies apply automatically when confirmed by LLDP or CDP within `map.stale_days` (90). Weaker edges wait for an admin to accept them.
-- Upload is manual ("Send to watchpost"); automatic queueing of every saved report is an opt-in setting.
+- Upload is manual ("Send to Observe"); automatic queueing of every saved report is an opt-in setting.
 - Field findings are shown on the dashboard, port page and map only. They do not send alerts.
 - Location and Wi-Fi names are sent with reports by default.
 - A switch seen in the field that matches no monitor is created as an unlinked switch and queued for an admin to link.
@@ -122,12 +122,12 @@ except a new `scope` column on `ingest_keys`.
 
 ## Packaging: core map, Pockethernet as a plugin (owner decision 2026-10-04)
 
-watchpost gains a plugin system, and this design is split between the core and the first plugin.
+Observe gains a plugin system, and this design is split between the core and the first plugin.
 
 - **Core.**
   - Switches, ports and port properties with history, the infrastructure map, monitor matching, conflict findings and inferred dependencies.
   - SNMP, UniFi and pushed hosts feed the same map, so none of it is specific to Pockethernet.
-- **Plugin host (core).** Plugins are found through Python entry points (group `watchpost.plugins`) and loaded only when listed under `plugins:` in `watchpost.yaml`. A plugin declares the core versions it supports, and a mismatch refuses to start. Through fixed hooks a plugin can register:
+- **Plugin host (core).** Plugins are found through Python entry points (group `observe.plugins`, with the legacy group `watchpost.plugins` still read and warned about for compatibility) and loaded only when listed under `plugins:` in `watchpost.yaml`. A plugin declares the core versions it supports, and a mismatch refuses to start. Through fixed hooks a plugin can register:
   - routers;
   - a key scope;
   - its own migrations, with a version number per plugin;
@@ -137,7 +137,7 @@ watchpost gains a plugin system, and this design is split between the core and t
   - map contributions: nodes, edges, property writes and suggested dependencies.
 - **Core enforcement.** Every plugin route gets the core's authentication, CSRF, rate limiting and audit, so a plugin cannot bypass them. A key-authenticated route counts valid requests per key and per peer, and counts failed or missing keys per peer separately, each against `server.plugin_rate_per_minute`, so bad-key traffic cannot use up a valid key's allowance.
 - **Trust.** Plugins run in-process with full trust. Only plugins installed into the image and named in the config are loaded, and nothing is downloaded at runtime.
-- **Pockethernet plugin** (package `watchpost-pockethernet`, kept in this repository under `plugins/pockethernet` until it needs its own):
+- **Pockethernet plugin** (package `observe-pockethernet`, kept in this repository under `plugins/pockethernet` until it needs its own):
   - the report schema and the `wpf` key scope;
   - the upload endpoint;
   - mapping from a report to port properties and edges;
@@ -146,7 +146,7 @@ watchpost gains a plugin system, and this design is split between the core and t
 
 ### Built: plugin loader (slice 1)
 
-`watchpost/plugins.py` and the mounting code in `watchpost/web.py` implement the host. Details differ from the sketch above in these ways:
+`observe/plugins.py` and the mounting code in `observe/web.py` implement the host. Details differ from the sketch above in these ways:
 
 - Settings live under `plugin_settings.<name>` next to `plugins:`, because the core config rejects unknown keys.
 - Routers, the config section and navigation entries are active. Key scopes, monitor types and map contributions are declared and validated at load, and applied by the slices that build them (build order item 6 and the plugin's key scope work).
@@ -162,7 +162,7 @@ watchpost gains a plugin system, and this design is split between the core and t
 
 ### Built: infrastructure tables and property history (slice 4)
 
-Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement the data model. Details that the sketch above left open:
+Schema version 6 and `observe/portkey.py` and `observe/infra.py` implement the data model. Details that the sketch above left open:
 
 - `switch_id` is `mac:<12 hex digits>` or `name:<lower-cased sysName>`, so a sysName that looks like a MAC cannot collide with a chassis id. Port keys are lower case with no whitespace; LLDP port ids that are not names keep a prefix (`mac:`, `addr:`, `circuit:`, `pc:`).
 - `infra_links` stores its two ends as sorted `(kind, ref)` pairs and is unique per ends and source. A port ref is `<switch_id>|<port_key>`, so neither may contain a vertical bar. `closed_at` is reserved for the ageing slice.
@@ -172,7 +172,7 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 
 ### Built: monitor matching and conflict findings (slice 5)
 
-`watchpost/infra_match.py` implements the matching and findings. Details that the sketch above left open:
+`observe/infra_match.py` implements the matching and findings. Details that the sketch above left open:
 
 - A switch is matched automatically by chassis MAC (a UniFi device monitor whose `device` is that MAC) or by an admin link. A management address or sysName equal to the monitor's target is only a proposal, because a report can claim any address or name. The proposal is never applied, so it gives the monitor's live state to no switch until an admin confirms it. `GET /api/admin/infra/unlinked` lists each queued switch with its `proposed_monitor`, and confirming it uses the link route; the audit row records `basis` as `proposal` or `manual`.
 - For a proposal the best monitor type wins (snmp, unifi_network, ping, tcp). A tie between monitors of that type proposes nothing and the switch goes to the unlinked queue without a proposal. SNMP interface monitors belong to ports and never match a switch.
@@ -184,7 +184,7 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 
 ### Built: map data, ageing and inferred dependencies (slice 6)
 
-`watchpost/infra_map.py` implements `GET /api/infra/map`, the ageing and the dependency plan. Schema version 7 adds `infra_dependencies`, which stores only an admin's decision. Details that the sketch above left open:
+`observe/infra_map.py` implements `GET /api/infra/map`, the ageing and the dependency plan. Schema version 7 adds `infra_dependencies`, which stores only an admin's decision. Details that the sketch above left open:
 
 - **Map.** `GET /api/infra/map?site=&building=` (login session) returns `nodes` and `edges`. A node has an `id` (`switch:<id>`, `port:<id>|<key>`, `jack:<key>`, `endpoint:<n>`), a `kind`, a `label`, the matched `monitor` slug, and a live `state` that is one of `up`, `warn`, `down`, `unreachable`, `pending` or `unknown`, with `blocked_by` naming the ancestor behind an unreachable one. A port also carries its `parent` switch, `role` and `findings`; a port whose check passes but which has a field finding is shown as `warn`. Switches, and the ports that have a visible link or a patched jack, are nodes. Building is the second part of the app's site port id (`site/building/room/panel/NN`). A filter keeps the matching jacks, the ports they reach, the switches of those ports and the switches one uplink away; a site filter also keeps ports whose newest `site` property matches. Edges carry `source`, `confidence`, `state` (`active` or `stale`) and `age_days`.
 - **Ageing.** Computed on read from `last_seen` and the clock. Older than `map.stale_days` is stale, older than twice that is hidden, and a link with `closed_at` is never shown. Rows are never deleted, and confirming a link again brings it back. Ageing uses the observation time of the confirming report, so a late or resent older report neither refreshes a link nor reopens one that a newer observation closed, and a jack is only re-patched by an observation at least as new as its last one.
@@ -196,7 +196,7 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 
 ### Built: map, port and map admin pages (slice 7)
 
-`watchpost/infra_port.py`, three static pages and schema version 8 implement the views for the core map. Details that the sketch above left open:
+`observe/infra_port.py`, three static pages and schema version 8 implement the views for the core map. Details that the sketch above left open:
 
 - **Pages.** `/map`, `/port?switch_id=&port=` and `/admin/infra` are static files with no data. Their scripts send a visitor without a session to `/login`, and the admin page shows nothing without an admin session. All text is written with `textContent`, and there is no `innerHTML`, inline script or inline style.
 - **Map page.** Switches are placed by uplink depth from the map's port links: a switch with nothing above it but switches below is core, the deepest is access, and anything between is distribution. A switch with no uplink links is shown as access. Each node shows its state in words (Up, Warning, Down, Unreachable with the blocking ancestor, Pending, State unknown) as well as colour. Stale links are dashed, and a links table repeats every edge as text. The site and building filters are filled from the jacks in the unfiltered map.
@@ -206,10 +206,10 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 
 ### Built: Pockethernet report schema and key scope (plugin slices 1 and 2)
 
-The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `pockethernet` in group `watchpost.plugins`, supported core versions `>=2026.9,<2027`) holds `schema.py` and `keys.py`. Core schema version 9 adds `ingest_keys.scope`. Details that the sketch above left open:
+The package `observe_pockethernet` in `plugins/pockethernet` (entry point `pockethernet` in group `observe.plugins`, supported core versions `>=2026.9,<2027`) holds `schema.py` and `keys.py`. Core schema version 9 adds `ingest_keys.scope`. Details that the sketch above left open:
 
 - **Schema.** `pockethernet.report` version 1 has the envelope `schema`, `version`, `report_id`, `revision` and `taken_at_ms`, then `device`, `site` (the app's site model), `geo`, `wifi`, `steps`, `neighbors` (LLDP and CDP), `dhcp`, `link`, `poe`, `properties` and `tool_results`. Names carry units (`speed_mbps`, `pair_1_2_length_m`, `poe_load_w`, `lease_s`, `latitude_deg`, times in `_ms`). `last_tested_at` is carried as `last_tested_at_ms`, and the mapping slice turns it into the property.
-- **Strict.** Unknown fields are rejected at every level, because the phone and watchpost ship together. `properties` is the allowlist from the data model section, one typed field per name; `custom.<name>` is never accepted from a phone.
+- **Strict.** Unknown fields are rejected at every level, because the phone and Observe ship together. `properties` is the allowlist from the data model section, one typed field per name; `custom.<name>` is never accepted from a phone.
 - **Never accepted.** A key named `transcript`, `script_runs`, `scriptRuns`, `script_values` or similar, at any depth, rejects the whole report with a message that does not repeat the value.
 - **Caps.** 256 KiB per body (413), JSON nesting 16 (400), strings 1024 characters (names 128, notes 4096), 64 steps and fields, 8 neighbours, 32 tool results, 16 addresses per list. Control characters are refused (notes may keep a newline), and NaN and the infinities are refused, both as JSON literals and as floats.
 - **Location and Wi-Fi** are accepted, as decided. They are stored with the report and never become port properties.
@@ -246,7 +246,7 @@ The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `poc
 
 ### Built: report and jack pages and field change findings (plugin slices 5 and 6)
 
-`pages.py`, three page files and `static/pockethernet.js` in the plugin, and `watchpost/infra_changes.py` in the core. Details that the sketch above left open:
+`pages.py`, three page files and `static/pockethernet.js` in the plugin, and `observe/infra_changes.py` in the core. Details that the sketch above left open:
 
 - **Pages.** The plugin registers `/plugins/pockethernet` (report list), `/plugins/pockethernet/report?source=&report_id=` (report detail) and `/plugins/pockethernet/jack?key=` (jack) through the core's page hook, and one navigation entry, "Field reports", which the dashboard shows from `GET /api/plugins`. The pages are static shells with no data and sit outside the plugin's static folder. Their data routes are `GET /api/plugins/pockethernet/reports`, `/report` and `/jack`, which the core mounts behind a login session, so a visitor without one gets 401 and the script sends them to `/login`. When basic auth is configured the page shells ask for it as well, like `/host`. All text is written with `textContent`, and there is no `innerHTML`, inline script or inline style. The package data lists the page and script files so an install carries them.
 - **Report list.** Newest first, 50 a page (at most 200), with the corrected taken time, source, jack, status, revision, tester serial, the ports the report produced and a link. A report whose body retention dropped still shows its summary.
@@ -269,7 +269,7 @@ The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `poc
 
 ## Build order
 
-**watchpost core.**
+**Observe core.**
 1. Plugin loader and hooks (built).
 2. Per-plugin migrations (built).
 3. Plugin pages and navigation (built).
@@ -289,7 +289,7 @@ The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `poc
 **Later.** LLDP-MIB polling for uplinks (core).
 
 **Then the app.**
-1. Payload mapper with golden files shared with watchpost.
+1. Payload mapper with golden files shared with Observe.
 2. Settings, with the key stored in the Android Keystore.
 3. Client.
 4. Persistent outbox.

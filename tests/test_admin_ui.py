@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from watchpost import audit
-from watchpost.ingest.keys import verify_key
+from observe import audit
+from observe.ingest.keys import verify_key
 
 from .test_auth import BASIC, PASSWORD, Env
 

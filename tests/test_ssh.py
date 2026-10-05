@@ -8,10 +8,10 @@ import socket
 import pytest
 import yaml
 
-from watchpost.checks import build_check
-from watchpost.checks.base import Result
-from watchpost.config import Config
-from watchpost.discovery import Discoverer, HostFinding, discover
+from observe.checks import build_check
+from observe.checks.base import Result
+from observe.config import Config
+from observe.discovery import Discoverer, HostFinding, discover
 
 D = "/tmp/wp-ssh"
 

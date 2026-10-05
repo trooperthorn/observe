@@ -5,7 +5,7 @@ verify, the host-bound wpc key scope, the signed command queue with expiry, seq 
 the key-authenticated pull and results routes, and the admin action routes.
 The admin routes request an action (with confirmation, and the typed host name for a reboot),
 list a host's command history and cancel a scheduled reboot.
-watchpost never connects to a host; a host's daemon pulls with its wpc key.
+Observe never connects to a host; a host's daemon pulls with its wpc key.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from fastapi.responses import JSONResponse
 
-from watchpost import audit
-from watchpost.plugins import KeyScope, Migration, PluginBase, PluginError, PluginRouter
+from observe import audit
+from observe.plugins import KeyScope, Migration, PluginBase, PluginError, PluginRouter
 
 from .actions import CONTROLLERS, MODES, capabilities, validate
 from .keys import SCOPE
@@ -34,7 +34,7 @@ class ControlSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     # Private key file, written by `--control-keygen`. Never served or logged.
-    signing_key_file: str = Field(default="/run/secrets/watchpost_control_key", min_length=1,
+    signing_key_file: str = Field(default="/run/secrets/observe_control_key", min_length=1,
                                   max_length=1024)
     # What the daemon is told to poll at; a hint, the daemon keeps its own floor.
     pull_interval_s: int = Field(default=5, ge=1, le=300)

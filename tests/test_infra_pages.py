@@ -10,19 +10,19 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from watchpost import auth
-from watchpost.alerts import Alerter
-from watchpost.checks.base import CheckResult
-from watchpost.infra import InfraService
-from watchpost.portkey import switch_id
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
+from observe import auth
+from observe.alerts import Alerter
+from observe.checks.base import CheckResult
+from observe.infra import InfraService
+from observe.portkey import switch_id
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
 
 from .conftest import make_config
 
 PASSWORD = "correct horse battery"
-STATIC = Path(__file__).parent.parent / "watchpost" / "static"
+STATIC = Path(__file__).parent.parent / "observe" / "static"
 PAGES = {"/map": ["map.html", "map.js"], "/port": ["port.html", "port.js"],
          "/admin/infra": ["infra-admin.html", "infra-admin.js"]}
 HOSTILE = '<img src=x onerror="alert(1)">&"\'</script>'

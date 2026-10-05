@@ -66,7 +66,7 @@ from .config import (_REF, Config, DiscoverySettings, Monitor, MqttMonitor, Snmp
                      WinRMMonitor)
 from .directory import DirectoryComputer, fetch_computers_async
 
-log = logging.getLogger("watchpost.discovery")
+log = logging.getLogger("observe.discovery")
 
 # A name that resolves to several addresses (localhost is ::1 and 127.0.0.1) must
 # not spend the whole probe timeout on an address that never answers or, as on

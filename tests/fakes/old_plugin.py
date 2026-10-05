@@ -1,6 +1,6 @@
 """A plugin that supports only an old core version."""
 
-from watchpost.plugins import PluginBase
+from observe.plugins import PluginBase
 
 
 class OldPlugin(PluginBase):

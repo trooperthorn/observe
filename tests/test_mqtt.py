@@ -1,7 +1,7 @@
 import aiomqtt
 
-from watchpost.checks import build_check
-from watchpost.checks.base import Result
+from observe.checks import build_check
+from observe.checks.base import Result
 
 from .conftest import MQTT_PORT, make_config, needs_mqtt
 

@@ -1,7 +1,7 @@
 # Architecture: hostwatch ingest, logins, and the future control phase
 
-The owner reversed the earlier decision that watchpost is read-only by
-design. watchpost is becoming the single monitoring UI and, later, the
+The owner reversed the earlier decision that Observe is read-only by
+design. Observe is becoming the single monitoring UI and, later, the
 control plane for the hosts it watches, replacing the hostwatch hub and web
 view. This document describes the target design in phases. Sections marked
 **built in this phase** are being implemented now; sections marked
@@ -18,8 +18,8 @@ action that changes a host is built in this phase.
 ## Ingest
 
 Hosts run the hostwatch agent, which pushes a JSON snapshot over HTTPS to
-watchpost. The wire schema is the one hostwatch already defines in
-`hostwatch/schema.py`; watchpost carries its own copy, adapted with an
+Observe. The wire schema is the one hostwatch already defines in
+`hostwatch/schema.py`; Observe carries its own copy, adapted with an
 attribution comment, and never imports hostwatch. Each push carries a host
 identity, a boot identifier, an uptime, and hardware readings.
 
@@ -28,9 +28,9 @@ most constrained one. A request must carry an ingest key. The body size is
 capped, the schema is validated, with unknown fields ignored as hostwatch ignores them, and a
 request that fails validation is dropped and counted, never stored in part.
 
-The models live in `watchpost/ingest/schema.py` (Batch, Sample, SourceStatus,
+The models live in `observe/ingest/schema.py` (Batch, Sample, SourceStatus,
 Event). Field names and types match hostwatch, so a well-formed agent needs no
-change. watchpost tightens them: unknown fields are ignored so a newer agent is not
+change. Observe tightens them: unknown fields are ignored so a newer agent is not
 dead-lettered, an unknown `schema_version` is a validation error, and each batch is limited to 256 sources, 5000
 samples and 500 events, with bounded string lengths, 32 labels per sample, and
 event detail of at most 64 keys and 8192 bytes of JSON. Non-finite numbers are
@@ -38,7 +38,7 @@ rejected. `MAX_BODY_BYTES` (1 MiB) is defined there and enforced by the
 endpoint.
 
 The endpoint is `POST /internal/v1/ingest`, the path unmodified hostwatch agents
-use, with `POST /api/ingest` kept as an alias, in `watchpost/ingest/api.py`. It checks, in
+use, with `POST /api/ingest` kept as an alias, in `observe/ingest/api.py`. It checks, in
 this order: a per-peer rate limit (429), a valid unrevoked bearer key (401,
 before the body is read), the body size cap (413), a JSON nesting limit of 32 checked before parsing (400), the key's bound host against
 the host in the body (403), and the schema (422). hostwatch agents dead-letter
@@ -85,7 +85,7 @@ rolling a failed step back. A plugin whose recorded version is newer than the
 migrations in its code raises `PluginSchemaTooNewError` (a `SchemaTooNewError`),
 and every plugin is checked before any is changed. A plugin that is not listed
 is not touched: its tables and its `plugin_schema` row stay as they were, so
-listing it again later picks up where it stopped. watchpost never drops plugin
+listing it again later picks up where it stopped. Observe never drops plugin
 tables.
 
 Version 2 adds `hosts`, `host_samples`, `host_sources` and `host_events`.
@@ -119,7 +119,7 @@ bits, and only its SHA-256 digest is stored. A fast digest is adequate for a
 random secret, unlike a user password, which uses argon2. Lookup is by
 prefix, the digest and host name are compared in constant time, and a
 revoked key fails the same way a wrong one does. Last use is recorded only
-after a successful check. The code is `watchpost/ingest/keys.py`. Keys are managed on the admin screen,
+after a successful check. The code is `observe/ingest/keys.py`. Keys are managed on the admin screen,
 and also by `--ingest-key-create`, `--ingest-key-list` and
 `--ingest-key-revoke` from the command line.
 
@@ -131,7 +131,7 @@ scope cannot be used on another surface, even with its marker edited. For a
 scope other than `wpi` the host column holds the device label. A plugin
 registers a scope through its `key_scopes` hook, and the admin create route and
 the command line issue only `wpi` or a scope of a listed plugin. The Pockethernet
-plugin's helpers are in `plugins/pockethernet/watchpost_pockethernet/keys.py`,
+plugin's helpers are in `plugins/pockethernet/observe_pockethernet/keys.py`,
 and its report schema, `pockethernet.report` version 1, is in `schema.py` next to
 it. `parse_report` checks size, nesting depth and JSON before validation, and the
 model rejects unknown fields, SSH transcripts and script values, properties
@@ -142,7 +142,7 @@ non-finite numbers.
 
 The agent gathers the evidence (heartbeat, pstore, watchdog status, previous
 boot journal) and sends one `boot.<kind>` event per detected reboot. The
-classifier in `watchpost/ingest/boot.py`, adapted from hostwatch, reduces the
+classifier in `observe/ingest/boot.py`, adapted from hostwatch, reduces the
 kind to clean (`clean_shutdown`), crash (`kernel_panic`, `watchdog_reset`,
 `power_loss`, `unknown_unclean`, `unclean_shutdown`) or unknown (anything else,
 including `agent_stopped` and kinds this version has not seen). It never
@@ -167,7 +167,7 @@ is a later slice.
 A pushed host becomes a monitor of type `pushed_host` when it is listed in the
 YAML. Listing it is the confirmation; the `hosts.confirmed` column is reserved
 for the admin screen's confirm action in a later slice. The check
-(`watchpost/checks/host.py`) takes its state from freshness and readings
+(`observe/checks/host.py`) takes its state from freshness and readings
 rather than from a poll. It reads the newest sample per source, metric and
 label set through `Store.latest_host`, grades each configured component Good,
 Warning or Critical, and returns OK, WARN or FAIL for the worst one. Those go
@@ -184,7 +184,7 @@ summary adapted from hostwatch's `integrations/summary.py` is the host views sec
 Each pushed host has a page at `/host?name=HOST`, linked from the dashboard
 row of its `pushed_host` monitor. It is served by two routes, `GET /api/hosts`
 (one summary row per host) and `GET /api/hosts/{host:path}` (host names may contain slashes; the full document), both
-built by `watchpost/hostview.py` from the newest sample per series in the store.
+built by `observe/hostview.py` from the newest sample per series in the store.
 The sections are CPU, memory, power, temperatures, fans with the fan controller
 state, RAID, ZFS pools, disks, UPS, alerts and events, plus the boot state and
 the list of sources. Each section and each reading carries Good, Warning or
@@ -218,7 +218,7 @@ The existing optional basic auth is kept, by owner decision, for the read-only
 API and `/metrics` only. It can never reach admin, ingest-key, user or future
 action routes, which require a session login with CSRF.
 
-Implemented in `watchpost/auth.py` and the routes in `watchpost/web.py`. The
+Implemented in `observe/auth.py` and the routes in `observe/web.py`. The
 session identifier and CSRF token are never stored as plaintext: the table
 holds a SHA-256 digest of the identifier, and the CSRF token is an HMAC of the
 identifier, recomputed on each request. Four FastAPI dependencies enforce the
@@ -241,7 +241,7 @@ source address, action, target, and outcome. The application never updates
 or deletes audit rows, and secrets are never written to it. Admins can read
 it from the admin screen.
 
-Built in `watchpost/audit.py`. Every writer calls `audit.record`, which
+Built in `observe/audit.py`. Every writer calls `audit.record`, which
 sanitizes the path (anything shaped like an ingest key or session token is replaced with `[redacted]`, control
 characters become `?`, 256 characters at most,
 adapted from hostwatch's `sanitize_audit_path`) and replaces the value of any
@@ -263,7 +263,7 @@ session only, so basic auth never reaches it. It takes `limit` (1 to 500),
 A single admin-only page, `/admin` (`static/admin.html` and `admin.js`), lists
 users and ingest keys, creates and revokes keys, creates users, disables or
 enables them, grants or removes the admin role, and shows the latest audit
-rows. It is the first write surface in watchpost's web UI, which is why every
+rows. It is the first write surface in Observe's web UI, which is why every
 route behind it sits behind the login, role, and CSRF dependencies.
 
 The page is a static file with no data, so a visitor without a session is sent
@@ -277,9 +277,9 @@ screen yet, and no control changes a host.
 
 ## Plugin host
 
-`watchpost/plugins.py` loads plugins (design in `docs/FIELD-DATA.md`). A plugin
+`observe/plugins.py` loads plugins (design in `docs/FIELD-DATA.md`). A plugin
 is a package that publishes a `Plugin` object under the entry point group
-`watchpost.plugins`. Only names listed under `plugins:` in the config are
+`observe.plugins`. Only names listed under `plugins:` in the config are
 loaded; an installed plugin that is not listed is never imported. Startup stops
 with a `PluginError` naming the plugin when a listed plugin is not installed,
 its declared `core_versions` range (a PEP 440 specifier) does not contain this
@@ -308,7 +308,7 @@ Monitor type names must start with the plugin name and a dot, and key scope
 markers are three to eight lower-case letters that may not be `wpi`.
 
 The core mounts every plugin router under `/api/plugins/<name>/` and chooses
-the dependencies itself (`create_app` in `watchpost/web.py`):
+the dependencies itself (`create_app` in `observe/web.py`):
 
 1. a per-peer rate limit (`server.plugin_rate_per_minute`, default 300). A route
    that takes a plugin key counts valid keys per key and per peer, and failed or
@@ -347,7 +347,7 @@ keys".
 
 ### Pockethernet upload
 
-`plugins/pockethernet/watchpost_pockethernet/upload.py` serves
+`plugins/pockethernet/observe_pockethernet/upload.py` serves
 `POST /api/v1/field-reports` and `GET /api/v1/field-reports/ping` with the `wpf`
 key scope. After the core's rate limit and key checks, an upload is read under a
 256 KiB cap (413), `Content-Encoding` must be absent, `identity` or `gzip` (415),
@@ -416,7 +416,7 @@ Schema version 6 (and 7, below) adds `infra_switches`, `infra_ports`, `infra_jac
 existing changes. The `scope` column on `ingest_keys` belongs to the key scope slice and is
 not part of this step.
 
-`watchpost/portkey.py` holds the pure normalisers. `port_key` maps the spellings of one
+`observe/portkey.py` holds the pure normalisers. `port_key` maps the spellings of one
 interface to one key (`Gi1/0/5` and `GigabitEthernet1/0/5`, Juniper `ge-0/0/5.0`, UniFi
 `Port 5`, Linux `eth0`) and keeps different ports apart (`Gi1/0/5` and `Gi1/0/50`, `Gi1/0/5`
 and `Te1/0/5`, `eth0` and `eth0.100`, `ge-0/0/5` and `ge-0/0/5.1`); an unrecognised name is
@@ -425,7 +425,7 @@ subtype: names and aliases are normalised like interface names, while MAC, netwo
 circuit id and port component keep a prefix so they cannot collide with a name. `switch_id`
 gives `mac:<12 hex digits>` from the chassis id, else `name:<lower-cased sysName>`.
 
-`watchpost/infra.py` is the service plugins call (`InfraService`). It upserts switches,
+`observe/infra.py` is the service plugins call (`InfraService`). It upserts switches,
 ports, jacks, endpoints and links, and appends typed port properties. An upsert refreshes
 `last_seen` and never blanks a stored value with an empty one. A link names two ends built
 with `port_ref`, `jack_ref` or `endpoint_ref`, both of which must exist; the ends are stored
@@ -438,7 +438,7 @@ capped; the port must already exist. A custom write needs `recorded_by` and writ
 `port_property_custom` audit row that names the property but not its value. This slice has no
 routes; the service is called in process.
 
-`watchpost/infra_match.py` links the map to monitors. `Matcher.match_switch` tries the chassis
+`observe/infra_match.py` links the map to monitors. `Matcher.match_switch` tries the chassis
 MAC (a `unifi_network` monitor whose `device` is that MAC), then the management addresses, then
 the sysName against monitor hosts and UniFi device names; the first key with candidates decides,
 the best monitor type wins (snmp, unifi_network, ping, tcp), and a tie between monitors of the
@@ -456,11 +456,11 @@ index. Nothing creates a monitor. Switches with no match form the unlinked queue
 (`speed_mbps` from the SNMP interface check, and `vlan` and `poe_w` where a check reports them).
 An unknown live value never produces a finding. The kinds are `speed_above_live`,
 `vlan_mismatch`, `poe_no_power` (all warnings) and `repatched` (info, from a jack label that
-moved to another port). `watchpost/infra_changes.py` adds the field change kinds `speed_drop`, `cable_fault`, `length_change`, `poe_drop`, `dhcp_fail` and `verdict_worse` (warnings) and `vlan_change` (info). `Matcher.findings` reads the newest two rows of each tracked property in one window query and passes them to the pure function `port_changes`, so a change needs two history rows and clears when the value is restored. Findings are not stored and never reach the alerter. Routes:
+moved to another port). `observe/infra_changes.py` adds the field change kinds `speed_drop`, `cable_fault`, `length_change`, `poe_drop`, `dhcp_fail` and `verdict_worse` (warnings) and `vlan_change` (info). `Matcher.findings` reads the newest two rows of each tracked property in one window query and passes them to the pure function `port_changes`, so a change needs two history rows and clears when the value is restored. Findings are not stored and never reach the alerter. Routes:
 `GET /api/admin/infra/unlinked` (admin session), `POST /api/admin/infra/link` (admin session and
 CSRF token) and `GET /api/infra/findings` (session).
 
-`watchpost/infra_map.py` (`MapService`) builds the map and the effective dependency set.
+`observe/infra_map.py` (`MapService`) builds the map and the effective dependency set.
 Schema version 7 adds `infra_dependencies` (child slug, parent slug, accepted or rejected, who
 and when); proposals are never stored. `link_state` ages a link from `last_seen` and the clock
 (stale after `map.stale_days`, hidden after twice that, closed when `closed_at` is set), and
@@ -475,7 +475,7 @@ hook that runs once a minute. `decide` records an admin decision and audits it. 
 `GET /api/infra/map` and `GET /api/infra/dependencies` (session), and
 `POST /api/admin/infra/depends/accept` and `/reject` (admin session and CSRF token).
 
-Map pages. `watchpost/infra_port.py` (`PortPages`) builds `GET /api/infra/port?switch_id=&port=`
+Map pages. `observe/infra_port.py` (`PortPages`) builds `GET /api/infra/port?switch_id=&port=`
 (session): the port's switch, role, the matched monitors with their state and last polled
 speed, VLAN and PoE, the current properties, up to 50 history rows per property, and the
 findings for that port. A port is `up` only when no matched monitor is worse and no
@@ -500,9 +500,9 @@ phase 1 leaves the right seams.
 
 - **Agent-side allowlist.** A small control service on each host accepts only
   actions in a fixed local allowlist. An action absent from that list cannot
-  be run, whatever watchpost sends. There is no shell, no arbitrary command,
+  be run, whatever Observe sends. There is no shell, no arbitrary command,
   and no argument that is not validated against the action's declared type.
-- **Signed by watchpost.** Each action request is signed with a watchpost
+- **Signed by Observe.** Each action request is signed with an Observe
   signing key, includes the target host, the action, its arguments, a nonce,
   and an expiry, and is verified by the agent before anything runs. The agent
   rejects replays and expired requests. The signing key is separate from
@@ -523,7 +523,7 @@ This interface sketch is for the docs only. No code exists for it.
 ```text
 ControlAction
     name                       fixed identifier from the agent's allowlist
-    arguments                  typed, validated by the agent, not by watchpost alone
+    arguments                  typed, validated by the agent, not by Observe alone
     requires_typed_host_name   true for reboot
     describe()                 text shown on the confirmation step
     sign(host, nonce, expiry)  produces the signed request

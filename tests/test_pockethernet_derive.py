@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from watchpost import auth
-from watchpost_pockethernet import derive
-from watchpost.portkey import switch_id
+from observe import auth
+from observe_pockethernet import derive
+from observe.portkey import switch_id
 
 from .test_pockethernet_upload import FIXTURE, Env, run
 
@@ -146,7 +146,7 @@ def test_a_failed_derivation_is_stored_flagged_and_not_a_clean_accept(env, monke
 
     async def boom(*a, **k):
         raise RuntimeError("secret detail")
-    monkeypatch.setattr("watchpost_pockethernet.upload.derive_report", boom)
+    monkeypatch.setattr("observe_pockethernet.upload.derive_report", boom)
     monkeypatch.setattr(derive, "derive_report", boom)
     r = env.post(FIXTURE)
     assert r.status_code == 202
@@ -165,7 +165,7 @@ def test_a_failed_derivation_is_stored_flagged_and_not_a_clean_accept(env, monke
     assert env.rows("SELECT derive_status FROM field_reports") == [("failed",)]
 
     # The cause is fixed; an admin retry derives it and the status becomes ok.
-    monkeypatch.setattr("watchpost_pockethernet.upload.derive_report", real)
+    monkeypatch.setattr("observe_pockethernet.upload.derive_report", real)
     monkeypatch.setattr(derive, "derive_report", real)
     r = env.client.post("/api/plugins/pockethernet/retry", headers=headers)
     assert r.status_code == 200
@@ -381,8 +381,8 @@ def test_rebuild_after_a_replaced_revision_keeps_the_newest_values_and_drops_old
 
 
 def test_migration_2_upgrades_a_version_1_database_with_rows(tmp_path):
-    from watchpost.store import migrate_plugins
-    from watchpost_pockethernet.reports import MIGRATIONS
+    from observe.store import migrate_plugins
+    from observe_pockethernet.reports import MIGRATIONS
 
     db = sqlite3.connect(str(tmp_path / "old.db"))
     migrate_plugins(db, {"pockethernet": MIGRATIONS[:1]})
@@ -438,7 +438,7 @@ def test_older_report_on_the_same_port_never_overrides_the_current_value(env):
     env.post(newer)
     env.clock.now += 3600
     env.post(env.report(report_id="r-old"))  # speed 1000, observed a minute before
-    infra = __import__("watchpost.infra", fromlist=["InfraService"]).InfraService(env.store)
+    infra = __import__("observe.infra", fromlist=["InfraService"]).InfraService(env.store)
     current = run(infra.current_properties(SID, "gi1/0/5"))
     assert current["link_speed_mbps"]["value"] == 100
     assert current["link_speed_mbps"]["report_id"] == "r-new"

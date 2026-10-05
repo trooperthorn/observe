@@ -1,4 +1,4 @@
-# watchpost
+# Observe
 
 A small, self-hosted availability monitor for a homelab, built to cover what
 SolarWinds ipMonitor was good at: agentless up/warn/down checks, confirmation
@@ -45,7 +45,7 @@ alerted.
 ## Quick start (details below) (Docker on Debian or a Pi)
 
 ```sh
-git clone <this repo> watchpost && cd watchpost
+git clone <this repo> observe && cd observe
 mkdir -p config data secrets
 cp config.example.yaml config/watchpost.yaml   # then edit it
 cp .env.example .env                            # then fill in secrets
@@ -88,7 +88,7 @@ out (Microsoft has been pushing this for years). It authenticates as a
 regular AD service account, never a gMSA: a gMSA's password is retrievable
 only by domain-joined Windows computer accounts on its
 `PrincipalsAllowedToRetrieveManagedPassword` list, which a container has no
-way to be, so there is no such thing as "watchpost running as a gMSA".
+way to be, so there is no such thing as "Observe running as a gMSA".
 
 1. On a DC, create the service account and its keytab, e.g.:
    ```powershell
@@ -167,7 +167,7 @@ Create a dedicated non-admin user and generate the token from its profile.
 `api` confirms the API answers "API running."; `entity` fails on
 `unavailable` or `unknown`, can require specific states with `expect`, and
 applies thresholds to numeric states (so any HA sensor, from a NAS
-temperature to a Phyn flow reading, becomes a watchpost monitor);
+temperature to a Phyn flow reading, becomes an Observe monitor);
 `unavailable` counts unavailable entities with `domains` and fnmatch
 `ignore` filters for the ones you know are dead; `updates` counts `update.*`
 entities that are on. HA serves plain HTTP unless configured otherwise: set
@@ -311,7 +311,7 @@ Group state is on the dashboard, in `/api/groups`, and in `/metrics` as
 
 Set `forecast: true` on any monitor that has numeric values and thresholds
 (disk, memory, interface utilization, UPS charge). Once an hour, and on
-demand at `/api/forecasts?refresh=true`, watchpost averages the last
+demand at `/api/forecasts?refresh=true`, Observe averages the last
 `lookback_days` of values into hourly buckets, fits a least-squares line, and
 projects when it crosses the warn and crit thresholds. Results appear on
 each monitor card, in a "Capacity outlook" list sorted by soonest crossing,
@@ -336,7 +336,7 @@ are retried once, then shown in the dashboard footer.
 
 ## Direction: no longer read-only
 
-The owner reversed the earlier decision that watchpost is read-only by
+The owner reversed the earlier decision that Observe is read-only by
 design. It is becoming the single monitoring UI and, in a later phase, the
 control plane, replacing the hostwatch hub and web view. The first phase adds
 ingest from hostwatch agents, logins, an admin role, and an audit log, and
@@ -345,17 +345,17 @@ builds no action that changes a host. The design and its limits are in
 this README describe the read-only behavior of the current release; they are
 updated as each phase lands.
 
-The SQLite store is now versioned. On startup watchpost applies any missing
+The SQLite store is now versioned. On startup Observe applies any missing
 additive migrations, keeps all existing history, and refuses to open a
 database written by a newer version. `server.retention_days` governs poll
 results and host samples (minimum 1), and the new `server.audit_retention_days` (default
 365, minimum 1) governs the audit log independently. The tables for hosts, keys,
 users, sessions and audit are filled by the ingest and login routes.
 
-The hostwatch wire schema models exist in `watchpost/ingest/schema.py`, with
+The hostwatch wire schema models exist in `observe/ingest/schema.py`, with
 size and count limits, ignoring of unknown fields, and rejection of unknown schema
 versions. `POST /internal/v1/ingest` (the path hostwatch agents use; `/api/ingest`
-is an alias) in `watchpost/ingest/api.py` receives batches. A batch without
+is an alias) in `observe/ingest/api.py` receives batches. A batch without
 `batch_id` is deduplicated by a content hash.
 It takes `Authorization: Bearer <ingest key>`, rejects a body over 1 MiB, and
 stores samples, source status and events only when the key is valid and bound
@@ -406,7 +406,7 @@ every listed `pushed_host` monitor that never has), and `GET /api/hosts/HOST` (a
 returns its CPU, memory, power, temperatures, fans with the fan controller
 state, RAID, ZFS pools, disks, UPS, recent alerts and events, boot state and
 sources. Every section and every reading is Good, Warning or Critical. The
-built-in limits are fixed in `watchpost/hostview.py`, and thresholds listed on
+built-in limits are fixed in `observe/hostview.py`, and thresholds listed on
 the monitor in the YAML override them for that source and metric. The page says
 so when data is missing: a reading with no value is a Warning and is never
 shown as zero, a reading or source older than the stale window is marked stale,
@@ -416,7 +416,7 @@ has stopped pushing is Critical. These routes need a login session; basic auth
 does not open them. They only read; no action that changes a host exists.
 
 Ingest keys are managed on the admin screen (below) or from the command line.
-`python -m watchpost --config watchpost.yaml --ingest-key-create HOST` prints a
+`python -m observe --config watchpost.yaml --ingest-key-create HOST` prints a
 new key once and stores only a hash; the key works for ingest and only for
 that host name. `--ingest-key-list` shows each key's id, host, state and last
 use, and `--ingest-key-revoke ID` revokes one. The keys are accepted only
@@ -437,7 +437,7 @@ The `control` plugin (`plugins/control`, `pip install ./plugins/control`, listed
 `plugins: [control]`) registers the `wpc` scope: a control key bound to one host name, for the
 hostwatch-control daemon to pull commands. A `wpc` key is refused by host ingest and field
 reports, and `wpi` and `wpf` keys are refused by the control routes. The plugin signs commands
-with an Ed25519 key. Create one with `python -m watchpost --control-keygen /run/secrets/watchpost_control_key`,
+with an Ed25519 key. Create one with `python -m observe --control-keygen /run/secrets/observe_control_key`,
 which writes the private key with mode 0600 and prints only the public key to pin on each host;
 the plugin refuses to start if that file is readable by group or others on POSIX. Set the path
 with `plugin_settings.control.signing_key_file`. The plugin also keeps the signed command
@@ -451,7 +451,7 @@ requires the host name typed exactly. The same section lists the host's command 
 Cancel button while a reboot is scheduled. The admin routes need an admin session and the CSRF token. The signing format and a test vector are in `docs/CONTROL.md`. Setup in short: install the plugin, run `--control-keygen`, pin the printed public key in each host's `control.toml`, and create one `wpc` key per host with `--ingest-key-create HOST --ingest-key-scope wpc`. The endpoints, setup steps and threat notes are in `docs/CONTROL.md` and `THREAT-MODEL.md`.
 
 Logins use Argon2id password hashes and server-side sessions. Create the first
-admin with `python -m watchpost --config watchpost.yaml --create-admin NAME`; it
+admin with `python -m observe --config watchpost.yaml --create-admin NAME`; it
 reads the password (12 characters or more) from `WATCHPOST_ADMIN_PASSWORD` or a
 prompt, never from an argument. Sign in at `/login`. The session cookie is
 HttpOnly, Secure and SameSite=Strict, and expires after 30 idle minutes or 12
@@ -475,7 +475,7 @@ request carrying the CSRF token and is written to the audit log. The page
 itself is a static file with no data and sends a visitor without a session to
 the login page. It has no control for any host.
 
-The audit log (`watchpost/audit.py`) records logins, failed logins, logouts,
+The audit log (`observe/audit.py`) records logins, failed logins, logouts,
 user creation, key creation and revocation, and rejected ingest. When an action
 fails partway, such as a refused user, a login that cannot create a session, a
 failed key action or a batch the store could not write, a separate `*_failed`
@@ -485,9 +485,11 @@ are sanitized, and `GET /api/audit` (admin session only; parameters `limit`,
 
 ## Plugins
 
-watchpost can load plugins, which are Python packages installed into the image
-that publish an entry point in the group `watchpost.plugins`. Installing one
-does nothing until you list it in the config:
+Observe can load plugins, which are Python packages installed into the image
+that publish an entry point in the group `observe.plugins`. Installing one
+does nothing until you list it in the config. For compatibility, a plugin still
+published under the legacy group `watchpost.plugins` (the old name) also loads, and
+one warning names it. Plugin names in the config are unchanged:
 
 ```yaml
 plugins: [pockethernet]
@@ -495,7 +497,7 @@ plugin_settings:
   pockethernet: {}   # validated by the plugin's own settings model
 ```
 
-A listed plugin that is not installed, or that does not support this watchpost
+A listed plugin that is not installed, or that does not support this Observe
 version, stops startup with a message naming it (`--validate` checks this too).
 Plugin routes live under `/api/plugins/<name>/` and need a login
 session, the CSRF token for anything but a read, and count against
@@ -536,7 +538,7 @@ plugin_settings:
 The core also keeps an infrastructure map in the same database: switches, ports, wall jacks,
 links, endpoints and port properties with history. Port names are normalised, so
 `GigabitEthernet1/0/5` and `Gi1/0/5` are one port while `Gi1/0/5` and `Gi1/0/50` stay
-apart. Plugins write to it through `watchpost.infra.InfraService`. A switch is matched to a
+apart. Plugins write to it through `observe.infra.InfraService`. A switch is matched to a
 monitor by chassis MAC, management address or sysName, and a port to an SNMP interface monitor
 or a UniFi device port. Matching never creates a monitor, and an ambiguous match is left for
 an admin. Switches that match nothing are listed at `GET /api/admin/infra/unlinked` and an

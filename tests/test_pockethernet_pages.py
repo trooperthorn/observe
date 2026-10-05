@@ -12,21 +12,21 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from watchpost import auth
-from watchpost.alerts import Alerter
-from watchpost.plugins import GROUP, load_plugins
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
-from watchpost_pockethernet.keys import create_field_key
-from watchpost_pockethernet.reports import prune_evidence
+from observe import auth
+from observe.alerts import Alerter
+from observe.plugins import GROUP, load_plugins
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
+from observe_pockethernet.keys import create_field_key
+from observe_pockethernet.reports import prune_evidence
 
 from .conftest import make_config
 from .test_auth import Clock
 from .test_pockethernet_upload import FIXTURE, TAKEN_S, URL, run
 
 PASSWORD = "correct horse battery"
-PKG = Path(__file__).parent.parent / "plugins" / "pockethernet" / "watchpost_pockethernet"
+PKG = Path(__file__).parent.parent / "plugins" / "pockethernet" / "observe_pockethernet"
 JACK = FIXTURE["site"]["port_id"]
 HOSTILE = '<img src=x onerror="alert(1)">&"\'</script>'
 API = "/api/plugins/pockethernet"
@@ -42,7 +42,7 @@ class Env:
             server={"db_path": self.path, "argon2_time_cost": 1, "argon2_memory_kib": 8,
                     "argon2_parallelism": 1, **server})
         loaded = load_plugins(self.cfg, lambda: [EntryPoint(
-            "pockethernet", "watchpost_pockethernet:plugin", GROUP)])
+            "pockethernet", "observe_pockethernet:plugin", GROUP)])
         self.store = Store(self.path, loaded)
         self.alerter = Alerter(self.cfg)
         sched = Scheduler(self.cfg, self.store, self.alerter)
@@ -125,7 +125,7 @@ def test_navigation_entry_comes_from_the_plugin_through_the_core(env):
     body = env.client.get("/api/plugins").json()
     assert {"plugin": "pockethernet", "label": "Field reports",
             "path": "/plugins/pockethernet"} in body["nav"]
-    assert "plugin-nav" in (Path(__file__).parent.parent / "watchpost" / "static"
+    assert "plugin-nav" in (Path(__file__).parent.parent / "observe" / "static"
                             / "index.html").read_text(encoding="utf-8")
 
 

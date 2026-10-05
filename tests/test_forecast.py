@@ -1,9 +1,9 @@
 import math
 import time
 
-from watchpost.config import ForecastSettings, Thresholds
-from watchpost.forecast import least_squares, project
-from watchpost.store import Store
+from observe.config import ForecastSettings, Thresholds
+from observe.forecast import least_squares, project
+from observe.store import Store
 
 CFG = ForecastSettings()
 NOW = 1_800_000_000.0
@@ -67,7 +67,7 @@ def test_insufficient_history():
 
 
 async def test_store_hourly_buckets_skip_failures_and_nulls():
-    from watchpost.checks.base import CheckResult, Result
+    from observe.checks.base import CheckResult, Result
     st = Store(":memory:")
     base = (time.time() // 3600 - 2) * 3600
     for i, (res, val) in enumerate([(Result.OK, 10.0), (Result.OK, 20.0),

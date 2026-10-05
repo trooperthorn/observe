@@ -4,12 +4,12 @@ import json
 import aiomqtt
 from fastapi.testclient import TestClient
 
-from watchpost.alerts import Alerter
-from watchpost.checks.base import CheckResult, Result
-from watchpost.scheduler import Scheduler
-from watchpost.state import State, Transition
-from watchpost.store import Store
-from watchpost.web import create_app
+from observe.alerts import Alerter
+from observe.checks.base import CheckResult, Result
+from observe.scheduler import Scheduler
+from observe.state import State, Transition
+from observe.store import Store
+from observe.web import create_app
 
 from .conftest import MQTT_PORT, make_config, needs_mqtt
 

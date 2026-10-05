@@ -13,9 +13,9 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from watchpost.plugins import (KeyScope, Migration, NavEntry, PluginBase, PluginPage,
+from observe.plugins import (KeyScope, Migration, NavEntry, PluginBase, PluginPage,
                                PluginRouter)
-from watchpost.store import Store
+from observe.store import Store
 
 from .keys import SCOPE
 from .derive import rebuild, retry_failed

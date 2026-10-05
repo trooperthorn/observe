@@ -11,14 +11,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from watchpost import auth
-from watchpost.alerts import Alerter
-from watchpost.ingest.keys import IngestKeyError, create_key, list_keys, revoke_key, verify_key
-from watchpost.plugins import GROUP, load_plugins
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
-from watchpost_pockethernet.keys import (SCOPE, create_field_key, field_key_device,
+from observe import auth
+from observe.alerts import Alerter
+from observe.ingest.keys import IngestKeyError, create_key, list_keys, revoke_key, verify_key
+from observe.plugins import GROUP, load_plugins
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
+from observe_pockethernet.keys import (SCOPE, create_field_key, field_key_device,
                                          verify_field_key)
 
 from .conftest import make_config
@@ -42,7 +42,7 @@ class Env:
             server={"db_path": self.path, "argon2_time_cost": 1, "argon2_memory_kib": 8,
                     "argon2_parallelism": 1})
         loaded = load_plugins(self.cfg, lambda: [EntryPoint(
-            "pockethernet", "watchpost_pockethernet:plugin", GROUP)])
+            "pockethernet", "observe_pockethernet:plugin", GROUP)])
         alerter = Alerter(self.cfg)
         sched = Scheduler(self.cfg, self.store, alerter)
         self.clock = Clock()
@@ -87,7 +87,7 @@ def env(tmp_path):
 
 
 def test_plugin_registers_the_wpf_scope():
-    from watchpost_pockethernet import plugin
+    from observe_pockethernet import plugin
     assert [s.marker for s in plugin.key_scopes()] == [SCOPE] == ["wpf"]
 
 
@@ -95,7 +95,7 @@ def test_plugin_loads_through_the_entry_point_contract():
     cfg = make_config([{"name": "p", "type": "ping", "host": "127.0.0.1"}],
                       plugins=["pockethernet"])
     loaded = load_plugins(cfg, lambda: [EntryPoint(
-        "pockethernet", "watchpost_pockethernet:plugin", GROUP)])
+        "pockethernet", "observe_pockethernet:plugin", GROUP)])
     assert loaded.names == ["pockethernet"] and loaded.scopes == ["wpf"]
 
 

@@ -9,9 +9,9 @@ import re
 
 import pytest
 
-from watchpost import auth
-from watchpost_control.actions import capabilities, validate
-from watchpost_control.queue import QueueError
+from observe import auth
+from observe_control.actions import capabilities, validate
+from observe_control.queue import QueueError
 
 from .test_auth import PASSWORD
 from .test_control_queue import FLOOR, Env, bearer, run
@@ -385,9 +385,9 @@ def test_host_page_loads_the_control_section_and_writes_only_text(env):
 
 
 def test_new_files_use_lf_and_no_em_dashes_or_model_names():
-    for rel in ("plugins/control/watchpost_control/actions.py", "tests/test_control_actions.py",
-                "watchpost/static/host-control.js", "watchpost/static/host.html",
-                "plugins/control/watchpost_control/__init__.py", "docs/CONTROL.md"):
+    for rel in ("plugins/control/observe_control/actions.py", "tests/test_control_actions.py",
+                "observe/static/host-control.js", "observe/static/host.html",
+                "plugins/control/observe_control/__init__.py", "docs/CONTROL.md"):
         raw = stored_bytes(ROOT / rel)
         text = raw.decode("utf-8")
         assert b"\r" not in raw and chr(0x2014) not in text, rel

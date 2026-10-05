@@ -5,7 +5,7 @@ ingest_keys table with scope `wpf`. It is bound to a device label, for example
 "sean-pixel", instead of a host name. The label is what the UI shows as the
 source of each report, so a stolen phone is revoked by its label's key.
 
-The rules live in the core (watchpost/ingest/keys.py): the key's marker and its
+The rules live in the core (observe/ingest/keys.py): the key's marker and its
 stored scope must both be wpf, and a wpf key is never valid for host ingest
 because that surface asks for scope wpi. These helpers only fix the scope so
 the upload endpoint cannot ask for the wrong one.
@@ -13,8 +13,8 @@ the upload endpoint cannot ask for the wrong one.
 
 from __future__ import annotations
 
-from watchpost.ingest.keys import KeyInfo, create_key, key_host, verify_key
-from watchpost.store import Store
+from observe.ingest.keys import KeyInfo, create_key, key_host, verify_key
+from observe.store import Store
 
 SCOPE = "wpf"
 

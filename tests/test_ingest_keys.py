@@ -7,8 +7,8 @@ import sqlite3
 
 import pytest
 
-from watchpost.ingest.keys import IngestKeyError, create_key, list_keys, revoke_key, verify_key
-from watchpost.store import Store
+from observe.ingest.keys import IngestKeyError, create_key, list_keys, revoke_key, verify_key
+from observe.store import Store
 
 
 @pytest.fixture
@@ -93,7 +93,7 @@ def test_invalid_host_names_are_refused(store, host):
 
 
 def test_secret_containing_underscores_still_verifies(store, monkeypatch):
-    monkeypatch.setattr("watchpost.ingest.keys.secrets.token_urlsafe", lambda n: "a_b-c_d")
+    monkeypatch.setattr("observe.ingest.keys.secrets.token_urlsafe", lambda n: "a_b-c_d")
     key, _ = run(create_key(store, "nas01"))
     assert key.endswith("_a_b-c_d")
     assert run(verify_key(store, key, "nas01"))

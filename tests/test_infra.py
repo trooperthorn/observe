@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
-from watchpost.infra import InfraError, InfraService, UnknownPropertyError
-from watchpost.portkey import lldp_port_key, port_key, switch_id
-from watchpost.store import MIGRATIONS, SCHEMA_VERSION, Store
+from observe.infra import InfraError, InfraService, UnknownPropertyError
+from observe.portkey import lldp_port_key, port_key, switch_id
+from observe.store import MIGRATIONS, SCHEMA_VERSION, Store
 
 from .test_store_schema import make_main_schema_db, tables
 
@@ -278,7 +278,7 @@ def make_phase5_db(path: str) -> None:
     db = sqlite3.connect(path)
     db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
     db.commit()
-    from watchpost.store import migrate
+    from observe.store import migrate
     old = {v: s for v, s in MIGRATIONS.items() if v > 5}
     for v in old:
         del MIGRATIONS[v]

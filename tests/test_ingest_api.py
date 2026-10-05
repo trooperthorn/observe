@@ -12,14 +12,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from watchpost.alerts import Alerter
-from watchpost.ingest.api import DenialAggregator, RateLimiter
-from watchpost.ingest.boot import CLEAN, CRASH, UNKNOWN, classify_boot
-from watchpost.ingest.keys import create_key, revoke_key
-from watchpost.ingest.schema import MAX_BODY_BYTES, Event
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
+from observe.alerts import Alerter
+from observe.ingest.api import DenialAggregator, RateLimiter
+from observe.ingest.boot import CLEAN, CRASH, UNKNOWN, classify_boot
+from observe.ingest.keys import create_key, revoke_key
+from observe.ingest.schema import MAX_BODY_BYTES, Event
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
 
 from .conftest import make_config
 
@@ -363,7 +363,7 @@ def test_invalid_batch_is_422_and_logged(env, caplog):
     key = env.key("nas01")
     body = hostwatch_batch()
     del body["samples"]
-    with caplog.at_level("WARNING", logger="watchpost.ingest"):
+    with caplog.at_level("WARNING", logger="observe.ingest"):
         r = agent_post(env, body, key)
     assert r.status_code == 422
     assert "samples" in caplog.text

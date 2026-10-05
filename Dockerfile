@@ -5,7 +5,7 @@ FROM python:3.12-slim-bookworm
 # net-snmp CLI tools only. Not snmp-mibs-downloader: every query is numeric
 # and runs with -m "" so no MIB files are needed.
 #
-# krb5-user provides `kinit` (used by watchpost/checks/windows.py to turn a
+# krb5-user provides `kinit` (used by observe/checks/windows.py to turn a
 # keytab into a ticket for WinRM's kerberos transport) and libkrb5-3, both
 # kept at runtime. gcc and libkrb5-dev are needed only to compile pykerberos
 # against the krb5 headers and are removed again once pip install is done.
@@ -18,7 +18,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
  && apt-get purge -y --auto-remove gcc libkrb5-dev \
  && rm -rf /var/lib/apt/lists/*
-COPY watchpost ./watchpost
+COPY observe ./observe
 # Plugins are loaded only when listed under plugins: in the config, so installing them is harmless.
 COPY plugins ./plugins
 RUN pip install --no-cache-dir --no-deps ./plugins/pockethernet ./plugins/control  && rm -rf ./plugins
@@ -33,5 +33,5 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3).status == 200 else 1)"
-ENTRYPOINT ["python", "-m", "watchpost"]
+ENTRYPOINT ["python", "-m", "observe"]
 CMD ["--config", "/config/watchpost.yaml"]

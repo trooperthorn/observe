@@ -1,6 +1,6 @@
-from watchpost.checks.base import CheckResult, Result, apply_thresholds
-from watchpost.config import Thresholds
-from watchpost.state import MonitorState, State
+from observe.checks.base import CheckResult, Result, apply_thresholds
+from observe.config import Thresholds
+from observe.state import MonitorState, State
 
 OK, WARN, FAIL = (CheckResult(r, "") for r in (Result.OK, Result.WARN, Result.FAIL))
 

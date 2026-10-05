@@ -10,8 +10,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
-from watchpost.checks import build_check
-from watchpost.checks.base import Result
+from observe.checks import build_check
+from observe.checks.base import Result
 
 from .conftest import make_config
 

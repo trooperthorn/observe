@@ -39,9 +39,9 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
-from watchpost.infra import InfraError, InfraService
-from watchpost.portkey import LLDP_SUBTYPES, lldp_port_key, mac_digits, port_key, switch_id
-from watchpost.store import Store
+from observe.infra import InfraError, InfraService
+from observe.portkey import LLDP_SUBTYPES, lldp_port_key, mac_digits, port_key, switch_id
+from observe.store import Store
 
 from .schema import Neighbor, Report, ReportError, parse_report
 

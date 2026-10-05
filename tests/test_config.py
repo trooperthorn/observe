@@ -1,6 +1,6 @@
 import pytest
 
-from watchpost.config import ConfigError, load_config
+from observe.config import ConfigError, load_config
 
 from .conftest import make_config
 

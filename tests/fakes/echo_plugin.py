@@ -1,4 +1,4 @@
-"""A tiny watchpost plugin that exercises every hook, for tests/test_plugins.py."""
+"""A tiny Observe plugin that exercises every hook, for tests/test_plugins.py."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict
 
-from watchpost.plugins import (KeyScope, MapContribution, Migration, NavEntry, PluginBase,
+from observe.plugins import (KeyScope, MapContribution, Migration, NavEntry, PluginBase,
                                PluginPage, PluginRouter)
 
 STATIC = Path(__file__).parent / "echo_static"

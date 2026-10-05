@@ -13,12 +13,12 @@ from fastapi.testclient import TestClient
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-from watchpost.alerts import Alerter
-from watchpost.plugins import (GROUP, KeyScope, LoadedPlugins, Migration, Plugin, PluginBase,
+from observe.alerts import Alerter
+from observe.plugins import (GROUP, KeyScope, LoadedPlugins, Migration, Plugin, PluginBase,
                                PluginError, PluginRouter, load_plugins)
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
 
 from .conftest import make_config
 from .test_auth import BASIC, Clock, Env

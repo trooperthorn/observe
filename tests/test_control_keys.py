@@ -16,20 +16,20 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from watchpost import auth
-from watchpost.alerts import Alerter
-from watchpost.ingest.keys import create_key, list_keys, revoke_key
-from watchpost.plugins import GROUP, PluginError, load_plugins
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
-from watchpost_control import plugin as control_plugin
-from watchpost_control.keys import (SCOPE, control_key_host, create_control_key,
+from observe import auth
+from observe.alerts import Alerter
+from observe.ingest.keys import create_key, list_keys, revoke_key
+from observe.plugins import GROUP, PluginError, load_plugins
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
+from observe_control import plugin as control_plugin
+from observe_control.keys import (SCOPE, control_key_host, create_control_key,
                                     verify_control_key)
-from watchpost_control.signing import (SigningError, canonical_json, keygen, load_private_key,
+from observe_control.signing import (SigningError, canonical_json, keygen, load_private_key,
                                        private_from_seed, public_key_string, sign_command,
                                        verify_command)
-from watchpost_pockethernet.keys import create_field_key
+from observe_pockethernet.keys import create_field_key
 
 from .conftest import make_config
 from .test_auth import PASSWORD, Clock
@@ -179,8 +179,8 @@ def test_error_messages_never_hold_key_material(tmp_path):
 # ---- plugin load ------------------------------------------------------------------------
 
 def _entry_points():
-    return lambda: [EntryPoint("control", "watchpost_control:plugin", GROUP),
-                    EntryPoint("pockethernet", "watchpost_pockethernet:plugin", GROUP)]
+    return lambda: [EntryPoint("control", "observe_control:plugin", GROUP),
+                    EntryPoint("pockethernet", "observe_pockethernet:plugin", GROUP)]
 
 
 def test_plugin_refuses_to_start_without_a_usable_key(tmp_path):
@@ -193,9 +193,9 @@ def test_plugin_refuses_to_start_without_a_usable_key(tmp_path):
 def test_plugin_refuses_insecure_key_at_startup(tmp_path, monkeypatch):
     path = tmp_path / "control.key"
     keygen(path)
-    import watchpost_control
-    real = watchpost_control.load_private_key
-    monkeypatch.setattr(watchpost_control, "load_private_key", lambda p: real(
+    import observe_control
+    real = observe_control.load_private_key
+    monkeypatch.setattr(observe_control, "load_private_key", lambda p: real(
         p, posix=True, stat=lambda q: types.SimpleNamespace(st_mode=0o100644)))
     cfg = make_config([{"name": "p", "type": "ping", "host": "127.0.0.1"}], plugins=["control"],
                       plugin_settings={"control": {"signing_key_file": str(path)}})
@@ -392,7 +392,7 @@ def test_wpc_scope_is_not_issuable_when_the_plugin_is_not_listed(tmp_path):
 # ---- CLI --------------------------------------------------------------------------------
 
 def test_cli_keygen_prints_only_the_public_key(tmp_path, capsys):
-    from watchpost.__main__ import _control_keygen
+    from observe.__main__ import _control_keygen
     path = tmp_path / "cli.key"
     assert _control_keygen(str(path)) == 0
     out = capsys.readouterr()
@@ -405,9 +405,9 @@ def test_cli_keygen_prints_only_the_public_key(tmp_path, capsys):
 
 
 def test_main_registers_control_keygen(tmp_path, monkeypatch, capsys):
-    from watchpost.__main__ import main
+    from observe.__main__ import main
     path = tmp_path / "main.key"
-    monkeypatch.setattr("sys.argv", ["watchpost", "--config", str(tmp_path / "none.yaml"),
+    monkeypatch.setattr("sys.argv", ["observe", "--config", str(tmp_path / "none.yaml"),
                                      "--control-keygen", str(path)])
     assert main() == 0
     out = capsys.readouterr().out.strip()
@@ -415,7 +415,7 @@ def test_main_registers_control_keygen(tmp_path, monkeypatch, capsys):
 
 
 def test_keygen_removes_a_partial_file_when_the_write_fails(tmp_path, monkeypatch):
-    import watchpost_control.signing as signing
+    import observe_control.signing as signing
     path = tmp_path / "partial.key"
 
     class Boom:
@@ -440,7 +440,7 @@ def test_keygen_removes_a_partial_file_when_the_write_fails(tmp_path, monkeypatc
 
 
 def test_cli_creates_and_revokes_wpc_keys(tmp_path, monkeypatch, capsys):
-    import watchpost.__main__ as cli
+    import observe.__main__ as cli
     path = tmp_path / "control.key"
     keygen(path)
     db = tmp_path / "cli.db"
@@ -454,7 +454,7 @@ def test_cli_creates_and_revokes_wpc_keys(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "load_plugins", lambda config: real(config, _entry_points()))
 
     def run(*argv):
-        monkeypatch.setattr("sys.argv", ["watchpost", "--config", str(cfg), *argv])
+        monkeypatch.setattr("sys.argv", ["observe", "--config", str(cfg), *argv])
         return cli.main()
 
     assert run("--ingest-key-create", "nas01", "--ingest-key-scope", "wpc") == 0
@@ -480,7 +480,7 @@ def test_spec_carries_the_test_vector():
 
 
 OWNED = [ROOT / "plugins" / "control" / "pyproject.toml",
-         *sorted((ROOT / "plugins" / "control" / "watchpost_control").glob("*.py")),
+         *sorted((ROOT / "plugins" / "control" / "observe_control").glob("*.py")),
          ROOT / "tests" / "test_control_keys.py", ROOT / "docs" / "CONTROL.md"]
 
 

@@ -4,10 +4,10 @@ fakes in tests/fakes/servers.py that emit the documented response shapes."""
 import pytest
 import yaml
 
-from watchpost.checks import build_check
-from watchpost.checks.base import Result
-from watchpost.config import Config
-from watchpost.discovery import discover
+from observe.checks import build_check
+from observe.checks.base import Result
+from observe.config import Config
+from observe.discovery import discover
 
 from .fakes.servers import (HA_TOKEN, TECH_TOKEN, UNIFI_KEY, ha_routes, json_server,
                             leaf_cert, technitium_routes, unifi_routes)

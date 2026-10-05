@@ -12,8 +12,8 @@ wpc; the helpers here fix the scope so a control route cannot ask for the wrong 
 
 from __future__ import annotations
 
-from watchpost.ingest.keys import KeyInfo, create_key, key_host, verify_key
-from watchpost.store import Store
+from observe.ingest.keys import KeyInfo, create_key, key_host, verify_key
+from observe.store import Store
 
 SCOPE = "wpc"
 

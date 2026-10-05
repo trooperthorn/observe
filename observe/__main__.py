@@ -1,15 +1,15 @@
 """Entry point.
 
-  python -m watchpost --config /config/watchpost.yaml          run the service
-  python -m watchpost --config ... --validate                  check config and exit
-  python -m watchpost --config ... --once [--only SLUG]        poll once, print, exit
-  python -m watchpost --config ... --discover [--target 192.0.2.0/24 ...]
+  python -m observe --config /config/watchpost.yaml          run the service
+  python -m observe --config ... --validate                  check config and exit
+  python -m observe --config ... --once [--only SLUG]        poll once, print, exit
+  python -m observe --config ... --discover [--target 192.0.2.0/24 ...]
         [--credential NAME ...] [--out proposals.yaml] [--report report.json]
                                                                propose monitors, exit
-  python -m watchpost --config ... --ingest-key-create HOST    print a new ingest key once
-  python -m watchpost --config ... --ingest-key-revoke ID      revoke an ingest key
-  python -m watchpost --config ... --ingest-key-list           list keys, never the secrets
-  python -m watchpost --config ... --create-admin USERNAME     create an admin user
+  python -m observe --config ... --ingest-key-create HOST    print a new ingest key once
+  python -m observe --config ... --ingest-key-revoke ID      revoke an ingest key
+  python -m observe --config ... --ingest-key-list           list keys, never the secrets
+  python -m observe --config ... --create-admin USERNAME     create an admin user
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from .scheduler import Scheduler
 from .store import Store
 from .web import create_app
 
-log = logging.getLogger("watchpost")
+log = logging.getLogger("observe")
 
 
 async def _once(config, only: str | None) -> int:  # type: ignore[no-untyped-def]
@@ -62,7 +62,7 @@ async def _serve(config, plugins) -> None:  # type: ignore[no-untyped-def]
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, lambda: setattr(server, "should_exit", True))
     sched.start()
-    log.info("watchpost %s: %d monitors, %d alert targets, listening on %s:%d",
+    log.info("Observe %s: %d monitors, %d alert targets, listening on %s:%d",
              __version__, len(sched.monitors), len(config.alerts),
              config.server.listen, config.server.port)
     try:
@@ -214,9 +214,9 @@ def _create_admin(config, args) -> int:  # type: ignore[no-untyped-def]
 def _control_keygen(path: str) -> int:
     """Write a control signing key pair. Only the public key is printed."""
     try:
-        from watchpost_control.signing import SigningError, keygen
+        from observe_control.signing import SigningError, keygen
     except ImportError:
-        print("error: the watchpost-control plugin is not installed", file=sys.stderr)
+        print("error: the observe-control plugin is not installed", file=sys.stderr)
         return 2
     try:
         public = keygen(path)
@@ -239,7 +239,7 @@ def _plugins(config):  # type: ignore[no-untyped-def]
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(prog="watchpost")
+    ap = argparse.ArgumentParser(prog="observe")
     ap.add_argument("--config", default="/config/watchpost.yaml")
     ap.add_argument("--validate", action="store_true", help="validate config and exit")
     ap.add_argument("--once", action="store_true", help="poll every monitor once and exit")

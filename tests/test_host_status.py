@@ -8,14 +8,14 @@ import pytest
 
 from fastapi.testclient import TestClient
 
-from watchpost.alerts import Alerter
-from watchpost.checks import build_check
-from watchpost.checks.base import CheckResult
-from watchpost.checks.host import PushedHostCheck
-from watchpost.ingest.schema import Batch
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
+from observe.alerts import Alerter
+from observe.checks import build_check
+from observe.checks.base import CheckResult
+from observe.checks.host import PushedHostCheck
+from observe.ingest.schema import Batch
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
 
 from .conftest import make_config
 
@@ -270,7 +270,7 @@ def _boot_batch(host, kind, severity, ts, boot_id="b1"):
 
 
 async def _push_boot(env, kind, boot_id, severity="critical"):
-    from watchpost.ingest.boot import classify_events
+    from observe.ingest.boot import classify_events
     b = _boot_batch("nas01", kind, severity, env.clock.now, boot_id)
     await env.store.ingest_batch(b, classify_events(b.events), now=env.clock.now)
     await env.push(temp=50)
@@ -318,12 +318,12 @@ async def test_later_clean_boot_clears_crash():
     ("Error", "critical"), ("emerg", "critical"), ("Warning", "warning"),
     ("INFO", "info"), (" info ", "info"), ("weird", "warning")])
 def test_normalize_severity(raw, expected):
-    from watchpost.ingest.schema import normalize_severity
+    from observe.ingest.schema import normalize_severity
     assert normalize_severity(raw) == expected
 
 
 async def test_stored_severity_normalized_and_raw_kept():
-    from watchpost.hostview import _alerts
+    from observe.hostview import _alerts
     store = Store(":memory:")
     b = Batch.model_validate({
         "schema_version": 1, "agent_version": "t", "host": "h", "platform": "linux",

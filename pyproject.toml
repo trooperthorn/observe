@@ -1,11 +1,11 @@
 [project]
-name = "watchpost"
+name = "observe"
 dynamic = ["version"]
 description = "Self-hosted availability monitor for homelabs (ipMonitor-style up/warn/down)"
 requires-python = ">=3.12"
 
 [tool.setuptools.dynamic]
-version = {attr = "watchpost.__version__"}
+version = {attr = "observe.__version__"}
 
 [tool.ruff]
 line-length = 100

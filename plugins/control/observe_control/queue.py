@@ -8,7 +8,7 @@ signing does not invalidate it.
 States: `requested` (written), `pulled` (handed to the host's daemon), `scheduled` (the daemon
 accepted a delayed action such as a reboot), and the final states `done`, `failed`, `refused`,
 `cancelled` and `unknown`. `unknown` is what a command becomes when it expires with no result: it
-is never shown as done, because watchpost cannot tell whether the host acted. A scheduled
+is never shown as done, because Observe cannot tell whether the host acted. A scheduled
 command has already been answered, so expiry does not apply to it.
 
 Every function that touches the database runs in a worker thread, like the other plugin stores.
@@ -26,9 +26,9 @@ from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from watchpost import audit
-from watchpost.plugins import Migration
-from watchpost.store import Store
+from observe import audit
+from observe.plugins import Migration
+from observe.store import Store
 
 from .signing import sign_command
 
@@ -125,7 +125,7 @@ def _expire_sync(store: Store, now: float) -> list[str]:
 
 async def _audit_expired(store: Store, ids: list[str]) -> None:
     for cid in ids:
-        await audit.record(store, "control_expired", actor="watchpost",
+        await audit.record(store, "control_expired", actor="Observe",
                            detail={"command_id": cid, "state": "unknown"})
 
 

@@ -9,9 +9,9 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-from watchpost import audit
-from watchpost.__main__ import main
-from watchpost.ingest.keys import create_key
+from observe import audit
+from observe.__main__ import main
+from observe.ingest.keys import create_key
 
 from .test_auth import BASIC, PASSWORD, Env
 from .test_ingest_api import fixture
@@ -64,7 +64,7 @@ def test_user_creation_that_errors_partway_is_recorded(env, monkeypatch):
     async def boom(*a, **kw):
         raise RuntimeError(f"disk full while saving {PASSWORD}")
 
-    monkeypatch.setattr("watchpost.auth.create_user", boom)
+    monkeypatch.setattr("observe.auth.create_user", boom)
     quiet = TestClient(env.client.app, base_url="https://testserver",
                        raise_server_exceptions=False)
     quiet.cookies.update(env.client.cookies)
@@ -83,7 +83,7 @@ def test_login_that_fails_after_the_password_check_is_recorded(env, monkeypatch)
     async def boom(*a, **kw):
         raise RuntimeError("no session")
 
-    monkeypatch.setattr("watchpost.auth.create_session", boom)
+    monkeypatch.setattr("observe.auth.create_session", boom)
     quiet = TestClient(env.client.app, base_url="https://testserver",
                        raise_server_exceptions=False)
     assert quiet.post("/api/login", json={"username": "alice",
@@ -122,7 +122,7 @@ def _cli(tmp_path, monkeypatch, *argv: str) -> tuple[int, str]:
         f"  db_path: {db.as_posix()}\n"
         "  argon2_time_cost: 1\n  argon2_memory_kib: 8\n  argon2_parallelism: 1\n"
         "monitors:\n  - {name: p, type: ping, host: 127.0.0.1}\n", encoding="utf-8")
-    monkeypatch.setattr("sys.argv", ["watchpost", "--config", str(cfg), *argv])
+    monkeypatch.setattr("sys.argv", ["observe", "--config", str(cfg), *argv])
     return main(), str(db)
 
 

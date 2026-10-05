@@ -119,7 +119,7 @@ PLUGIN_TABLES = (
 
 # The infrastructure map: switches, their ports, wall jacks, the links between them, endpoints
 # seen on ports, and the append-only port property history (docs/FIELD-DATA.md). Keys are the
-# normalised forms made by watchpost/portkey.py. A link names its two ends as (kind, ref) pairs,
+# normalised forms made by observe/portkey.py. A link names its two ends as (kind, ref) pairs,
 # stored in sorted order so an edge has one row whichever way it was reported. All steps are
 # additive; no existing table changes.
 INFRA_TABLES = (
@@ -212,7 +212,7 @@ SCHEMA_VERSION = max(MIGRATIONS)
 
 
 class SchemaTooNewError(RuntimeError):
-    """Raised when the database was written by a newer version of watchpost."""
+    """Raised when the database was written by a newer version of Observe."""
 
 
 def migrate(db: sqlite3.Connection) -> None:
@@ -225,8 +225,8 @@ def migrate(db: sqlite3.Connection) -> None:
         latest = max(MIGRATIONS)
         if current > latest:
             raise SchemaTooNewError(
-                f"database schema version {current} is newer than this watchpost "
-                f"supports ({latest}); upgrade watchpost or restore an older database")
+                f"database schema version {current} is newer than this Observe "
+                f"supports ({latest}); upgrade Observe or restore an older database")
         for version in range(current + 1, latest + 1):
             db.execute("BEGIN")
             try:

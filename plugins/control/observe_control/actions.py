@@ -1,7 +1,7 @@
 """The action catalogue: which parameters each action takes, and the checks made before a
 request is queued (docs/CONTROL.md).
 
-watchpost checks the shape of every parameter and, when the host has reported a thermalctl
+Observe checks the shape of every parameter and, when the host has reported a thermalctl
 controller, that the header exists there. The host's own allowlist still has the final say.
 """
 

@@ -10,9 +10,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from watchpost.checks import build_check
-from watchpost.checks.base import Result
-from watchpost.checks.windows import KerberosError, ps_quote
+from observe.checks import build_check
+from observe.checks.base import Result
+from observe.checks.windows import KerberosError, ps_quote
 
 from .conftest import make_config
 
@@ -33,7 +33,7 @@ class FakeSession:
 @pytest.fixture(autouse=True)
 def fake(monkeypatch):
     FakeSession.scripts = []
-    monkeypatch.setattr("watchpost.checks.windows.winrm.Session", FakeSession)
+    monkeypatch.setattr("observe.checks.windows.winrm.Session", FakeSession)
     return FakeSession
 
 
@@ -123,7 +123,7 @@ def _kerberos_check(**cred_extra):
 
 
 async def test_kerberos_transport_kinits_and_points_at_ccache(fake, monkeypatch):
-    monkeypatch.setattr("watchpost.checks.windows._kinit",
+    monkeypatch.setattr("observe.checks.windows._kinit",
                          lambda principal, keytab_path: "/tmp/fake-cc")
     fake.reply = (0, "Running|Automatic", "")
     await _kerberos_check().run()
@@ -133,7 +133,7 @@ async def test_kerberos_transport_kinits_and_points_at_ccache(fake, monkeypatch)
 
 
 async def test_kerberos_hostname_override_is_respected(fake, monkeypatch):
-    monkeypatch.setattr("watchpost.checks.windows._kinit",
+    monkeypatch.setattr("observe.checks.windows._kinit",
                          lambda principal, keytab_path: "/tmp/fake-cc")
     fake.reply = (0, "Running|Automatic", "")
     await _kerberos_check(kerberos_hostname_override="winsrv01.lab.example.com").run()
@@ -143,7 +143,7 @@ async def test_kerberos_hostname_override_is_respected(fake, monkeypatch):
 async def test_kerberos_kinit_failure_is_reported_not_raised(fake, monkeypatch):
     def boom(principal, keytab_path):
         raise KerberosError("kinit failed: Preauthentication failed")
-    monkeypatch.setattr("watchpost.checks.windows._kinit", boom)
+    monkeypatch.setattr("observe.checks.windows._kinit", boom)
     res = await _kerberos_check().run()
     assert res.result is Result.FAIL
     assert "Kerberos: kinit failed: Preauthentication failed" in res.message
@@ -151,16 +151,16 @@ async def test_kerberos_kinit_failure_is_reported_not_raised(fake, monkeypatch):
 
 class TestKinit:
     def setup_method(self):
-        from watchpost.checks import windows
+        from observe.checks import windows
         windows._krb_last_kinit.clear()
 
     def test_missing_keytab_raises(self, tmp_path):
-        from watchpost.checks.windows import _kinit
+        from observe.checks.windows import _kinit
         with pytest.raises(KerberosError, match="keytab not found"):
             _kinit("svc@LAB.EXAMPLE.COM", str(tmp_path / "missing.keytab"))
 
     def test_kinit_failure_raises_with_stderr(self, tmp_path, monkeypatch):
-        from watchpost.checks import windows
+        from observe.checks import windows
         keytab = tmp_path / "x.keytab"
         keytab.write_bytes(b"")
 
@@ -171,7 +171,7 @@ class TestKinit:
             windows._kinit("svc@LAB.EXAMPLE.COM", str(keytab))
 
     def test_successful_kinit_is_cached_until_ttl(self, tmp_path, monkeypatch):
-        from watchpost.checks import windows
+        from observe.checks import windows
         keytab = tmp_path / "x.keytab"
         keytab.write_bytes(b"")
         calls = []

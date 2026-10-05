@@ -88,7 +88,7 @@ class WinRMCredential(Strict):
     cert_pem: str | None = None  # path to client certificate (certificate transport)
     cert_key_pem: str | None = None  # path to its private key
     # kerberos transport: a service ticket is acquired with `kinit -kt` before
-    # each session (see watchpost/checks/windows.py), never a stored password.
+    # each session (see observe/checks/windows.py), never a stored password.
     principal: str | None = None  # e.g. watchpost@LAB.EXAMPLE.COM
     keytab_path: str | None = None  # path to the keytab, mounted read-only
     kerberos_hostname_override: str | None = None  # SPN host if it differs from the monitor's host
@@ -649,7 +649,7 @@ class ServerConfig(Strict):
     basic_auth_user: str | None = None
     basic_auth_password: str | None = None
     max_concurrency: int = 32
-    # Logins and sessions (watchpost/auth.py). The argon2 defaults follow the
+    # Logins and sessions (observe/auth.py). The argon2 defaults follow the
     # argon2-cffi RFC 9106 low-memory profile; tests lower them.
     session_idle_s: int = Field(default=1800, ge=60)
     session_absolute_s: int = Field(default=43200, ge=60)
@@ -754,7 +754,7 @@ class Config(Strict):
     credentials: dict[str, Credential] = Field(default_factory=dict)
     alerts: list[Alert] = Field(default_factory=list)
     monitors: list[Monitor] = Field(default_factory=list)
-    # Plugins to load by entry point name (watchpost/plugins.py). Installed plugins that are
+    # Plugins to load by entry point name (observe/plugins.py). Installed plugins that are
     # not listed here are never imported. Each one's settings sit under plugin_settings.<name>.
     plugins: list[str] = Field(default_factory=list)
     plugin_settings: dict[str, dict[str, Any]] = Field(default_factory=dict)

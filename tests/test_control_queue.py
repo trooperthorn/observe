@@ -11,17 +11,17 @@ from importlib.metadata import EntryPoint
 import pytest
 from fastapi.testclient import TestClient
 
-from watchpost import auth
-from watchpost.alerts import Alerter
-from watchpost.ingest.keys import create_key
-from watchpost.plugins import GROUP, load_plugins
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
-from watchpost_control.keys import create_control_key
-from watchpost_control.queue import (MAX_OUTPUT_CHARS, Limits, QueueError, clean_output,
+from observe import auth
+from observe.alerts import Alerter
+from observe.ingest.keys import create_key
+from observe.plugins import GROUP, load_plugins
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
+from observe_control.keys import create_control_key
+from observe_control.queue import (MAX_OUTPUT_CHARS, Limits, QueueError, clean_output,
                                      enqueue_command, expire_commands)
-from watchpost_control.signing import keygen, load_private_key, verify_command
+from observe_control.signing import keygen, load_private_key, verify_command
 
 from .conftest import make_config
 from .test_auth import PASSWORD, Clock
@@ -49,7 +49,7 @@ class Env:
             server={"db_path": self.path, "argon2_time_cost": 1, "argon2_memory_kib": 8,
                     "argon2_parallelism": 1})
         loaded = load_plugins(self.cfg, lambda: [EntryPoint(
-            "control", "watchpost_control:plugin", GROUP)])
+            "control", "observe_control:plugin", GROUP)])
         model = loaded.get("control").settings.model_dump()
         self.limits = Limits(**{k: v for k, v in model.items() if k in Limits.__dataclass_fields__})
         self.store = Store(self.path, loaded)
@@ -390,7 +390,7 @@ def test_redaction_runs_before_truncation():
 
 def test_new_control_files_use_lf_and_no_em_dashes_or_model_names():
     from .test_field_docs import ROOT, stored_bytes
-    plugin = ROOT / "plugins" / "control" / "watchpost_control"
+    plugin = ROOT / "plugins" / "control" / "observe_control"
     for path in (plugin / "queue.py", plugin / "__init__.py", ROOT / "docs" / "CONTROL.md"):
         raw = stored_bytes(path)
         text = raw.decode("utf-8")

@@ -41,7 +41,7 @@ forecast:
   horizon_days: 90      # further-out crossings are reported as beyond horizon
   min_r2: 0.5           # below this a projection is labelled low confidence
 
-# Discovery: `python -m watchpost --config ... --discover --out proposals.yaml`
+# Discovery: `python -m observe --config ... --discover --out proposals.yaml`
 # scans these targets and writes proposed monitors. It changes nothing.
 discovery:
   targets: [192.0.2.0/24, 198.51.100.10-198.51.100.40, dc01.lab.example]
@@ -521,10 +521,10 @@ monitors:
     components:
       - {source: hwmon, metric: cpu_temp_c, direction: above, warn: 75, crit: 90}
 
-# Plugins (watchpost/plugins.py). Only names listed here are loaded.
+# Plugins (observe/plugins.py). Only names listed here are loaded.
 # plugins: [pockethernet, control]
 # plugin_settings:
 #   pockethernet:
 #     evidence_retention_days: 365  # how long a report body is kept
 #   control:
-#     signing_key_file: /run/secrets/watchpost_control_key   # from --control-keygen
+#     signing_key_file: /run/secrets/observe_control_key   # from --control-keygen

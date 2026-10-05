@@ -22,7 +22,7 @@ from .checks.mqtt import mqtt_client_kwargs
 from .config import Config, MqttAlert, NtfyAlert, SmtpAlert, WebhookAlert
 from .state import State, Transition
 
-log = logging.getLogger("watchpost.alerts")
+log = logging.getLogger("observe.alerts")
 
 _PRIORITY = {State.DOWN: "high", State.WARN: "default", State.UP: "default"}
 _TAGS = {State.DOWN: "red_circle", State.WARN: "warning", State.UP: "white_check_mark"}

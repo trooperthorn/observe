@@ -1,6 +1,6 @@
 # Prior art and method sources
 
-This file records where each non-trivial method in watchpost comes from.
+This file records where each non-trivial method in Observe comes from.
 Every method here is taken from long-published, general-purpose sources:
 textbook statistics and the documented behaviour of open-source monitoring
 tools. None was derived from any vendor's patents, internal documents, or
@@ -14,7 +14,7 @@ clean-room record, confirm each one and add a URL and an access date.
 Keep this file current: when a method is added, record its public source
 before or alongside the code.
 
-## Status rollup (`watchpost/rollup.py`, `watchpost/scheduler.py`)
+## Status rollup (`observe/rollup.py`, `observe/scheduler.py`)
 
 **Worst-of group state.** A group shows the most severe state among its
 members. This is the display rule of Big Brother (Sean MacGuire, 1996), whose
@@ -39,7 +39,7 @@ dependent service or host changes state).
 notification logic sends recovery notifications only after a problem
 notification; the same rule is used here.
 
-## Capacity forecasting (`watchpost/forecast.py`)
+## Capacity forecasting (`observe/forecast.py`)
 
 **Ordinary least squares.** The trend is a least-squares straight line,
 published by Adrien-Marie Legendre in 1805 and by Carl Friedrich Gauss in

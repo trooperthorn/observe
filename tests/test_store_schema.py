@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from watchpost.store import MIGRATIONS, SCHEMA_VERSION, SchemaTooNewError, Store, migrate
+from observe.store import MIGRATIONS, SCHEMA_VERSION, SchemaTooNewError, Store, migrate
 
 NEW_TABLES = {"schema_version", "hosts", "host_samples", "host_sources", "host_events",
               "ingest_keys", "users", "sessions", "audit"}

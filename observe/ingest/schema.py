@@ -1,4 +1,4 @@
-"""Agent-to-watchpost wire schema (version 1).
+"""Agent-to-Observe wire schema (version 1).
 
 Copied from hostwatch/schema.py (hostwatch, same owner) and adapted. The
 field names, types and defaults are unchanged, so a batch that a hostwatch

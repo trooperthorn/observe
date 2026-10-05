@@ -3,7 +3,7 @@
 Transport: asyncssh, one connection per poll. Host keys are always verified
 against the monitor's known_hosts file; there is no option to skip that for
 a monitor. Agent use and agent forwarding are disabled, so a compromised
-target can not borrow keys from whatever is running watchpost.
+target can not borrow keys from whatever is running Observe.
 
 Every command is a fixed string. The only config values placed in a
 command (mount point, systemd unit, container name, docker command) are

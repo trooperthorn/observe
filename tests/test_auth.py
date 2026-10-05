@@ -9,11 +9,11 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-from watchpost import auth
-from watchpost.alerts import Alerter
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
+from observe import auth
+from observe.alerts import Alerter
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
 
 from .conftest import make_config
 
@@ -269,7 +269,7 @@ def test_login_rejects_malformed_bodies(env):
 
 
 def test_create_admin_cli(tmp_path, monkeypatch):
-    from watchpost.__main__ import main
+    from observe.__main__ import main
 
     cfg = tmp_path / "c.yaml"
     db = tmp_path / "cli.db"
@@ -279,7 +279,7 @@ def test_create_admin_cli(tmp_path, monkeypatch):
         "  argon2_time_cost: 1\n  argon2_memory_kib: 8\n  argon2_parallelism: 1\n"
         "monitors:\n  - {name: p, type: ping, host: 127.0.0.1}\n", encoding="utf-8")
     monkeypatch.setenv("WATCHPOST_ADMIN_PASSWORD", PASSWORD)
-    monkeypatch.setattr("sys.argv", ["watchpost", "--config", str(cfg), "--create-admin", "root"])
+    monkeypatch.setattr("sys.argv", ["observe", "--config", str(cfg), "--create-admin", "root"])
     assert main() == 0
     assert main() == 2  # the name is taken
     conn = sqlite3.connect(db)

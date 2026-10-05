@@ -33,7 +33,7 @@ from .rollup import Rollup
 from .state import MonitorState, State, Transition
 from .store import Store
 
-log = logging.getLogger("watchpost.scheduler")
+log = logging.getLogger("observe.scheduler")
 
 _PROBLEM = (State.DOWN, State.WARN)
 

@@ -1,7 +1,7 @@
 """Per-host hardware views built from the newest pushed batch.
 
 The grouping and the section names follow hostwatch/integrations/summary.py
-(hostwatch, same owner), adapted: watchpost reads its own store, and every
+(hostwatch, same owner), adapted: Observe reads its own store, and every
 reading is graded Good, Warning or Critical here. Nothing is guessed:
 
 - A reading with no value this cycle is a Warning, never zero.

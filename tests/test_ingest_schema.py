@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from watchpost.ingest import schema
-from watchpost.ingest.schema import Batch
+from observe.ingest import schema
+from observe.ingest.schema import Batch
 
 FIXTURES = Path(__file__).parent / "fixtures" / "hostwatch"
 NAMES = ["batch_minimal", "batch_with_events", "batch_legacy_v1"]

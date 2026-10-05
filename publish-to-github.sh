@@ -20,7 +20,7 @@ read -r -p "Proceed? [y/N] " ok
 if [ ! -d .git ]; then
   git init -q -b main
   git add -A
-  git commit -q -m "Initial import of watchpost"
+  git commit -q -m "Initial import of Observe"
 fi
 gh repo create "${owner}/${name}" "${visibility}" \
   --description "Self-hosted homelab availability monitor (SNMP, WinRM/WMI, MQTT, HTTP, DNS, TLS, ICMP)" \

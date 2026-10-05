@@ -4,7 +4,7 @@ Adapted from hostwatch/events/boot.py (hostwatch, same owner). The agent does
 the evidence gathering, because only it can read the heartbeat file, pstore, the
 watchdog boot status and the previous boot's journal. It sends one boot event
 per detected reboot whose kind is boot.<classification>. This module reads that
-kind and reduces it to the three states watchpost shows and acts on:
+kind and reduces it to the three states Observe shows and acts on:
 
 - clean: the previous boot ended with a completed shutdown sequence.
 - crash: evidence of a panic, a watchdog reset, a power cut or an abrupt end.

@@ -1,6 +1,6 @@
 """The field report upload routes: POST /api/v1/field-reports and GET .../ping.
 
-The core mounts this router (watchpost/web.py) with its own dependencies: the per-peer rate
+The core mounts this router (observe/web.py) with its own dependencies: the per-peer rate
 limit (429) and a `wpf` bearer key (401), both before the body is read, and an audit row for
 every upload, accepted or refused. This module adds the rest, cheapest check first:
 
@@ -10,7 +10,7 @@ every upload, accepted or refused. This module adds the rest, cheapest check fir
 3. A gzip body is inflated with a cap of MAX_REPORT_BYTES (413) and a compression ratio limit
    (413), so a small body cannot expand into memory. Truncated data, trailing data and a second
    gzip member are refused (400). The inflater never produces more than the cap plus one byte.
-4. The schema (watchpost_pockethernet/schema.py) validates the report (400, 413 or 422).
+4. The schema (observe_pockethernet/schema.py) validates the report (400, 413 or 422).
 5. The clock is checked and corrected (see correct_clock).
 6. The report is stored by `(source, report_id)` and revision (reports.py).
 7. A new or replaced report is derived into port properties and map edges (derive.py). A
@@ -32,7 +32,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from watchpost.infra import InfraService
+from observe.infra import InfraService
 
 from .derive import derive_report, replay_siblings
 from .reports import NewReport, mark_derive_status, store_report

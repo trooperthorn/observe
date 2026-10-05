@@ -7,9 +7,9 @@ import datetime as dt
 import yaml
 from ldap3 import MOCK_SYNC, OFFLINE_AD_2012_R2, Connection, Server
 
-from watchpost.config import Config, DirectorySettings, LdapCredential
-from watchpost.directory import _as_datetime, fetch_computers
-from watchpost.discovery import discover
+from observe.config import Config, DirectorySettings, LdapCredential
+from observe.directory import _as_datetime, fetch_computers
+from observe.discovery import discover
 
 NOW = dt.datetime(2026, 9, 23, tzinfo=dt.timezone.utc)
 BASE = "DC=lab,DC=example"

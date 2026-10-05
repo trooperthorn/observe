@@ -10,22 +10,22 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from watchpost import auth
-from watchpost.alerts import Alerter
-from watchpost.checks.base import CheckResult
-from watchpost.infra import InfraService
-from watchpost.infra_changes import port_changes
-from watchpost.infra_match import Matcher
-from watchpost.portkey import switch_id
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
+from observe import auth
+from observe.alerts import Alerter
+from observe.checks.base import CheckResult
+from observe.infra import InfraService
+from observe.infra_changes import port_changes
+from observe.infra_match import Matcher
+from observe.portkey import switch_id
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
 
 from .conftest import make_config
 
 SID = switch_id("aa:bb:cc:dd:ee:03")
 PASSWORD = "correct horse battery"
-STATIC = Path(__file__).parent.parent / "watchpost" / "static"
+STATIC = Path(__file__).parent.parent / "observe" / "static"
 JACK = "HQ/Main/R1/PP/01"
 MONITORS = [
     {"name": "edge sw", "type": "ping", "host": "10.0.0.3"},

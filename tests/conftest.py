@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from watchpost.config import Config
+from observe.config import Config
 
 SNMP_PORT = int(os.environ.get("WATCHPOST_TEST_SNMP_PORT", "1161"))
 MQTT_PORT = int(os.environ.get("WATCHPOST_TEST_MQTT_PORT", "18830"))

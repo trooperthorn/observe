@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from watchpost_pockethernet import schema
-from watchpost_pockethernet.schema import (MAX_REPORT_BYTES, Report, ReportError, parse_report)
+from observe_pockethernet import schema
+from observe_pockethernet.schema import (MAX_REPORT_BYTES, Report, ReportError, parse_report)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "pockethernet" / "report_v1.json"
 

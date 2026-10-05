@@ -9,13 +9,13 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from watchpost import auth
-from watchpost.alerts import Alerter
-from watchpost.ingest.boot import classify_events
-from watchpost.ingest.schema import Batch
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
+from observe import auth
+from observe.alerts import Alerter
+from observe.ingest.boot import classify_events
+from observe.ingest.schema import Batch
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
 
 from .conftest import make_config
 

@@ -1,7 +1,7 @@
 """Core service API for the infrastructure map (docs/FIELD-DATA.md).
 
 Plugins and core code call this to upsert switches, ports, jacks, links and endpoints and to
-append typed port properties. Port names are normalised by watchpost/portkey.py first, so the
+append typed port properties. Port names are normalised by observe/portkey.py first, so the
 callers may pass whatever spelling they have. Switch ids come from portkey.switch_id().
 
 Port properties are append-only. The current value of a property is the row with the newest

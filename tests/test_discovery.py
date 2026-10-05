@@ -7,8 +7,8 @@ import pytest
 import yaml
 from winrm.exceptions import InvalidCredentialsError
 
-from watchpost.config import Config
-from watchpost.discovery import (DiscoveryError, Discoverer, HostFinding, discover,
+from observe.config import Config
+from observe.discovery import (DiscoveryError, Discoverer, HostFinding, discover,
                                  expand_targets)
 
 from .conftest import MQTT_PORT, SNMP_PORT, needs_mqtt, needs_snmpd
@@ -129,7 +129,7 @@ async def test_winrm_only_after_tls_validates_and_proposes_roles(https_server, m
         calls.append(self.monitor.host)
         return 0, PROBE_JSON, ""
 
-    monkeypatch.setattr("watchpost.checks.windows.WinRMCheck.run_ps", fake_run_ps)
+    monkeypatch.setattr("observe.checks.windows.WinRMCheck.run_ps", fake_run_ps)
     c = cfg(tcp_ports=[port], winrm_port=port, credentials=["win"], ca_bundle=ca)
 
     # Bare IP: certificate can not validate for a name, so nothing is sent.
@@ -157,7 +157,7 @@ async def test_wrong_winrm_password_is_retired_before_lockout(https_server, monk
         await asyncio.sleep(0.05)   # make overlap possible if serialisation were missing
         raise InvalidCredentialsError("401")
 
-    monkeypatch.setattr("watchpost.checks.windows.WinRMCheck.run_ps", reject)
+    monkeypatch.setattr("observe.checks.windows.WinRMCheck.run_ps", reject)
     c = cfg(tcp_ports=[port], winrm_port=port, credentials=["win"], ca_bundle=ca,
             max_auth_failures=3)
     d = Discoverer(c)
@@ -171,7 +171,7 @@ async def test_tcp_probe_races_address_families(monkeypatch):
     """A name such as localhost resolves to ::1 and 127.0.0.1. The probe must
     start the next address after a short delay rather than spend its whole
     timeout on a first address that is filtered or slow to refuse."""
-    import watchpost.discovery as discovery_mod
+    import observe.discovery as discovery_mod
     seen = {}
 
     async def fake_open(host, port, **kw):

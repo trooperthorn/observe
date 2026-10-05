@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from watchpost.infra_changes import LENGTH_TOLERANCE_M
+from observe.infra_changes import LENGTH_TOLERANCE_M
 from .test_infra_changes import FIRES
 
 ROOT = Path(__file__).parent.parent
@@ -26,14 +26,14 @@ def stored_bytes(path: Path) -> bytes:
                               capture_output=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError):
         return path.read_bytes()
-PLUGIN = ROOT / "plugins" / "pockethernet" / "watchpost_pockethernet"
+PLUGIN = ROOT / "plugins" / "pockethernet" / "observe_pockethernet"
 KINDS = sorted({k for k, *_ in FIRES})
 DOCS = {name: (ROOT / name).read_text(encoding="utf-8")
         for name in ("README.md", "THREAT-MODEL.md", "docs/ARCHITECTURE.md",
                      "docs/FIELD-DATA.md")}
 ROUTES = ("/plugins/pockethernet", "/plugins/pockethernet/report", "/plugins/pockethernet/jack",
           "/api/plugins/pockethernet/reports")
-OWNED = [ROOT / "watchpost" / "infra_changes.py", PLUGIN / "pages.py",
+OWNED = [ROOT / "observe" / "infra_changes.py", PLUGIN / "pages.py",
          PLUGIN / "static" / "pockethernet.js", *sorted((PLUGIN / "pages").glob("*.html"))]
 
 

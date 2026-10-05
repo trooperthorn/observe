@@ -7,15 +7,15 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from watchpost import auth
-from watchpost.alerts import Alerter
-from watchpost.checks.base import CheckResult
-from watchpost.infra import InfraError, InfraService
-from watchpost.infra_match import LivePort, Matcher, PortMatch
-from watchpost.portkey import switch_id
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
-from watchpost.web import create_app
+from observe import auth
+from observe.alerts import Alerter
+from observe.checks.base import CheckResult
+from observe.infra import InfraError, InfraService
+from observe.infra_match import LivePort, Matcher, PortMatch
+from observe.portkey import switch_id
+from observe.scheduler import Scheduler
+from observe.store import Store
+from observe.web import create_app
 
 from .conftest import make_config
 
@@ -168,9 +168,9 @@ async def test_admin_link_survives_disabled_monitor_and_reads_never_write(tmp_pa
 
 
 async def test_interface_check_reports_speed_and_survives_odd_value():
-    from watchpost.checks import build_check
-    from watchpost.checks.base import Result
-    from watchpost.checks.snmp import IF_HIGH_SPEED
+    from observe.checks import build_check
+    from observe.checks.base import Result
+    from observe.checks.snmp import IF_HIGH_SPEED
 
     cf = make_config([{"name": "s", "type": "snmp", "host": "127.0.0.1", "credential": "v2",
                        "mode": "interface", "interface": "7"}],

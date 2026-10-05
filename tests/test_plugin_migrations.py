@@ -9,13 +9,13 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from watchpost.alerts import Alerter
-from watchpost.plugins import (LoadedPlugins, Migration, NavEntry, PluginBase, PluginError,
+from observe.alerts import Alerter
+from observe.plugins import (LoadedPlugins, Migration, NavEntry, PluginBase, PluginError,
                                PluginPage, load_plugins)
-from watchpost.scheduler import Scheduler
-from watchpost.store import (MIGRATIONS, PluginSchemaTooNewError, SchemaTooNewError, Store,
+from observe.scheduler import Scheduler
+from observe.store import (MIGRATIONS, PluginSchemaTooNewError, SchemaTooNewError, Store,
                              migrate_plugins)
-from watchpost.web import create_app
+from observe.web import create_app
 
 from .conftest import make_config
 from .test_auth import Env

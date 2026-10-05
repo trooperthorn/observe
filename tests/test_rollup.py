@@ -4,10 +4,10 @@ import asyncio
 
 import pytest
 
-from watchpost.alerts import Alerter
-from watchpost.checks.base import CheckResult, Result
-from watchpost.scheduler import Scheduler
-from watchpost.store import Store
+from observe.alerts import Alerter
+from observe.checks.base import CheckResult, Result
+from observe.scheduler import Scheduler
+from observe.store import Store
 
 from .conftest import make_config
 

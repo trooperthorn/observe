@@ -1,7 +1,7 @@
 """The plugin host: discovery, version checks, and the hooks a plugin may use.
 
 Plugins are Python packages that publish an object under the entry point group
-`watchpost.plugins`. Installing one does nothing by itself. Only names listed
+`observe.plugins`. Installing one does nothing by itself. Only names listed
 under `plugins:` in the config are loaded, and for an unlisted name the entry
 point is never imported, so its code never runs. A listed name with no
 installed package, a package whose declared core version range does not
@@ -11,13 +11,13 @@ PluginError that says which plugin and why. Nothing is downloaded at runtime.
 Plugins run in the same process with full trust; this module limits what a
 plugin can mis-declare, not what its code can do. What it does enforce is
 the HTTP surface: a plugin hands over an APIRouter and the core mounts it
-under /api/plugins/<name>/ behind its own dependencies (watchpost/web.py,
+under /api/plugins/<name>/ behind its own dependencies (observe/web.py,
 mount_plugins). The plugin cannot choose weaker authentication, skip CSRF,
 skip the rate limit or skip the audit log, because it never controls the
 mounting. It can only ask for the stricter admin role.
 
-Migrations are applied by the store (watchpost/store.py, migrate_plugins), and
-pages and static files are served by the app (watchpost/web.py), both only for
+Migrations are applied by the store (observe/store.py, migrate_plugins), and
+pages and static files are served by the app (observe/web.py), both only for
 plugins that are listed. Hooks that later slices consume (monitor types, map
 contributions, key scopes) are declared and validated here so a malformed
 plugin fails at startup, but they are applied by the code for those features.
@@ -26,6 +26,7 @@ plugin fails at startup, but they are applied by the code for those features.
 from __future__ import annotations
 
 import importlib.metadata
+import logging
 import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -41,7 +42,10 @@ from pydantic import BaseModel, ValidationError
 from . import __version__
 from .config import Config
 
-GROUP = "watchpost.plugins"
+log = logging.getLogger("observe")
+
+GROUP = "observe.plugins"
+LEGACY_GROUP = "watchpost.plugins"  # compatibility: the entry point group of the old name
 ROUTE_PREFIX = "/api/plugins"
 PAGE_PREFIX = "/plugins"  # plugin pages and static files: /plugins/<name>/...
 RESERVED_SCOPES = frozenset({"wpi"})  # the core's own ingest key scope
@@ -223,7 +227,20 @@ EntryPoints = Callable[[], Iterable[importlib.metadata.EntryPoint]]
 
 
 def installed_entry_points() -> list[importlib.metadata.EntryPoint]:
-    return list(importlib.metadata.entry_points(group=GROUP))
+    """Entry points in `GROUP`, plus any still published under the legacy group.
+
+    A plugin published under the legacy group keeps loading, and one warning is logged naming
+    it. A name that is also published under `GROUP` is taken from there only.
+    """
+    found = list(importlib.metadata.entry_points(group=GROUP))
+    current = {ep.name for ep in found}
+    legacy = [ep for ep in importlib.metadata.entry_points(group=LEGACY_GROUP)
+              if ep.name not in current]
+    if legacy:
+        log.warning("plugins %s are published under the legacy entry point group %s; "
+                    "republish them under %s",
+                    ", ".join(sorted(ep.name for ep in legacy)), LEGACY_GROUP, GROUP)
+    return found + legacy
 
 
 def _check_core_version(plugin: Any, core: str) -> None:
@@ -231,7 +248,7 @@ def _check_core_version(plugin: Any, core: str) -> None:
     declared = plugin.core_versions
     if not isinstance(declared, str) or not declared.strip():
         raise PluginError(f"plugin {name!r}: core_versions is empty; declare the range of "
-                          "watchpost versions it supports")
+                          "Observe versions it supports")
     try:
         spec = SpecifierSet(declared)
     except InvalidSpecifier as err:
@@ -240,10 +257,10 @@ def _check_core_version(plugin: Any, core: str) -> None:
     try:
         current = Version(core)
     except InvalidVersion as err:
-        raise PluginError(f"watchpost version {core!r} cannot be compared") from err
+        raise PluginError(f"Observe version {core!r} cannot be compared") from err
     if not spec.contains(current, prereleases=True):
-        raise PluginError(f"plugin {name!r} supports watchpost {declared} "
-                          f"but this is watchpost {core}; install a matching plugin release")
+        raise PluginError(f"plugin {name!r} supports Observe {declared} "
+                          f"but this is Observe {core}; install a matching plugin release")
 
 
 def _check_routers(name: str, routers: list[PluginRouter]) -> None:
