@@ -2,20 +2,33 @@
 // config (SNMP values, MQTT payloads, HTTP errors). It is written with
 // textContent and SVG attributes only, never innerHTML, so a hostile payload
 // renders as text.
-"use strict";
+import { el } from "/static/js/dom.js";
+import { statusChip, statusIcon } from "/static/js/chips.js";
+import { stateInfo } from "/static/js/chip-states.js";
 
 const ORDER = { down: 0, unreachable: 1, warn: 2, pending: 3, up: 4 };
 const expanded = new Set();
 const rows = new Map();
 const tpl = document.getElementById("row-tpl");
 const groupsEl = document.getElementById("groups");
-const problemsOnly = document.getElementById("problems-only");
+const stateFilter = document.getElementById("state-filter");
+const search = document.getElementById("search");
+const closedGroups = new Set();
+let lastData = null;
 
-function el(tag, cls, text) {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text !== undefined) e.textContent = text;
-  return e;
+function shown(m) {
+  const f = stateFilter.value;
+  if (f === "problems" && m.effective_state === "up") return false;
+  if (f !== "all" && f !== "problems" && m.effective_state !== f) return false;
+  const q = search.value.trim().toLowerCase();
+  return !q || `${m.name} ${m.target} ${m.group}`.toLowerCase().includes(q);
+}
+
+function setKpi(id, value, sub, alert) {
+  const parts = document.getElementById(id).children;
+  parts[1].textContent = String(value);
+  parts[1].classList.toggle("kpi-alert", Boolean(alert));
+  parts[2].textContent = sub;
 }
 
 function ago(ts) {
@@ -74,6 +87,7 @@ function fcText(f) {
 
 function updateRow(node, m) {
   node.className = `mon ${m.effective_state}`;
+  node.querySelector(".state-slot").replaceChildren(statusChip(m.effective_state));
   node.querySelector(".name").textContent = m.name;
   node.querySelector(".val").textContent = fmtVal(m);
   node.querySelector(".type").textContent = m.mode ? `${m.type}/${m.mode}` : m.type;
@@ -89,7 +103,6 @@ function updateRow(node, m) {
   const fc = fcText(m.forecast);
   fcEl.textContent = fc ? fc[0] : "";
   fcEl.className = fc ? fc[1] : "fc";
-  node.hidden = problemsOnly.checked && (m.effective_state === "up");
 }
 
 function drawSpark(svg, points) {
@@ -151,32 +164,63 @@ function render(data) {
   }
   const summary = document.getElementById("summary");
   summary.replaceChildren(...Object.entries(counts).filter(([, n]) => n)
-    .map(([s, n]) => el("span", `pill ${s}`, `${n} ${s}`)));
-  document.title = counts.down ? `(${counts.down} down) observe` : "observe";
+    .map(([s, n]) => statusChip(s, `${n} ${stateInfo(s).word}`)));
+  document.title = counts.down ? `(${counts.down} down) Overview - Observe` : "Overview - Observe";
+
+  const forecasts = data.monitors.filter((m) => m.forecast && (m.forecast.warn_at || m.forecast.crit_at));
+  const week = Date.now() / 1000 + 7 * 86400;
+  const soon = forecasts.filter((m) =>
+    Math.min(m.forecast.crit_at ?? Infinity, m.forecast.warn_at ?? Infinity) <= week).length;
+  const downHosts = data.monitors.filter((m) => m.effective_state === "down" && m.type === "pushed_host").length;
+  setKpi("kpi-monitors", data.monitors.length, `${groups.size} groups`);
+  setKpi("kpi-down", counts.down, downHosts ? `${downHosts} hosts` : "", counts.down > 0);
+  setKpi("kpi-warn", counts.warn, counts.unreachable ? `${counts.unreachable} unreachable` : "");
+  setKpi("kpi-capacity", soon, `full within 7 days, ${forecasts.length} forecasts`);
+  document.getElementById("tiles").replaceChildren(...[
+    ["up", counts.up], ["warn", counts.warn], ["down", counts.down],
+    ["unreachable", counts.unreachable], ["pending", counts.pending],
+  ].map(([s, n]) => {
+    const info = stateInfo(s);
+    const tile = el("div", `tile s-${info.role}`);
+    tile.append(statusIcon(info.icon), el("span", "tile-count", String(n)), el("span", null, info.word));
+    return tile;
+  }));
 
   const frag = document.createDocumentFragment();
   for (const [name, mons] of [...groups.entries()].sort()) {
     mons.sort((a, b) => ORDER[a.effective_state] - ORDER[b.effective_state] ||
       a.name.localeCompare(b.name));
-    const visible = mons.filter((m) => !(problemsOnly.checked && m.effective_state === "up"));
+    const visible = mons.filter(shown);
     if (!visible.length) continue;
-    const h = el("h2", null, name);
+    const card = el("details", "card");
+    card.open = !closedGroups.has(name);
+    card.addEventListener("toggle", () => {
+      if (card.open) closedGroups.delete(name); else closedGroups.add(name);
+    });
+    const sum = el("summary");
+    sum.append(el("span", "grp-name", name));
     const g = data.groups[name];
     if (g) {
-      const pill = el("span", `pill ${g.state}`, g.state);
-      if (g.worst.length) pill.title = g.worst.join(", ");
-      h.append(pill);
+      const chip = statusChip(g.state);
+      if (g.worst.length) chip.title = g.worst.join(", ");
+      sum.append(chip);
     }
-    frag.append(h);
+    const per = {};
+    for (const m of mons) per[m.effective_state] = (per[m.effective_state] || 0) + 1;
+    for (const s of ["down", "unreachable", "warn", "pending", "up"]) {
+      if (per[s]) sum.append(statusChip(s, `${per[s]} ${stateInfo(s).word.toLowerCase()}`));
+    }
+    card.append(sum);
     const ul = el("ul", "group");
-    for (const m of mons) {
+    for (const m of visible) {
       let node = rows.get(m.slug);
       if (!node) { node = makeRow(m); rows.set(m.slug, node); }
       updateRow(node, m);
       ul.append(node);
       if (expanded.has(m.slug)) loadHistory(m.slug, node);
     }
-    frag.append(ul);
+    card.append(ul);
+    frag.append(card);
   }
   groupsEl.replaceChildren(frag);
 
@@ -217,7 +261,7 @@ async function renderFindings() {
   document.getElementById("findings-panel").hidden = list.length === 0;
   document.getElementById("findings").replaceChildren(...list.map((f) => {
     const li = el("li", `finding ${f.severity}`);
-    li.append(el("span", `pill ${f.severity === "warning" ? "warn" : "pending"}`, f.severity), " ");
+    li.append(statusChip(f.severity === "warning" ? "warn" : "pending", f.severity), " ");
     const a = el("a", null, `${f.port_key} on ${f.switch_id}`);
     a.href = `/port?switch_id=${encodeURIComponent(f.switch_id)}&port=${encodeURIComponent(f.port_key)}`;
     li.append(a, ` ${f.message}`);
@@ -228,7 +272,7 @@ async function renderFindings() {
 async function refresh() {
   try {
     const r = await fetch("/api/monitors");
-    if (r.ok) render(await r.json());
+    if (r.ok) { lastData = await r.json(); render(lastData); }
     await renderEvents();
     await renderFindings();
   } catch (_) {
@@ -236,6 +280,15 @@ async function refresh() {
   }
 }
 
-problemsOnly.addEventListener("change", refresh);
+function rerender() { if (lastData) render(lastData); }
+stateFilter.addEventListener("change", rerender);
+search.addEventListener("input", rerender);
+function jump(state) { stateFilter.value = state; rerender(); groupsEl.scrollIntoView(); }
+document.getElementById("kpi-down").addEventListener("click", () => jump("down"));
+document.getElementById("kpi-warn").addEventListener("click", () => jump("warn"));
+document.getElementById("kpi-capacity").addEventListener("click", () => {
+  const panel = document.getElementById("capacity-panel");
+  if (!panel.hidden) { panel.open = true; panel.scrollIntoView(); }
+});
 refresh();
 setInterval(refresh, 10000);

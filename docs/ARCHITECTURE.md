@@ -181,6 +181,8 @@ summary adapted from hostwatch's `integrations/summary.py` is the host views sec
 
 ## Host views
 
+The dashboard at `/` is a static page whose module script (`app.js`) builds the KPI row, availability tiles and group cards in the browser from `/api/monitors`, `/api/events` and `/api/infra/findings`, using the shared chip and DOM modules.
+
 Each pushed host has a page at `/host?name=HOST`, linked from the dashboard
 row of its `pushed_host` monitor. It is served by two routes, `GET /api/hosts`
 (one summary row per host) and `GET /api/hosts/{host:path}` (host names may contain slashes; the full document), both

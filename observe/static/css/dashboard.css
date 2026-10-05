@@ -1,0 +1,28 @@
+/* Dashboard (Overview) layout and monitor cards. Tokens only, no colour literals.
+   Loaded after components.css and app.css, so these rules win over the legacy ones. */
+.dash { max-width: 1100px; margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4); }
+.dash-title h1 { font-size: var(--o-fs-h); }
+.dash-filter { display: flex; flex-wrap: wrap; gap: var(--o-s3); align-items: center; }
+.dash-filter label { display: flex; align-items: center; gap: var(--o-s2);
+                     color: var(--o-text-muted); font-size: var(--o-fs-sm); }
+.groups { display: grid; gap: var(--o-s3); }
+.groups .card > summary .chip { margin-left: var(--o-s1); }
+.groups .card > summary .grp-name { margin-right: var(--o-s2); }
+ul.group { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--o-s3);
+           grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.mon { background: var(--o-surface); border: 1px solid var(--o-border);
+       border-radius: var(--o-radius-sm); padding: var(--o-s3); min-width: 0; }
+.mon .head { display: flex; align-items: center; gap: var(--o-s2); width: 100%; }
+.mon .name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mon .sub, .mon .msg, .mon .fc, .mon .more { margin-left: 0; }
+.mon .sub { color: var(--o-text-muted); font-size: var(--o-fs-sm); margin-top: var(--o-s1); }
+.mon .fc { color: var(--o-text-muted); }
+.mon .fc.soon { color: var(--o-warn); }
+.mon .fc.now { color: var(--o-down); }
+.spark { background: var(--o-surface-subtle); }
+.spark rect.fail { fill: var(--o-down-bg); opacity: 1; }
+.spark rect.warn { fill: var(--o-warn-bg); opacity: 1; }
+.spark polyline { stroke: var(--o-text-muted); }
+.when { color: var(--o-text-muted); }
+.kpi-value.kpi-alert { color: var(--o-down); }
+.kpi-label:empty { display: none; }

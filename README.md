@@ -406,7 +406,7 @@ warning, 2 critical) for pushed hosts, alongside the usual state, effective
 state and group lines.
 
 Each pushed host also has a hardware page at `/host?name=HOST`, linked from its
-row on the dashboard. `GET /api/hosts` lists every host that has pushed (and
+row on the dashboard (a card in its group, with a status chip). `GET /api/hosts` lists every host that has pushed (and
 every listed `pushed_host` monitor that never has), and `GET /api/hosts/HOST` (a host name may contain slashes; the route takes the rest of the path)
 returns its CPU, memory, power, temperatures, fans with the fan controller
 state, RAID, ZFS pools, disks, UPS, recent alerts and events, boot state and

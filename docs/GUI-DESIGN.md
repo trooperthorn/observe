@@ -532,6 +532,13 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 | S14 | Customise dashboard (optional) | `/api/ui/layout/{view}` per user, `tiles.js` with up/down and hide. | TestClient: per-user isolation, stale IDs dropped, unknown view rejected, size cap. |
 | S15 | Cleanup and rename | Remove legacy aliases and `app.css`, change the old name to "Observe" in titles and brand. | Static scan: no `var(--bg)` and similar remain, every `<title>` ends with "- Observe". |
 
+### S5 notes (done)
+
+- The dashboard (`index.html`, `app.js`, `css/dashboard.css`) now follows section 3.2: a KPI row (Monitors, Down, Warnings, Capacity), a tinted availability tile row with an icon and a word per state, a state filter and search, collapsible group cards with a count chip per state, and `details.card` panels for the capacity outlook, field findings and recent state changes. The page loads `components.css` after `shell.css`, and `dashboard.css` after `app.css`.
+- `app.js` is now an ES module and still writes every device-supplied string with `textContent`. Monitor and group states use `statusChip` and `statusIcon`; the header summary row uses chips too. The old "problems only" checkbox became the "Problems only" option of the state filter. The Down and Warnings KPI buttons set that filter and scroll to the groups, and the Capacity button opens and scrolls to the outlook. The Down value turns `--o-down` only above zero.
+- Deviation: the per-monitor card keeps its click-to-expand sparkline and history instead of drawing a sparkline on every card, to avoid one history request per monitor on every refresh. The "Customize" control stays in phase 2 (S14), and the page title is now "Overview - Observe".
+- Tests: `tests/test_ui_dashboard.py` checks the IDs and the stylesheet and module order, and sends a hostile monitor and group name through the API to confirm the page markup never contains it and the script only writes text.
+
 ### S4 notes (done)
 
 - `css/components.css` holds cards (including `details.card` and `.card.notice`), the KPI row, status tiles, chips, buttons, tables, dialogs and toasts. It uses tokens only, with no colour literals. It is not yet linked by any page: the pages that adopt it (S5 onwards) add it after `base.css`, and the tests that pin the `tokens, base, app` order will gain it then.
