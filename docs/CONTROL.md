@@ -1,6 +1,6 @@
 # Control actions
 
-Status: design, being built. watchpost can ask a host to:
+Status: design, being built. Built so far: the plugin skeleton, the signing key and `wpc_` keys (see Signing and keys); the pull route exists and always returns an empty queue. watchpost can ask a host to:
 
 - change a fan floor;
 - switch a fan controller between dry run and active;
@@ -50,6 +50,40 @@ Each host's own allowlist has the final say. These owner decisions were made on 
 5. **The daemon executes the action and reports the result.** It sends the outcome, output (truncated and redacted) and timings to `POST /api/v1/control/results`. Both sides audit it.
 
 watchpost never connects to a host, and no host opens a listening port. A compromised watchpost can only request actions that are in a host's own allowlist, and only within that allowlist's limits.
+
+## Signing and keys
+
+This section is a contract shared with the hostwatch-control daemon. Change it only in both repos together.
+
+- **Canonical JSON:** the command object serialised with keys sorted at every level, separators `,` and `:` with no spaces, and UTF-8 with non-ASCII characters written as themselves, not as unicode escapes. NaN and infinity are not allowed.
+- **Signature:** Ed25519 over those bytes, sent as standard base64 (with padding) of the 64 raw bytes. A pulled command is `{"command": {...}, "signature": "<base64>"}`, and the daemon verifies the signature over its own canonical form of `command`, never over the received text.
+- **Public key:** `ed25519:<standard base64 of the 32 raw bytes>`, pinned in each host's `control.toml` as `watchpost_public_key`.
+- **Private key:** an unencrypted PKCS8 PEM file at `plugin_settings.control.signing_key_file` (default `/run/secrets/watchpost_control_key`). On POSIX the plugin refuses to start when the file is readable by group or others, and also when it is missing or is not an Ed25519 key. It is never served, logged or audited.
+- **Creating a key:** `python -m watchpost --control-keygen PATH` writes a new key at PATH with mode 0600, refuses to overwrite an existing file, and prints only the public key.
+- **Control keys:** a host's daemon pulls with a `wpc_` key bound to its host name. Admins create and revoke these in the key screen or with `--ingest-key-create HOST --ingest-key-scope wpc` and `--ingest-key-revoke ID`. A `wpc_` key is refused by host ingest and by field reports, and `wpi_` and `wpf_` keys are refused by the control routes. A `wpc_` key may pull only for its own host: another `host` value gets 403.
+- **Settings** (`plugin_settings.control`): `signing_key_file`, `pull_interval_s` (the polling interval the daemon is advised to use, default 5), `max_pending_per_action` (1), `max_commands_per_host_per_hour` (10) and `reboot_min_interval_s` (900).
+
+### Test vector
+
+Both sides must reproduce these values. The key pair comes from the 32-byte seed `00 01 02 ... 1f`.
+
+- Private seed, base64: `AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=`
+- Public key: `ed25519:A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=`
+- Command:
+
+  ```json
+  {"v":1,"id":"6f1c2a52-8d0e-4c53-9a53-0d1f6d2f7a10","host":"MediaIn-SVR","action":"fan.set_floor","params":{"controller":"thermalctl","header":"pwm2","min_duty":20},"requested_by":"sean","issued_at":1759600000,"expires_at":1759600120,"seq":42}
+  ```
+
+- Canonical JSON (the bytes that are signed):
+
+  ```json
+  {"action":"fan.set_floor","expires_at":1759600120,"host":"MediaIn-SVR","id":"6f1c2a52-8d0e-4c53-9a53-0d1f6d2f7a10","issued_at":1759600000,"params":{"controller":"thermalctl","header":"pwm2","min_duty":20},"requested_by":"sean","seq":42,"v":1}
+  ```
+
+- Signature, base64: `ctLtz6sxgqiI2PRdESeNINEzokkV7Nq+X60xM++KglMxeMpVoqW7/xqXGQtRxXNu/p0aSkfjNSdzIAvoqA+ICg==`
+
+Changing any field of the command must make verification fail.
 
 ## Local allowlist
 

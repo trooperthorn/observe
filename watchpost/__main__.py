@@ -211,6 +211,24 @@ def _create_admin(config, args) -> int:  # type: ignore[no-untyped-def]
         store.close()
 
 
+def _control_keygen(path: str) -> int:
+    """Write a control signing key pair. Only the public key is printed."""
+    try:
+        from watchpost_control.signing import SigningError, keygen
+    except ImportError:
+        print("error: the watchpost-control plugin is not installed", file=sys.stderr)
+        return 2
+    try:
+        public = keygen(path)
+    except (SigningError, OSError) as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+    print(public)
+    print(f"private key written to {path}; pin the public key in each host's control.toml.",
+          file=sys.stderr)
+    return 0
+
+
 def _plugins(config):  # type: ignore[no-untyped-def]
     """The listed plugins, or None after printing why startup must stop."""
     try:

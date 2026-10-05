@@ -433,6 +433,16 @@ field reports, whatever the label says. The `pockethernet` plugin lives in
 `pip install ./plugins/pockethernet`; it needs `plugins: [pockethernet]` to load.
 The upload endpoint arrives in a later slice.
 
+The `control` plugin (`plugins/control`, `pip install ./plugins/control`, listed as
+`plugins: [control]`) registers the `wpc` scope: a control key bound to one host name, for the
+hostwatch-control daemon to pull commands. A `wpc` key is refused by host ingest and field
+reports, and `wpi` and `wpf` keys are refused by the control routes. The plugin signs commands
+with an Ed25519 key. Create one with `python -m watchpost --control-keygen /run/secrets/watchpost_control_key`,
+which writes the private key with mode 0600 and prints only the public key to pin on each host;
+the plugin refuses to start if that file is readable by group or others on POSIX. Set the path
+with `plugin_settings.control.signing_key_file`. This slice has no actions yet, and the pull route
+returns an empty queue. The signing format and a test vector are in `docs/CONTROL.md`.
+
 Logins use Argon2id password hashes and server-side sessions. Create the first
 admin with `python -m watchpost --config watchpost.yaml --create-admin NAME`; it
 reads the password (12 characters or more) from `WATCHPOST_ADMIN_PASSWORD` or a
