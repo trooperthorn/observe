@@ -273,11 +273,16 @@ def main() -> int:
     ap.add_argument("--create-admin", metavar="USERNAME",
                     help="create an admin user (password from WATCHPOST_ADMIN_PASSWORD or a "
                          "prompt) and exit")
+    ap.add_argument("--control-keygen", metavar="PATH",
+                    help="write a new control signing key pair at PATH (mode 0600, never "
+                         "overwritten), print only the public key, and exit")
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     logging.basicConfig(level=args.log_level.upper(),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per HTTP probe is noise
+    if args.control_keygen:
+        return _control_keygen(args.control_keygen)  # needs no config file
     try:
         config = load_config(args.config)
     except ConfigError as err:

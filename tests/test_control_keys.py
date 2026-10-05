@@ -404,6 +404,72 @@ def test_cli_keygen_prints_only_the_public_key(tmp_path, capsys):
     assert "already exists" in capsys.readouterr().err
 
 
+def test_main_registers_control_keygen(tmp_path, monkeypatch, capsys):
+    from watchpost.__main__ import main
+    path = tmp_path / "main.key"
+    monkeypatch.setattr("sys.argv", ["watchpost", "--config", str(tmp_path / "none.yaml"),
+                                     "--control-keygen", str(path)])
+    assert main() == 0
+    out = capsys.readouterr().out.strip()
+    assert out == public_key_string(load_private_key(path))
+
+
+def test_keygen_removes_a_partial_file_when_the_write_fails(tmp_path, monkeypatch):
+    import watchpost_control.signing as signing
+    path = tmp_path / "partial.key"
+
+    class Boom:
+        def __init__(self, fd):
+            self.fd = fd
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            os.close(self.fd)
+
+        def write(self, data):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(signing.os, "fdopen", lambda fd, mode: Boom(fd))
+    with pytest.raises(OSError):
+        keygen(path)
+    assert not path.exists()
+    monkeypatch.undo()
+    keygen(path)  # a retry works without manual cleanup
+
+
+def test_cli_creates_and_revokes_wpc_keys(tmp_path, monkeypatch, capsys):
+    import watchpost.__main__ as cli
+    path = tmp_path / "control.key"
+    keygen(path)
+    db = tmp_path / "cli.db"
+    cfg = tmp_path / "c.yaml"
+    lines = ["server:", f"  db_path: {db.as_posix()}", "  argon2_time_cost: 1",
+             "  argon2_memory_kib: 8", "  argon2_parallelism: 1", "monitors:",
+             "  - {name: p, type: ping, host: 127.0.0.1}", "plugins: [control]",
+             "plugin_settings:", f"  control: {{signing_key_file: '{path.as_posix()}'}}"]
+    cfg.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+    real = cli.load_plugins
+    monkeypatch.setattr(cli, "load_plugins", lambda config: real(config, _entry_points()))
+
+    def run(*argv):
+        monkeypatch.setattr("sys.argv", ["watchpost", "--config", str(cfg), *argv])
+        return cli.main()
+
+    assert run("--ingest-key-create", "nas01", "--ingest-key-scope", "wpc") == 0
+    key = capsys.readouterr().out.strip()
+    assert key.startswith("wpc_")
+    prefix = key.split("_")[1]
+    assert run("--ingest-key-revoke", prefix) == 0
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute("SELECT scope, revoked_at FROM ingest_keys").fetchone()
+    finally:
+        conn.close()
+    assert row[0] == "wpc" and row[1] is not None
+
+
 # ---- documentation and writing rules ----------------------------------------------------
 
 def test_spec_carries_the_test_vector():

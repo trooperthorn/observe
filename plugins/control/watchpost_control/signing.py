@@ -84,8 +84,16 @@ def write_key_file(path: str | Path, key: Ed25519PrivateKey) -> None:
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError as err:
         raise SigningError(f"{path} already exists; it is not overwritten") from err
-    with os.fdopen(fd, "wb") as f:
-        f.write(pem)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(pem)
+    except BaseException:
+        # Do not leave a partial key behind; the file was created by this call.
+        try:
+            os.unlink(str(path))
+        except OSError:
+            pass
+        raise
 
 
 def keygen(path: str | Path) -> str:
