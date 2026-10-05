@@ -38,7 +38,7 @@ from .infra_map import MapService
 from .infra_match import LivePort, Matcher, PortMatch
 from .infra_port import PortPages
 from .ingest.api import DenialAggregator, RateLimiter, build_router
-from .ingest.keys import IngestKeyError, create_key, list_keys, revoke_key
+from .ingest.keys import MARKER, IngestKeyError, create_key, list_keys, revoke_key
 from .ingest.schema import MAX_NAME
 from .plugins import PAGE_PREFIX, ROUTE_PREFIX, LoadedPlugins
 from .scheduler import Scheduler
@@ -399,7 +399,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         """Key ids, hosts and state. The secret part is never stored, so never listed."""
         return [{"id": k.prefix, "host": k.host, "created": k.created,
                  "created_by": k.created_by, "revoked_at": k.revoked_at,
-                 "last_used": k.last_used, "active": k.active}
+                 "last_used": k.last_used, "active": k.active, "scope": k.scope}
                 for k in await list_keys(store)]
 
     @app.post("/api/admin/keys", include_in_schema=False)
@@ -412,10 +412,18 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         host = body.get("host") if isinstance(body, dict) else None
         if not isinstance(host, str):
             return JSONResponse({"detail": "host is required"}, status_code=422)
+        scope = body.get("scope", MARKER) if isinstance(body, dict) else MARKER
         remote = request.client.host if request.client else ""
-        shown = {"host": host[:MAX_NAME]}
+        shown = {"host": host[:MAX_NAME], "scope": str(scope)[:8]}
+        if scope not in (MARKER, *plugins.scopes):
+            # Only wpi and the scopes of listed plugins can be issued; a disabled plugin's cannot.
+            await audit.record(store, "key_create_failed", actor=sess.username, method="POST",
+                               path="/api/admin/keys", status=422, remote=remote,
+                               detail={**shown, "reason": "unknown scope"})
+            return JSONResponse({"detail": "unknown key scope"}, status_code=422)
         try:
-            plaintext, info = await create_key(store, host, created_by=sess.username)
+            plaintext, info = await create_key(store, host, created_by=sess.username,
+                                               scope=scope)
         except IngestKeyError as err:
             await audit.record(store, "key_create_failed", actor=sess.username, method="POST",
                                path="/api/admin/keys", status=422, remote=remote,
@@ -428,9 +436,11 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             raise
         await audit.record(store, "key_created", actor=sess.username, method="POST",
                            path="/api/admin/keys", status=200, remote=remote,
-                           detail={"host": info.host, "key_id": info.prefix})
+                           detail={"host": info.host, "key_id": info.prefix,
+                                   "scope": info.scope})
         # The plaintext appears in this one response, which is sent with Cache-Control: no-store.
-        return JSONResponse({"id": info.prefix, "host": info.host, "key": plaintext})
+        return JSONResponse({"id": info.prefix, "host": info.host, "scope": info.scope,
+                             "key": plaintext})
 
     @app.post("/api/admin/keys/{key_id}/revoke", include_in_schema=False)
     async def admin_revoke_key(

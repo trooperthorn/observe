@@ -1,6 +1,6 @@
 # Field data from the Pockethernet app
 
-Status: design; the plugin loader, per-plugin migrations, plugin pages, the infrastructure tables with port keys and property history, monitor matching with conflict findings, map data with ageing and inferred dependencies, and the map, port and map admin pages are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
+Status: design; the Pockethernet report schema and key scope, the plugin loader, per-plugin migrations, plugin pages, the infrastructure tables with port keys and property history, monitor matching with conflict findings, map data with ageing and inferred dependencies, and the map, port and map admin pages are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
 Pockethernet Android app (repo `pocketethernet-app`) become properties of switch
 ports in watchpost, and how the mapping data in those results builds an
 infrastructure map with live availability and health.
@@ -204,6 +204,18 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 - **Acknowledging findings.** `POST /api/admin/infra/findings/ack` (admin session, CSRF token, body `switch_id`, `port_key`, `kind`) stores the acknowledged message in `infra_finding_acks`. It is audited as `infra_finding_acknowledged` or `infra_finding_ack_failed`. A finding that no longer exists cannot be acknowledged, and when the facts change the message changes and the finding shows as new. An acknowledged warning no longer turns a passing port to Warning. Acknowledging sends no alert.
 - **Map admin page.** It lists the unlinked switch queue with a choice of snmp, unifi_network, ping or tcp monitors, and the pending, rejected and refused dependency proposals. Accept and Reject use the existing routes; a rejected proposal can still be accepted.
 
+### Built: Pockethernet report schema and key scope (plugin slices 1 and 2)
+
+The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `pockethernet` in group `watchpost.plugins`, supported core versions `>=2026.9,<2027`) holds `schema.py` and `keys.py`. Core schema version 9 adds `ingest_keys.scope`. Details that the sketch above left open:
+
+- **Schema.** `pockethernet.report` version 1 has the envelope `schema`, `version`, `report_id`, `revision` and `taken_at_ms`, then `device`, `site` (the app's site model), `geo`, `wifi`, `steps`, `neighbors` (LLDP and CDP), `dhcp`, `link`, `poe`, `properties` and `tool_results`. Names carry units (`speed_mbps`, `pair_1_2_length_m`, `poe_load_w`, `lease_s`, `latitude_deg`, times in `_ms`). `last_tested_at` is carried as `last_tested_at_ms`, and the mapping slice turns it into the property.
+- **Strict.** Unknown fields are rejected at every level, because the phone and watchpost ship together. `properties` is the allowlist from the data model section, one typed field per name; `custom.<name>` is never accepted from a phone.
+- **Never accepted.** A key named `transcript`, `script_runs`, `scriptRuns`, `script_values` or similar, at any depth, rejects the whole report with a message that does not repeat the value.
+- **Caps.** 256 KiB per body (413), JSON nesting 16 (400), strings 1024 characters (names 128, notes 4096), 64 steps and fields, 8 neighbours, 32 tool results, 16 addresses per list. Control characters are refused (notes may keep a newline), and NaN and the infinities are refused, both as JSON literals and as floats.
+- **Location and Wi-Fi** are accepted, as decided. They are stored with the report and never become port properties.
+- **Key scope.** `wpf_<prefix>_<secret>` keys are stored in `ingest_keys` with scope `wpf`, bound to a device label in the host column. The core checks the marker and the stored scope, so `verify_key` and `key_host` for `wpi` refuse a `wpf` key and the plugin's `verify_field_key` refuses a `wpi` key. Admins issue them from the admin create route with `scope: "wpf"` or with `--ingest-key-scope wpf`, and only when the plugin is listed.
+- **Not built yet.** The upload route, the report store, the mapping to properties and links, and the pages. The plugin is not yet copied into the Docker image.
+
 ## Build order
 
 **watchpost core.**
@@ -216,8 +228,8 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 7. Map and port pages (built).
 
 **Pockethernet plugin.**
-1. Report schema.
-2. Key scope.
+1. Report schema (built).
+2. Key scope (built).
 3. Upload endpoint.
 4. Report to properties and edges.
 5. Report and jack pages.

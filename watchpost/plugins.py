@@ -191,6 +191,11 @@ class LoadedPlugins:
     def names(self) -> list[str]:
         return [p.name for p in self.plugins]
 
+    @property
+    def scopes(self) -> list[str]:
+        """Every key scope marker the listed plugins registered."""
+        return [s.marker for p in self.plugins for s in p.key_scopes]
+
     def get(self, name: str) -> LoadedPlugin | None:
         return next((p for p in self.plugins if p.name == name), None)
 

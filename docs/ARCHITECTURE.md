@@ -91,7 +91,10 @@ tables.
 Version 2 adds `hosts`, `host_samples`, `host_sources` and `host_events`.
 Version 3 adds `ingest_keys`, `users`, `sessions` and `audit`, and version 4 adds
 `ingest_batches`, version 5 adds `plugin_schema`, and version 6 adds the
-infrastructure tables (see "Infrastructure map core"). Existing history
+infrastructure tables (see "Infrastructure map core"). Version 9 adds the
+`scope` column to `ingest_keys`; existing keys get `wpi`. A migration step may
+be a function as well as a statement, so an `ALTER TABLE` can check first and
+stay safe to run again. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
 
 Both retention settings must be at least 1 day; config validation rejects 0 and negative values.
@@ -119,6 +122,21 @@ revoked key fails the same way a wrong one does. Last use is recorded only
 after a successful check. The code is `watchpost/ingest/keys.py`. Keys are managed on the admin screen,
 and also by `--ingest-key-create`, `--ingest-key-list` and
 `--ingest-key-revoke` from the command line.
+
+A key also has a scope. The marker is the scope (`wpi` for host ingest, `wpf`
+for Pockethernet field reports) and the scope is stored in the `scope` column
+too. `verify_key` and `key_host` take the scope the caller needs, and accept a
+key only when its marker and its stored scope both equal it, so a key of one
+scope cannot be used on another surface, even with its marker edited. For a
+scope other than `wpi` the host column holds the device label. A plugin
+registers a scope through its `key_scopes` hook, and the admin create route and
+the command line issue only `wpi` or a scope of a listed plugin. The Pockethernet
+plugin's helpers are in `plugins/pockethernet/watchpost_pockethernet/keys.py`,
+and its report schema, `pockethernet.report` version 1, is in `schema.py` next to
+it. `parse_report` checks size, nesting depth and JSON before validation, and the
+model rejects unknown fields, SSH transcripts and script values, properties
+outside the allowlist, over-long strings and lists, control characters and
+non-finite numbers.
 
 ## Boot and crash events
 
@@ -306,7 +324,8 @@ answers (at most one per peer per minute, with a count), and `plugin_failed`
 when a route raises. Reads that succeed are not audited, like the core read
 routes. `GET /api/plugins` lists loaded plugins and the navigation entries the
 caller may see. Key-authenticated plugin routes, such as phone uploads, arrive
-with the key scope slice; until then every plugin route needs a session.
+with the upload endpoint slice; until then every plugin route needs a session.
+The key scope itself is built: see "Ingest keys".
 
 ## Infrastructure map core
 

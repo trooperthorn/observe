@@ -136,7 +136,8 @@ def test_key_creation_and_revocation_each_write_one_row(tmp_path, monkeypatch, c
     try:
         rows = conn.execute("SELECT kind, actor, detail FROM audit ORDER BY id").fetchall()
         assert [(k, a) for k, a, _ in rows] == [("key_created", "cli"), ("key_revoked", "cli")]
-        assert json.loads(rows[0][2]) == {"host": "nas01", "key_id": prefix}
+        assert json.loads(rows[0][2]) == {"host": "nas01", "key_id": prefix,
+                                       "scope": "wpi"}
         assert plaintext.split("_", 2)[2] not in json.dumps(rows)
     finally:
         conn.close()

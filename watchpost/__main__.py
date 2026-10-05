@@ -121,8 +121,21 @@ def _ingest_keys(config, args) -> int:  # type: ignore[no-untyped-def]
 
     async def run(store: Store) -> int:
         if args.ingest_key_create:
+            if args.ingest_key_scope != "wpi":
+                loaded = _plugins(config)
+                if loaded is None:
+                    return 2
+                if args.ingest_key_scope not in loaded.scopes:
+                    await audit.record(store, "key_create_failed", actor="cli",
+                                       detail={"host": args.ingest_key_create[:128],
+                                               "scope": args.ingest_key_scope[:8],
+                                               "reason": "unknown scope"})
+                    print(f"error: scope {args.ingest_key_scope!r} is not registered by a "
+                          "listed plugin", file=sys.stderr)
+                    return 2
             try:
-                key, info = await create_key(store, args.ingest_key_create, created_by="cli")
+                key, info = await create_key(store, args.ingest_key_create, created_by="cli",
+                                             scope=args.ingest_key_scope)
             except IngestKeyError as err:
                 await audit.record(store, "key_create_failed", actor="cli",
                                    detail={"host": args.ingest_key_create[:128],
@@ -130,7 +143,8 @@ def _ingest_keys(config, args) -> int:  # type: ignore[no-untyped-def]
                 print(f"error: {err}", file=sys.stderr)
                 return 2
             await audit.record(store, "key_created", actor="cli",
-                               detail={"host": info.host, "key_id": info.prefix})
+                               detail={"host": info.host, "key_id": info.prefix,
+                                       "scope": info.scope})
             print(key)
             print(f"bound to host {info.host}, id {info.prefix}. This is the only time the "
                   "key is shown; it is stored hashed.", file=sys.stderr)
@@ -150,7 +164,7 @@ def _ingest_keys(config, args) -> int:  # type: ignore[no-untyped-def]
             state = "active" if k.active else "revoked"
             used = "never" if k.last_used is None else time.strftime(
                 "%Y-%m-%d %H:%M:%S", time.localtime(k.last_used))
-            print(f"{k.prefix}  {state:7}  {k.host}  last used {used}")
+            print(f"{k.prefix}  {state:7}  {k.scope}  {k.host}  last used {used}")
         return 0
 
     store = Store(config.server.db_path)
@@ -231,6 +245,9 @@ def main() -> int:
                     help="with --discover: do not query discovery.directory")
     ap.add_argument("--ingest-key-create", metavar="HOST",
                     help="create an ingest key bound to HOST, print it once, and exit")
+    ap.add_argument("--ingest-key-scope", metavar="SCOPE", default="wpi",
+                    help="with --ingest-key-create: wpi (host ingest, the default) or a scope "
+                         "a listed plugin registers, such as wpf; then HOST is the device label")
     ap.add_argument("--ingest-key-revoke", metavar="ID",
                     help="revoke the ingest key with this id (see --ingest-key-list) and exit")
     ap.add_argument("--ingest-key-list", action="store_true",

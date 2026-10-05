@@ -1,0 +1,14 @@
+[project]
+name = "watchpost-pockethernet"
+dynamic = ["version"]
+description = "Pockethernet field reports for watchpost"
+requires-python = ">=3.12"
+
+[project.entry-points."watchpost.plugins"]
+pockethernet = "watchpost_pockethernet:plugin"
+
+[tool.setuptools]
+packages = ["watchpost_pockethernet"]
+
+[tool.setuptools.dynamic]
+version = {attr = "watchpost_pockethernet.__version__"}

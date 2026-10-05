@@ -422,6 +422,17 @@ that host name. `--ingest-key-list` shows each key's id, host, state and last
 use, and `--ingest-key-revoke ID` revokes one. The keys are accepted only
 by `POST /api/ingest`.
 
+A key has a scope, shown by its marker. `wpi` is host ingest. A listed plugin
+may register another scope; the Pockethernet plugin registers `wpf`, for field
+report uploads. Create one with `--ingest-key-scope wpf` (HOST is then the
+device label, for example the phone's name) or with the `scope` field on the
+admin screen's create call. Only `wpi` and the scopes of listed plugins can be
+issued. A `wpf` key is refused by host ingest and a `wpi` key is refused for
+field reports, whatever the label says. The `pockethernet` plugin lives in
+`plugins/pockethernet` and is installed into the image with
+`pip install ./plugins/pockethernet`; it needs `plugins: [pockethernet]` to load.
+The upload endpoint arrives in a later slice.
+
 Logins use Argon2id password hashes and server-side sessions. Create the first
 admin with `python -m watchpost --config watchpost.yaml --create-admin NAME`; it
 reads the password (12 characters or more) from `WATCHPOST_ADMIN_PASSWORD` or a

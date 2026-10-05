@@ -1,0 +1,45 @@
+{
+  "schema": "pockethernet.report",
+  "version": 1,
+  "report_id": "7f3c2a10-5b1e-4c52-9d1a-0a6e2f9b8c41",
+  "revision": 1,
+  "taken_at_ms": 1759579200000,
+  "device": {"serial": 1234567, "mac": "02:00:12:D6:87", "hw_version": 3, "sw_version": 207},
+  "preset_name": "Full wall jack test",
+  "status": "complete",
+  "notes": "Jack behind the reception desk.\nPatched on Friday.",
+  "location_label": "HQ/Main/Room 204/PP-A/12",
+  "warnings": ["Pair 7-8 skew is high"],
+  "site": {"site": "HQ", "building": "Main", "room": "Room 204", "panel": "PP-A", "port_id": "HQ/Main/Room 204/PP-A/12"},
+  "geo": {"latitude_deg": 52.370216, "longitude_deg": 4.895168, "accuracy_m": 8.0, "fix_time_ms": 1759579190000},
+  "wifi": {"ssid": "hq-staff", "bssid": "aa:bb:cc:dd:ee:ff", "rssi_dbm": -58, "channel": 36},
+  "steps": [
+    {"step": "WIREMAP", "label": "Wire map", "status": "ok", "fields": [
+      {"name": "pair_1_2_length", "value": "42.5", "unit": "m"},
+      {"name": "result", "value": "pass", "unit": null}]},
+    {"step": "POE", "label": "PoE", "status": "warn", "error": "No class detected", "fields": []}
+  ],
+  "neighbors": [
+    {"protocol": "lldp", "device_id": "00:11:22:33:44:55", "port_id": "Gi1/0/5", "system_name": "sw-access-02",
+     "description": "GigabitEthernet1/0/5", "management_addresses": ["10.20.0.12"], "vlan_id": 20, "voice_vlan_id": 30,
+     "source_mac": "00:11:22:33:44:55", "vendor": "Example Networks",
+     "lldp": {"chassis_id_subtype": 4, "chassis_id": "00:11:22:33:44:55", "port_id_subtype": 5, "port_id": "Gi1/0/5",
+              "ttl_s": 120, "port_description": "GigabitEthernet1/0/5", "system_name": "sw-access-02",
+              "management_address": "10.20.0.12", "port_vlan_id": 20}}
+  ],
+  "dhcp": {"source": "dhcp", "address": "10.20.4.77", "subnet_mask": "255.255.255.0", "routers": ["10.20.4.1"],
+           "dns_servers": ["10.20.0.2"], "server_id": "10.20.0.2", "domain_name": "lab.example", "lease_s": 86400},
+  "link": {"link_up": true, "speed_mbps": 1000, "full_duplex": true, "mdix": true},
+  "poe": {"poe_class": 4, "voltage_v": 52.1, "load_w": 6.4, "inferred": false},
+  "properties": {
+    "jack_label": "HQ/Main/Room 204/PP-A/12", "panel": "PP-A", "room": "Room 204", "site": "HQ",
+    "cable_verdict": "pass", "pair_1_2_length_m": 42.5, "pair_3_6_length_m": 42.1, "pair_4_5_length_m": 41.8,
+    "pair_7_8_length_m": 42.0, "link_speed_mbps": 1000, "duplex": "full", "poe_class": 4, "poe_voltage_v": 52.1,
+    "poe_load_w": 6.4, "vlan": 20, "voice_vlan": 30, "dhcp_ok": true, "dns_ok": true,
+    "last_tested_at_ms": 1759579200000, "tester_serial": 1234567
+  },
+  "tool_results": [
+    {"tool": "ping", "title": "Ping gateway", "target": "10.20.4.1", "started_ms": 1759579210000, "verdict": "ok",
+     "headline": "Gateway answers in 1 ms", "fields": [{"name": "avg", "value": "1.0", "unit": "ms"}], "details": ["4 of 4 replies"]}
+  ]
+}

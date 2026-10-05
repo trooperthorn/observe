@@ -14,7 +14,7 @@ import json
 import sqlite3
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -186,7 +186,18 @@ ABSENT_REASON = "not present on this host"
 # freeze boot state.
 MAX_FUTURE_SKEW_S = 300.0
 
-MIGRATIONS: dict[int, tuple[str, ...]] = {
+# Keys gain a scope: wpi (host ingest, the default for every existing key) or a marker that a
+# plugin registers, such as wpf. For a plugin scope the host column holds the device label.
+def _add_key_scope(db: sqlite3.Connection) -> None:
+    # ALTER TABLE has no IF NOT EXISTS, so check first; every step must be safe to run again.
+    columns = {row[1] for row in db.execute("PRAGMA table_info(ingest_keys)")}
+    if "scope" not in columns:
+        db.execute("ALTER TABLE ingest_keys ADD COLUMN scope TEXT NOT NULL DEFAULT 'wpi'")
+
+
+KEY_SCOPE_TABLES = (_add_key_scope,)
+
+MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = {
     1: BASELINE,
     2: HOST_TABLES,
     3: ACCESS_TABLES,
@@ -195,6 +206,7 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     6: INFRA_TABLES,
     7: MAP_DEPENDENCY_TABLES,
     8: FINDING_ACK_TABLES,
+    9: KEY_SCOPE_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
@@ -219,7 +231,10 @@ def migrate(db: sqlite3.Connection) -> None:
             db.execute("BEGIN")
             try:
                 for stmt in MIGRATIONS[version]:
-                    db.execute(stmt)
+                    if callable(stmt):
+                        stmt(db)
+                    else:
+                        db.execute(stmt)
                 db.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
             except BaseException:
                 db.execute("ROLLBACK")
