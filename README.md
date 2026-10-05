@@ -6,6 +6,7 @@ before paging, a one-glance dashboard, and alerts, in a single container.
 
 It is an independent implementation built from publicly described behaviour.
 It shares no code with, and is not affiliated with, any SolarWinds product.
+The source lives at https://github.com/trooperthorn/observe.
 
 ## What it checks
 
