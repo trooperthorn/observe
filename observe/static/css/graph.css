@@ -16,3 +16,21 @@
 .selectedcard h2 { margin-top: 0; }
 .viewbtn[aria-pressed="true"] { font-weight: 700; text-decoration: underline; }
 @media (max-width: 900px) { .graphcols { grid-template-columns: minmax(0, 1fr); } }
+
+/* Map page layers, nodes and edges. */
+.mappage { padding: 0 1rem 2rem; max-width: 80rem; margin: 0 auto; }
+.layers { position: relative; }
+.layers svg.edges { position: absolute; top: 0; left: 0; pointer-events: none; }
+.layers .layer, .layers .row { position: relative; }
+.layers .row { display: flex; flex-wrap: wrap; gap: .75rem; }
+.node { background: var(--o-surface); border: 1px solid var(--o-border); border-left: 4px solid var(--o-pending);
+        border-radius: 8px; padding: .5rem .7rem; min-width: 12rem; max-width: 22rem; overflow-wrap: anywhere; }
+.node.up { border-left-color: var(--o-up); } .node.warn { border-left-color: var(--o-dot-warn); }
+.node.down { border-left-color: var(--o-down); } .node.unreachable { border-left-color: var(--o-unreach); }
+.node-title { font-weight: 600; }
+.node-state { font-size: .85rem; }
+ul.chips { list-style: none; margin: .3rem 0 0; padding: 0; font-size: .8rem; }
+ul.chips li { padding: .1rem 0; }
+.edge { stroke: var(--o-text-muted); stroke-width: 1.5; }
+.edge.stale { stroke-dasharray: 5 4; opacity: .6; }
+.mappage table, .hostpage table { overflow-wrap: anywhere; }

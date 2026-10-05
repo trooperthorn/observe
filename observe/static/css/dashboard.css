@@ -1,5 +1,5 @@
 /* Dashboard (Overview) layout and monitor cards. Tokens only, no colour literals.
-   Loaded after components.css and app.css, so these rules win over the legacy ones. */
+   Loaded after components.css so these rules come last. */
 .dash { max-width: 1100px; margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4); }
 .dash-title h1 { font-size: var(--o-fs-h); }
 .dash-filter { display: flex; flex-wrap: wrap; gap: var(--o-s3); align-items: center; }
@@ -38,3 +38,38 @@ ul.group { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--o-
             border-radius: var(--o-radius-sm); }
 .tile-ctl .tile-name { flex: 1; font-weight: 600; }
 .tile-hide { display: flex; align-items: center; gap: var(--o-s1); color: var(--o-text-muted); }
+
+/* Monitor card details, sparkline and lists. */
+#summary { display: flex; gap: .5rem; flex-wrap: wrap; }
+.filter { margin-left: auto; font-size: .85rem; color: var(--o-text-muted); }
+main, #events-panel, #capacity-panel, footer { max-width: 1100px; margin: 0 auto; padding: 0 1rem; }
+.mon { background: var(--o-surface); border: 1px solid var(--o-border); border-radius: 10px;
+       padding: .6rem .75rem; border-left: 4px solid var(--o-pending); min-width: 0; }
+.mon.up { border-left-color: var(--o-up); } .mon.warn { border-left-color: var(--o-dot-warn); }
+.mon.down { border-left-color: var(--o-down); }
+.mon.unreachable { border-left-color: var(--o-unreach); }
+.unreachable .dot { background: var(--o-unreach); }
+.fc { font-size: .78rem; color: var(--o-text-muted); margin: .2rem 0 0 1.1rem; }
+.fc.soon { color: var(--o-warn); } .fc.now { color: var(--o-down); }
+.head { all: unset; cursor: pointer; display: flex; align-items: center; gap: .5rem; width: 100%; }
+.head:focus-visible { outline: 2px solid var(--o-text-muted); outline-offset: 2px; }
+.dot { width: .6rem; height: .6rem; border-radius: 50%; background: var(--o-pending); flex: none; }
+.up .dot { background: var(--o-up); } .warn .dot { background: var(--o-dot-warn); }
+.down .dot { background: var(--o-down); }
+.name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.val { font-variant-numeric: tabular-nums; color: var(--o-text-muted); font-size: .85rem; }
+.sub { color: var(--o-text-muted); font-size: .78rem; margin: .15rem 0 .25rem 1.1rem;
+       overflow-wrap: anywhere; }
+.msg { font-size: .85rem; margin-left: 1.1rem; overflow-wrap: anywhere; }
+.more { margin: .5rem 0 0 1.1rem; }
+.spark { width: 100%; height: 60px; display: block; background: var(--o-page); border-radius: 6px; }
+.spark polyline { fill: none; stroke: var(--o-text-muted); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.spark rect.fail { fill: var(--o-down); opacity: .35; }
+.spark rect.warn { fill: var(--o-dot-warn); opacity: .35; }
+.avail { font-size: .8rem; color: var(--o-text-muted); margin: .3rem 0; }
+ol#capacity, ol#events, ol.mon-events { list-style: none; padding: 0; margin: 0; font-size: .85rem; }
+ol#capacity li, ol#events li, ol.mon-events li { padding: .3rem 0; border-bottom: 1px solid var(--o-border);
+                                  overflow-wrap: anywhere; }
+.when { color: var(--o-text-muted); font-variant-numeric: tabular-nums; margin-right: .4rem; }
+footer { color: var(--o-text-muted); font-size: .75rem; padding: 1.5rem 1rem; }
+a.hostlink { margin-left: .5rem; font-size: .8rem; color: var(--o-text-muted); }

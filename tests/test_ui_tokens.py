@@ -36,11 +36,6 @@ LIGHT_ONLY = [f"--o-{n}" for n in (
     "radius", "radius-sm", "radius-pill", "s1", "s2", "s3", "s4", "s5", "s6", "maxw", "font",
     "mono", "fs-xs", "fs-sm", "fs-base", "fs-title", "fs-h", "fs-kpi", "dot-warn", "ink", "dur")] + [
     "--cat-6", "--g-dim"]
-LEGACY = {"--bg": "--o-page", "--card": "--o-surface", "--fg": "--o-text",
-          "--muted": "--o-text-muted", "--line": "--o-border", "--up": "--o-up",
-          "--warn": "--o-dot-warn", "--down": "--o-down", "--pending": "--o-pending",
-          "--unreach": "--o-unreach"}
-
 
 def _block(text: str, opener: str) -> str:
     """The body of the first rule whose selector line starts with opener, brace matched."""
@@ -89,24 +84,16 @@ def test_manual_light_wins_over_a_dark_system():
     assert ':root:not([data-theme="light"])' in TOKENS
 
 
-def test_legacy_aliases_point_at_the_new_tokens_and_are_not_redefined_in_dark():
-    for old, new in LEGACY.items():
-        assert LIGHT[old] == f"var({new})", old
-        assert old not in AUTO_DARK and old not in MANUAL_DARK, old
-
-
 def test_reduced_motion_zeroes_the_transition_token():
     assert re.search(r"prefers-reduced-motion: reduce\)\s*\{\s*:root\s*\{\s*--o-dur:\s*0ms", TOKENS)
 
 
-def test_app_css_no_longer_defines_colour_tokens_or_hard_codes_hex():
-    css = (STATIC / "app.css").read_text(encoding="utf-8")
-    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
-    assert not re.search(r"(?m)^\s*--[a-z-]+\s*:", css)
-    assert not re.search(r"#[0-9a-fA-F]{3,8}\b", css)
-    base = re.sub(r"/\*.*?\*/", "", (STATIC / "css" / "base.css").read_text(encoding="utf-8"),
-                  flags=re.S)
-    assert not re.search(r"#[0-9a-fA-F]{3,8}\b", base)
+def test_stylesheets_hard_code_no_hex_outside_tokens():
+    for css in (STATIC / "css").glob("*.css"):
+        if css.name == "tokens.css":
+            continue
+        text = re.sub(r"/\*.*?\*/", "", css.read_text(encoding="utf-8"), flags=re.S)
+        assert not re.search(r"#[0-9a-fA-F]{3,8}", text), css.name
 
 
 # ---- contrast ---------------------------------------------------------------------------
@@ -200,14 +187,13 @@ def test_the_amber_fill_is_never_text():
     # --o-dot-warn is a fill for dots only, so it is deliberately not held to a text ratio on
     # white. Its text counterpart --o-warn is checked above. Make sure no stylesheet uses it
     # as a text colour.
-    for css in [STATIC / "app.css", *(STATIC / "css").glob("*.css")]:
+    for css in (STATIC / "css").glob("*.css"):
         text = re.sub(r"/\*.*?\*/", "", css.read_text(encoding="utf-8"), flags=re.S)
         for m in re.finditer(r"(?<![-\w])color\s*:\s*var\(--(?:o-dot-warn|warn)\)", text):
             line = text[max(0, text.rfind("\n", 0, m.start())):m.end()]
             if "border" in line or "background" in line:
                 continue
-            # The legacy .fc.soon rule predates the tokens and is restyled in slice S5.
-            assert ".fc.soon" in line, line
+            raise AssertionError(line)
 
 
 # ---- pages and the theme module ---------------------------------------------------------
@@ -221,7 +207,7 @@ def _client(tmp_path: Path) -> TestClient:
     return TestClient(app, base_url="https://testserver")
 
 
-def test_stylesheets_are_served_as_css_and_ordered_tokens_base_legacy(tmp_path: Path):
+def test_stylesheets_are_served_as_css_and_ordered_tokens_then_base(tmp_path: Path):
     client = _client(tmp_path)
     for name in ("tokens.css", "base.css"):
         r = client.get(f"/static/css/{name}")
@@ -229,8 +215,7 @@ def test_stylesheets_are_served_as_css_and_ordered_tokens_base_legacy(tmp_path: 
     pages = sorted(STATIC.glob("*.html")) + sorted(
         (ROOT / "plugins").glob("*/*/pages/*.html"))
     assert len(pages) >= 10
-    order = ['href="/static/css/tokens.css"', 'href="/static/css/base.css"',
-             'href="/static/app.css"']
+    order = ['href="/static/css/tokens.css"', 'href="/static/css/base.css"']
     for page in pages:
         text = page.read_text(encoding="utf-8")
         positions = [text.find(o) for o in order]

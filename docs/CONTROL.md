@@ -95,6 +95,8 @@ These routes need an admin session, and every POST needs the CSRF token (`X-CSRF
 
 ## Setup
 
+The normal route is the Add host wizard at `/hosts/new` (steps 1 and 2 below once, then the wizard for each host). Steps 3 to 5 are the manual route for a host that cannot use the wizard, and they are what the install script does for you.
+
 1. Install the plugin into the Observe image (`pip install ./plugins/control`) and list it as `plugins: [control]` in the Observe config.
 2. Create the signing key: `python -m observe --control-keygen /run/secrets/observe_control_key`. The command prints only the public key. Keep the file readable by the Observe user alone.
 3. Put the printed `ed25519:...` public key in each host's `control.toml` as `observe_public_key`, together with that host's allowlist.

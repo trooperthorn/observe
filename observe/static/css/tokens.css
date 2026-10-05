@@ -33,10 +33,6 @@
   --g-label-fg: #1c2230; --g-dim: .2;
   /* motion */
   --o-dur: 120ms;
-  /* legacy aliases for pages not yet migrated, removed in the final slice */
-  --bg: var(--o-page); --card: var(--o-surface); --fg: var(--o-text); --muted: var(--o-text-muted);
-  --line: var(--o-border); --up: var(--o-up); --warn: var(--o-dot-warn); --down: var(--o-down);
-  --pending: var(--o-pending); --unreach: var(--o-unreach);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {

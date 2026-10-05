@@ -66,6 +66,14 @@ fastest way to prove credentials and firewall paths before running the service.
 Add `--only <slug>` to poll one monitor. The exit code is 0, 1 (a WARN), or
 2 (a FAIL), so it also works from cron or a script.
 
+Setting up a host: sign in at `http://<host>:8080/login`, open `/hosts/new` (Hosts, Add host in the
+navigation) and follow the wizard. It asks for the host name and platform, whether to install the
+agent and the control daemon, and the control allowlist. It then shows one install command headed with
+the host name, which you copy and run once on that machine. The install script refuses to run on a
+machine whose host name differs and on the Observe host itself, and the page shows live progress
+until the host reports data. You do not create keys or write `control.toml` by hand. See "Adding a
+host" below.
+
 Dashboard: `http://<host>:8080/`. The Customize button lets each signed-in user reorder and hide
 the group cards and the capacity, findings and events cards with Up, Down and Hide controls; the
 layout is saved per user on the server (`GET`, `PUT` and `DELETE /api/ui/layout/dashboard`), so it
@@ -475,7 +483,9 @@ have is shown as not present without making the host look worse, and a host that
 has stopped pushing is Critical. These routes need a login session; basic auth
 does not open them. They only read; no action that changes a host exists.
 
-Ingest keys are managed on the admin screen (below) or from the command line.
+Hosts set up through `/hosts/new` get their keys automatically. Ingest keys are also managed on the
+admin screen (below) or from the command line, which is the manual route for a host that cannot use
+the wizard.
 `python -m observe --config observe.yaml --ingest-key-create HOST` prints a
 new key once and stores only a hash; the key works for ingest and only for
 that host name. `--ingest-key-list` shows each key's id, host, state and last
@@ -508,7 +518,7 @@ command per action, 10 commands per hour and one reboot per 15 minutes. An admin
 Control section of the host page (`fan.set_floor`, `fan.set_mode`, `service.restart` or `host.reboot`): the page
 validates the parameters against what the host last reported, asks for confirmation in a dialog, and for a reboot
 requires the host name typed exactly. The same section lists the host's command history with each state and a
-Cancel button while a reboot is scheduled. The section is the last card of the host page, shows states as status chips, and reports a refusal as an inline notice and a toast. The admin routes need an admin session and the CSRF token. The signing format and a test vector are in `docs/CONTROL.md`. Setup in short: install the plugin, run `--control-keygen`, pin the printed public key in each host's `control.toml`, and create one `wpc` key per host with `--ingest-key-create HOST --ingest-key-scope wpc`. The endpoints, setup steps and threat notes are in `docs/CONTROL.md` and `THREAT-MODEL.md`.
+Cancel button while a reboot is scheduled. The section is the last card of the host page, shows states as status chips, and reports a refusal as an inline notice and a toast. The admin routes need an admin session and the CSRF token. The signing format and a test vector are in `docs/CONTROL.md`. Setup in short: install the plugin and run `--control-keygen` once, then add each host with the wizard at `/hosts/new`, which pins the public key in that host's `control.toml` and mints its `wpc` key. The manual steps remain in `docs/CONTROL.md` for a host that cannot use the wizard. The endpoints, setup steps and threat notes are in `docs/CONTROL.md` and `THREAT-MODEL.md`.
 
 Logins use Argon2id password hashes and server-side sessions. Create the first
 admin with `python -m observe --config observe.yaml --create-admin NAME`; it

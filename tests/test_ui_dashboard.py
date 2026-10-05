@@ -43,7 +43,7 @@ def test_dashboard_page_has_every_id_and_loads_the_modules_in_order(tmp_path: Pa
         assert f'id="{i}"' in html, i
     order = ['href="/static/css/tokens.css"', 'href="/static/css/base.css"',
              'href="/static/css/shell.css"', 'href="/static/css/components.css"',
-             'href="/static/app.css"', 'href="/static/css/dashboard.css"']
+             'href="/static/css/dashboard.css"']
     pos = [html.find(o) for o in order]
     assert all(p >= 0 for p in pos) and pos == sorted(pos)
     assert '<script type="module" src="/static/app.js"></script>' in html

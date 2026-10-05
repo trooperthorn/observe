@@ -1,5 +1,5 @@
 /* Admin, audit, map admin and port pages. Tokens only, no colour literals. Loaded after
-   components.css and app.css, so these rules win over the legacy ones. */
+   components.css so these rules come last. */
 .admin-main { max-width: var(--o-maxw); margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4); }
 .admin-main h1 { font-size: var(--o-fs-h); margin: 0; }
 .admin-title { display: grid; gap: var(--o-s1); }

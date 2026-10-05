@@ -1,5 +1,5 @@
 /* Host page layout and the Control card. Tokens only, no colour literals. Loaded after
-   components.css and app.css, so these rules win over the legacy ones. */
+   components.css so these rules come last. */
 .host-main { max-width: 1100px; margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4); }
 .host-body { display: grid; gap: var(--o-s4); }
 .host-title h1 { display: flex; align-items: center; gap: var(--o-s2); }
@@ -14,3 +14,15 @@
 .ctl .card-sub { margin: var(--o-s2) 0; }
 .ctl h4 { margin: var(--o-s4) 0 var(--o-s2); font-size: var(--o-fs-title); }
 .ctl-notice { margin-top: var(--o-s3); }
+
+.hostpage { padding: 0 1rem 2rem; max-width: 70rem; margin: 0 auto; }
+.hostpage .banner { margin: 1rem 0; padding: .6rem .8rem; border-radius: 6px;
+                    border: 1px solid var(--o-border); background: var(--o-surface); }
+.hostpage .banner.critical { border-color: var(--o-down); }
+.hostpage .banner.warning { border-color: var(--o-dot-warn); }
+table.items { width: 100%; border-collapse: collapse; font-size: .88rem; }
+table.items td, table.items th { text-align: left; padding: .2rem .4rem;
+                                 border-top: 1px solid var(--o-border); }
+table.items td.num { font-variant-numeric: tabular-nums; }
+.stalemark { color: var(--o-text-muted); font-style: italic; }
+.when { color: var(--o-text-muted); font-variant-numeric: tabular-nums; margin-right: var(--o-s1); }

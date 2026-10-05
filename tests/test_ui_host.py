@@ -18,7 +18,7 @@ def test_host_page_markup_loads_styles_in_order_and_modules():
     html = _read("host.html")
     order = ['href="/static/css/tokens.css"', 'href="/static/css/base.css"',
              'href="/static/css/shell.css"', 'href="/static/css/components.css"',
-             'href="/static/app.css"', 'href="/static/css/host.css"']
+             'href="/static/css/host.css"']
     pos = [html.find(o) for o in order]
     assert all(p >= 0 for p in pos) and pos == sorted(pos)
     for ident in ("summary", "shell-nav", "page", "control", "footer"):

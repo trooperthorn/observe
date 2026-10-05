@@ -27,7 +27,7 @@ PAGES = {
 }
 ORDER = ['href="/static/css/tokens.css"', 'href="/static/css/base.css"',
          'href="/static/css/shell.css"', 'href="/static/css/components.css"',
-         'href="/static/app.css"', 'href="/static/css/admin.css"']
+         'href="/static/css/admin.css"']
 
 
 @pytest.fixture

@@ -26,3 +26,9 @@
 .shell-link[aria-current="page"] { background: var(--o-accent-tint); color: var(--o-accent);
                                    font-weight: 600; }
 @media (pointer: coarse) { .shell-link { min-height: 44px; } }
+/* The sticky page header row. */
+header {
+  position: sticky; top: 0; z-index: 1; background: var(--o-page);
+  display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center;
+  padding: .75rem 1rem; border-bottom: 1px solid var(--o-border);
+}

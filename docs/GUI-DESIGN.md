@@ -14,7 +14,7 @@ Abbreviations: `SRC` = `ha_Int_soc/custom_components/ha_soc/frontend/src`, `OBS`
 | --- | --- | --- |
 | The CSP is `default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'` | `ipMontior/observe/web.py:135` | No `style-src` is set, so it falls back to `'self'`. That blocks inline `<style>` and `style="..."` attributes. Setting `el.style.x` from JS through the CSSOM is still allowed, but avoid it: use classes and data attributes. Scripts must be same-origin files. Canvas is allowed. `form-action 'none'` means every form submits through `fetch`, never natively. |
 | Pages load classic scripts (`<script src=...>`, `"use strict"`), not modules. Shared helpers go through globals, for example `infra-common.js` before `map.js`. | `OBS/map.html`, `OBS/host.html` | The owner asked for ES modules. `<script type="module" src="/static/...">` is allowed under `'self'`. The move is slice S1, done for the map, port and map admin pages: `js/dom.js`, `js/api.js` and `infra-common.js` are modules, and the map entry module is `pages/map.js`. The other pages still load classic scripts. |
-| Theme before slice S2 was `:root` tokens plus `@media (prefers-color-scheme: dark)` in `app.css`; since S2 the tokens live in `css/tokens.css` and the old names are aliases. Status tokens were `--up --warn --down --pending --unreach`. Pills are white text on a filled colour. Monitor cards use a 4px left border. | `OBS/app.css:1-11, 22-35` | The token rename keeps the old names as aliases for one release, so the pages can migrate one slice at a time. |
+| Theme before slice S2 was `:root` tokens plus `@media (prefers-color-scheme: dark)` in `app.css`; since S2 the tokens live in `css/tokens.css` and the old names were aliases until S15 removed them. Status tokens were `--up --warn --down --pending --unreach`. Pills are white text on a filled colour. Monitor cards use a 4px left border. | `OBS/app.css:1-11, 22-35` | The token rename keeps the old names as aliases for one release, so the pages can migrate one slice at a time. |
 | The map is a layered (tiered) layout built with DOM boxes. Every node shows its state in words. There is also a link table. | `OBS/pages/map.js:1-60`, `OBS/map.html` | The force graph is added as an extra view. The tier view and the table stay: the table is the accessible equivalent. |
 | Reboot already uses a dialog where you type the host name, built with `textContent` only. | `OBS/host-control.js` (around lines 100-120) | This becomes the standard "dangerous confirm" dialog component. |
 | Page tests already assert CSP-safe static markup and render hostile strings. | `ipMontior/tests/test_infra_pages.py:1-30` (`HOSTILE`, `PAGES`) | Each slice extends these TestClient and static-scan tests. |
@@ -85,7 +85,7 @@ observe/static/
   pages/*.js          one entry module per page (dashboard.js, host.js, map.js, ...)
 ```
 
-Each HTML page loads `tokens.css`, `base.css` and `components.css`, then exactly one `<script type="module" src="/static/pages/x.js">`. `app.css` is kept as a shim of legacy aliases until the last page has migrated, then deleted.
+Each HTML page loads `tokens.css`, `base.css` and `components.css`, then exactly one `<script type="module" src="/static/pages/x.js">`. `app.css` was a shim of legacy aliases and was deleted in S15; its remaining rules moved into `components.css`, `shell.css` and the page sheets, rewritten with `--o-*` tokens.
 
 ### 2.2 Tokens (`tokens.css`)
 
@@ -123,10 +123,6 @@ The status hues follow HA SOC's reserved roles. Observe's state names stay the s
   --g-label-fg:#1c2230; --g-dim:.2;
   /* motion */
   --o-dur:120ms;
-  /* legacy aliases, removed in the final slice */
-  --bg:var(--o-page); --card:var(--o-surface); --fg:var(--o-text); --muted:var(--o-text-muted);
-  --line:var(--o-border); --up:var(--o-up); --warn:var(--o-dot-warn); --down:var(--o-down);
-  --pending:var(--o-pending); --unreach:var(--o-unreach);
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { /* dark block */ } }
 :root[data-theme="dark"] { /* same dark block */ }
@@ -531,7 +527,7 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 | S12 | Add host wizard UI | `/hosts/new` page, steps, copy button, progress polling. | Page test for markup and IDs, admin gating, hostile host name rejected server side and rendered as text. |
 | S13 | Host settings page | Allowlist edit with diff confirm, regenerate (revokes the old token), danger zone. | TestClient: PUT allowlist validation, regenerate invalidates the previous token, applied/pending status after a control pull. |
 | S14 | Customise dashboard (done) | `/api/ui/layout/{view}` per user, `tiles.js` with up/down and hide. | TestClient: per-user isolation, stale IDs dropped, unknown view rejected, size cap. |
-| S15 | Cleanup and rename | Remove legacy aliases and `app.css`, change the old name to "Observe" in titles and brand. | Static scan: no `var(--bg)` and similar remain, every `<title>` ends with "- Observe". |
+| S15 | Cleanup and rename (done) | Remove legacy aliases and `app.css`, change the old name to "Observe" in titles and brand. | Static scan: no `var(--bg)` and similar remain, every `<title>` ends with "- Observe". |
 
 ### S11a notes (done)
 
@@ -677,3 +673,10 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 | Q10 | Should Windows support control (fans and services) in the wizard? | **Agent only for now.** Control is greyed out with the reason given in text, until thermal-control has a Windows path. |
 | Q11 | Brand mark? | **A text badge "O"** in accent on a tint, like HA SOC's "SOC" badge. No image asset is needed. |
 | Q12 | Should viewers see admin nav items locked, as HA SOC does, or hidden? | **Hidden.** The server still enforces access. |
+
+### S15 notes (done)
+
+- `observe/static/app.css` is deleted and the `--bg`, `--card`, `--fg`, `--muted`, `--line`, `--up`, `--warn`, `--down`, `--pending` and `--unreach` aliases are gone from `tokens.css`. The component rules that pages still used moved as follows: the sticky header row to `shell.css`; the shared status `.pill`, the `.sec` card, `.note`, `ul.findings` and `a.home` to `components.css`; monitor card details, sparkline and lists to `dashboard.css`; the host banner and item table to `host.css`; the map layers, nodes and edges to `graph.css`. The sign-in page has its own `css/login.css`. Rules for the old `.adminpage` layout had no users and were dropped. `map.html` now also loads `components.css`.
+- Titles: every page and plugin page title ends with " - Observe" (`Sign in - Observe`, `Map - Observe`, and the Pockethernet pages), and the sign-in heading reads "Observe".
+- Screenshots, described in text. Add host (`/hosts/new`): a card with the host name field and platform choice, a chip row for the steps, then a code block headed with the host name and a Copy button, with a live list of Script fetched, First data, Control pulled and Ready. Host settings (`/hosts/{name}/settings`): cards for identity, the control allowlist with a diff dialog, the regenerate command, the clean up command and a danger zone. Overview: a KPI row, state tiles, collapsible group cards with status chips and a Customize button.
+- Tests: `tests/test_ui_cleanup.py` checks that `app.css` is gone and unlinked, that no stylesheet or script uses a legacy variable, that every title ends with " - Observe", and that the README setup section mentions `/hosts/new`. `tests/test_ui_tokens.py` now also checks that no stylesheet other than `tokens.css` holds a hex colour.

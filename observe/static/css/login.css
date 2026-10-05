@@ -1,0 +1,11 @@
+/* The sign-in page, which loads only tokens.css, base.css and this file. Tokens only, no colour
+   literals. */
+.login-head { padding: var(--o-s3) var(--o-s4); border-bottom: 1px solid var(--o-border);
+              background: var(--o-surface); }
+main { max-width: 24rem; margin: 0 auto; padding: var(--o-s5) var(--o-s4); }
+#login label { display: grid; gap: var(--o-s1); color: var(--o-text-muted); font-size: var(--o-fs-sm); }
+#login input { width: 100%; padding: 0 var(--o-s2); background: var(--o-surface);
+               border: 1px solid var(--o-border); border-radius: var(--o-radius-sm); }
+#login button { padding: 0 var(--o-s4); background: var(--o-accent); color: var(--o-surface);
+                border: 0; border-radius: var(--o-radius-sm); font-weight: 600; }
+#msg { color: var(--o-down); min-height: 1.2em; }

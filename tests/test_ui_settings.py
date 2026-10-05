@@ -29,7 +29,7 @@ IDS = ["page", "msg", "crumbs", "title", "identity", "identity-list", "identity-
        "cleanup", "danger", "revoke", "remove"]
 ORDER = ['href="/static/css/tokens.css"', 'href="/static/css/base.css"',
          'href="/static/css/shell.css"', 'href="/static/css/components.css"',
-         'href="/static/app.css"', 'href="/static/css/admin.css"',
+         'href="/static/css/admin.css"',
          'href="/static/css/wizard.css"', 'href="/static/css/settings.css"']
 NEW_FILES = ["host-settings.html", "host-settings.js", "js/settings-logic.js", "css/settings.css"]
 
