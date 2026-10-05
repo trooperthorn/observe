@@ -326,7 +326,9 @@ Audit rows: `plugin_request` for every state-changing request from a session
 answers (at most one per peer per minute, with a count), and `plugin_failed`
 when a route raises. Reads that succeed are not audited, like the core read
 routes. `GET /api/plugins` lists loaded plugins and the navigation entries the
-caller may see.
+caller may see. Each entry carries a `workspace` (`overview`, `hosts`, `network`, `reports` or
+`admin`, default `network`) that says which group of the console navigation it sits under; any
+other value stops startup.
 
 A router may instead be key-authenticated: `PluginRouter(router, key_scope="wpf")`.
 The scope must be one the plugin registered, and the router cannot also be
@@ -407,7 +409,15 @@ rows. The plugin's `pages()` hook registers three static files from `pages/` at
 `/plugins/pockethernet`, `/report` and `/jack`, `nav_entries()` registers "Field reports", and
 `static_dir()` serves `static/pockethernet.js` at `/plugins/pockethernet/static`. The script
 is loaded as a module on each page and imports its helpers from the `infra-common.js` module (which builds on `js/dom.js` and `js/api.js`). It writes every string with `textContent`.
-`index.html` and `app.js` read `GET /api/plugins` for the navigation links.
+The shell module (`js/shell.js`) reads `GET /api/plugins` for the navigation links.
+
+The console shell: every signed-in page has a `<header id="shell-header">` (holding the
+`aria-live` `#summary` region the page scripts write into), a `<nav id="shell-nav">` mount and
+`<script type="module" src="/static/js/shell.js">`. The module adds the "O" badge brand, a theme
+toggle and the user name to the header, and draws the navigation from its `NAV` table plus the
+plugin entries. The user's role comes from `GET /api/session`; admin entries are left out for a
+viewer, which is tidiness only because the server enforces every admin route. The login page has
+no shell.
 
 ## Infrastructure map core
 

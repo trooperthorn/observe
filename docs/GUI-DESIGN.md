@@ -518,7 +518,7 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 | S0 | Static guard | Add `test_ui_static.py` (no inline script or style, no `style=`/`on*=`, no innerHTML-family or eval in JS, same-origin URLs only). Fix any existing violation. | Static scan, CSP header assert on every page route. Done: the scan found no existing violation to fix, and it also checks CSS for off-origin URLs. |
 | S1 | Modules and DOM helpers | `js/dom.js`, `js/api.js`. Convert `infra-common.js` to a module, switch one page (map) to `type="module"`, no visual change. | Page test: the map HTML references `/static/pages/map.js` with `type="module"`. The static file is served with a JS content type. Existing map tests pass. |
 | S2 | Tokens and base CSS | `tokens.css`, `base.css`, `app.css` reduced to legacy aliases. Theme toggle in a small module. | Parse `tokens.css`: every required token is present in light and both dark blocks. Contrast script (pure Python WCAG formula) passes 4.5:1 for text and 3:1 for dots. Done in `tests/test_ui_tokens.py`; see the S2 notes below. |
-| S3 | Shell and nav | `shell.js` with a NAV table, header and summary, plus a plugin nav hook (Python returns nav entries). | TestClient: a viewer's `/api/ui/nav` (or nav embedded per page) omits admin entries. Every page includes a `<nav>` mount and `shell.js`. |
+| S3 | Shell and nav | `shell.js` with a NAV table, header and summary, plus a plugin nav hook (Python returns nav entries). | TestClient: a viewer's `/api/ui/nav` (or nav embedded per page) omits admin entries. Every page includes a `<nav>` mount and `shell.js`. Done in `tests/test_ui_shell.py`; see the S3 notes below. |
 | S4 | Chips, cards, KPI, tables | `chips.js`, `components.css`, `table.js` (sortRows and nextSort). | Static check: no `.pill` without text in JS. Optional pure-function tests for `sortRows`, run in Python by mirroring the spec, or by a tiny `node --test` if the owner allows Node in CI (Q6). |
 | S5 | Dashboard restyle | KPI row, availability tiles, group cards, details cards. | Page test: IDs present, hostile monitor name rendered as text in an API-to-page round trip. |
 | S6 | Host page and Control restyle | Control inside main, `dialog.js` typedConfirm, toasts. | Existing control-action tests, plus page markup and the `<dialog>` present. |
@@ -531,6 +531,14 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 | S13 | Host settings page | Allowlist edit with diff confirm, regenerate (revokes the old token), danger zone. | TestClient: PUT allowlist validation, regenerate invalidates the previous token, applied/pending status after a control pull. |
 | S14 | Customise dashboard (optional) | `/api/ui/layout/{view}` per user, `tiles.js` with up/down and hide. | TestClient: per-user isolation, stale IDs dropped, unknown view rejected, size cap. |
 | S15 | Cleanup and rename | Remove legacy aliases and `app.css`, change the old name to "Observe" in titles and brand. | Static scan: no `var(--bg)` and similar remain, every `<title>` ends with "- Observe". |
+
+### S3 notes (done)
+
+- `js/shell.js` and `css/shell.css` are loaded by every signed-in page (not the login page). Each page keeps a `<header id="shell-header">` with its `#summary` live region and any page-specific controls, plus `<nav id="shell-nav">`. Classic page scripts still find `#summary` at load time because the markup is static; the module adds the brand, the theme toggle and the user name around it.
+- The `NAV` table lists only pages that exist today: Dashboard (host pages sit under it), Map (port pages sit under it), Map admin and Users and keys. The Hosts and Reports workspaces, Add host and Audit appear when S12 and S7 add their pages; a workspace with no visible item is not drawn.
+- Deviation from section 2.3: the workspace row and the subnav are one grouped row (workspace label, then its links), because no workspace has a landing page yet. Below 700px it scrolls sideways.
+- The nav data is not a new endpoint. The shell uses `GET /api/session` for the role and `GET /api/plugins` for plugin entries, which already omits admin-only plugin entries for viewers. `NavEntry` gained an optional `workspace` field (default `network`), validated at load.
+- The header summary pill row is still written by each page's own script (dashboard and map). Making it a shared, clickable summary needs the dashboard rework in S5.
 
 ### S2 notes (done)
 

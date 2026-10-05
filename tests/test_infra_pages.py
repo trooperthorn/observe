@@ -216,7 +216,9 @@ async def test_hostile_strings_reach_the_pages_only_as_json_data(web):
 def test_map_and_helpers_are_es_modules_with_one_shared_dom_helper():
     for name in ("map.html", "port.html", "infra-admin.html"):
         scripts = re.findall(r"<script\b[^>]*>", (STATIC / name).read_text(encoding="utf-8"))
-        assert len(scripts) == 1 and 'type="module"' in scripts[0], name
+        # The page entry module, then the shell module every signed-in page loads.
+        assert len(scripts) == 2 and all('type="module"' in s for s in scripts), name
+        assert "/static/js/shell.js" in scripts[1], name
     common = (STATIC / "infra-common.js").read_text(encoding="utf-8")
     assert 'from "/static/js/dom.js"' in common and "function el(" not in common
     for name in ("js/dom.js", "js/api.js", "infra-common.js"):

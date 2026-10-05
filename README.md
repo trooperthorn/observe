@@ -512,7 +512,8 @@ instead of a session, which the core checks and audits in the same way. A plugin
 its migrations run at startup, and a database written by a newer release of the
 plugin is refused. Removing a plugin from `plugins:` hides its pages, navigation
 entries and routes but keeps its data, so listing it again resumes where it
-stopped. Plugin pages live under `/plugins/<name>/` and need a login. Plugins run in the same process with full trust, so install only
+stopped. A plugin's navigation entry may name the console `workspace` it belongs under
+(`overview`, `hosts`, `network`, `reports` or `admin`; the default is `network`). Plugin pages live under `/plugins/<name>/` and need a login. Plugins run in the same process with full trust, so install only
 plugins you trust. The design is in `docs/FIELD-DATA.md`.
 
 The Pockethernet plugin accepts field reports from the phone at

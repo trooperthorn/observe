@@ -6,15 +6,16 @@
 <title>admin - observe</title>
 <link rel="stylesheet" href="/static/css/tokens.css">
 <link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/shell.css">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header>
-  <h1><a href="/" class="home">observe</a></h1>
-  <a href="/admin/infra" class="home">map admin</a>
+<header id="shell-header" class="shell-head">
+  <div id="summary" aria-live="polite"></div>
   <span id="who"></span>
   <button type="button" id="logout">Sign out</button>
 </header>
+<nav id="shell-nav" aria-label="Main"></nav>
 <main class="adminpage">
   <p id="msg" role="alert"></p>
 
@@ -51,5 +52,6 @@
   </section>
 </main>
 <script src="/static/admin.js"></script>
+<script type="module" src="/static/js/shell.js"></script>
 </body>
 </html>

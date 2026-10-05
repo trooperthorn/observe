@@ -1,0 +1,28 @@
+/* The console shell: header brand, theme toggle and the navigation row. Colours come from
+   tokens.css only. Both rows wrap, and the nav scrolls sideways on narrow screens. */
+.shell-head { gap: var(--o-s2) var(--o-s4); }
+.shell-brand { font-size: var(--o-fs-h); letter-spacing: .01em; }
+.shell-home { display: inline-flex; align-items: center; gap: var(--o-s2); color: var(--o-text);
+              text-decoration: none; min-height: 32px; }
+.shell-badge { display: inline-grid; place-items: center; width: 26px; height: 26px;
+               border-radius: var(--o-radius-sm); background: var(--o-accent-tint);
+               border: 1px solid var(--o-accent-line); color: var(--o-accent); font-weight: 700; }
+.shell-theme { background: var(--o-surface); border: 1px solid var(--o-border);
+               border-radius: var(--o-radius-sm); padding: 0 var(--o-s3); }
+.shell-theme:hover { background: var(--o-surface-subtle); }
+.shell-user { color: var(--o-text-muted); font-size: var(--o-fs-sm); }
+#shell-nav { background: var(--o-surface); border-bottom: 1px solid var(--o-border);
+             overflow-x: auto; }
+.shell-groups, .shell-links { list-style: none; margin: 0; padding: 0; display: flex;
+                              align-items: center; gap: var(--o-s1); }
+.shell-groups { padding: 0 var(--o-s4); gap: var(--o-s5); white-space: nowrap; }
+.shell-group { display: flex; align-items: center; gap: var(--o-s2); }
+.shell-ws { color: var(--o-text-muted); font-size: var(--o-fs-xs); text-transform: uppercase;
+            letter-spacing: .06em; }
+.shell-link { display: inline-flex; align-items: center; min-height: 32px; padding: 0 var(--o-s3);
+              border-radius: var(--o-radius-sm); color: var(--o-text); text-decoration: none;
+              transition: background var(--o-dur); }
+.shell-link:hover { background: var(--o-surface-subtle); }
+.shell-link[aria-current="page"] { background: var(--o-accent-tint); color: var(--o-accent);
+                                   font-weight: 600; }
+@media (pointer: coarse) { .shell-link { min-height: 44px; } }

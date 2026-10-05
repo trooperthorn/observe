@@ -205,6 +205,7 @@ async def test_a_change_finding_can_be_acknowledged_and_returns_when_facts_chang
 def test_dashboard_script_lists_findings_and_the_plugin_nav_with_text_only():
     js = (STATIC / "app.js").read_text(encoding="utf-8")
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert "/api/infra/findings" in js and "/api/plugins" in js
-    assert 'id="findings"' in html and 'id="plugin-nav"' in html
+    shell = (STATIC / "js" / "shell.js").read_text(encoding="utf-8")
+    assert "/api/infra/findings" in js and "/api/plugins" in shell
+    assert 'id="findings"' in html and 'id="shell-nav"' in html
     assert not re.search(r"\.innerHTML\s*=|insertAdjacentHTML|document\.write|eval\(", js)

@@ -6,16 +6,15 @@
 <title>observe</title>
 <link rel="stylesheet" href="/static/css/tokens.css">
 <link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/shell.css">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header>
-  <h1>observe</h1>
+<header id="shell-header" class="shell-head">
   <div id="summary" aria-live="polite"></div>
-  <a href="/map" class="home">map</a>
-  <span id="plugin-nav"></span>
   <label class="filter"><input type="checkbox" id="problems-only"> problems only</label>
 </header>
+<nav id="shell-nav" aria-label="Main"></nav>
 <main id="groups"></main>
 <section id="capacity-panel" hidden>
   <h2>Capacity outlook</h2>
@@ -49,5 +48,6 @@
   </li>
 </template>
 <script src="/static/app.js"></script>
+<script type="module" src="/static/js/shell.js"></script>
 </body>
 </html>

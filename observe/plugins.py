@@ -92,11 +92,16 @@ class Migration:
     statements: tuple[str, ...]
 
 
+NAV_WORKSPACES = frozenset({"overview", "hosts", "network", "reports", "admin"})
+
+
 @dataclass(frozen=True)
 class NavEntry:
     label: str
     path: str
     admin_only: bool = False
+    # Which console workspace the entry sits under; see NAV_WORKSPACES.
+    workspace: str = "network"
 
 
 @dataclass(frozen=True)
@@ -219,7 +224,7 @@ class LoadedPlugins:
         return next((p for p in self.plugins if p.name == name), None)
 
     def nav(self, is_admin: bool) -> list[dict[str, Any]]:
-        return [{"plugin": p.name, "label": n.label, "path": n.path}
+        return [{"plugin": p.name, "label": n.label, "path": n.path, "workspace": n.workspace}
                 for p in self.plugins for n in p.nav_entries if is_admin or not n.admin_only]
 
 
@@ -315,6 +320,9 @@ def _check_nav_and_pages(name: str, nav: list[NavEntry], pages: list[PluginPage]
                 or n.path.startswith("//"):
             raise PluginError(f"plugin {name!r}: nav entry {n.label!r} needs a short label "
                               "and a path starting with one /")
+        if n.workspace not in NAV_WORKSPACES:
+            raise PluginError(f"plugin {name!r}: nav entry {n.label!r} has workspace "
+                              f"{n.workspace!r}, which must be one of {sorted(NAV_WORKSPACES)}")
     base = f"{PAGE_PREFIX}/{name}"
     static = f"{base}/static"
     if static_dir is not None and not Path(static_dir).is_dir():

@@ -6,16 +6,17 @@
 <title>Field reports - observe</title>
 <link rel="stylesheet" href="/static/css/tokens.css">
 <link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/shell.css">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header>
-  <h1><a href="/" class="home">observe</a></h1>
-  <a href="/map" class="home">map</a>
-  <a href="/plugins/pockethernet" class="home">field reports</a>
+<header id="shell-header" class="shell-head">
+  <div id="summary" aria-live="polite"></div>
 </header>
+<nav id="shell-nav" aria-label="Main"></nav>
 <main class="hostpage" id="page" data-view="reports"></main>
 <footer id="footer"></footer>
 <script type="module" src="/plugins/pockethernet/static/pockethernet.js"></script>
+<script type="module" src="/static/js/shell.js"></script>
 </body>
 </html>

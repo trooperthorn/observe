@@ -236,20 +236,6 @@ async function refresh() {
   }
 }
 
-async function renderPluginNav() {
-  // Pages that listed plugins registered through the core navigation hook.
-  try {
-    const r = await fetch("/api/plugins");
-    if (!r.ok) return;
-    document.getElementById("plugin-nav").replaceChildren(...(await r.json()).nav.map((n) => {
-      const a = el("a", "home", n.label);
-      a.href = n.path;
-      return a;
-    }));
-  } catch (_) { /* the dashboard works without it */ }
-}
-
 problemsOnly.addEventListener("change", refresh);
-renderPluginNav();
 refresh();
 setInterval(refresh, 10000);

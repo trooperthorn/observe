@@ -124,9 +124,9 @@ def test_navigation_entry_comes_from_the_plugin_through_the_core(env):
     env.login()
     body = env.client.get("/api/plugins").json()
     assert {"plugin": "pockethernet", "label": "Field reports",
-            "path": "/plugins/pockethernet"} in body["nav"]
-    assert "plugin-nav" in (Path(__file__).parent.parent / "observe" / "static"
-                            / "index.html").read_text(encoding="utf-8")
+            "path": "/plugins/pockethernet", "workspace": "network"} in body["nav"]
+    assert "shell-nav" in (Path(__file__).parent.parent / "observe" / "static"
+                           / "index.html").read_text(encoding="utf-8")
 
 
 def test_report_list_has_summary_ports_and_paging(env):
