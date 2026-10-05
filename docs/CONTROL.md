@@ -1,6 +1,6 @@
 # Control actions
 
-Status: design, being built. Built so far: the plugin skeleton, the signing key and `wpc_` keys (see Signing and keys); the pull route exists and always returns an empty queue. watchpost can ask a host to:
+Status: design, being built. Built so far: the plugin skeleton, the signing key and `wpc_` keys (see Signing and keys), and the command queue with expiry, seq, rate limits, the pull route and the results route (see Queue, pull and results). The action catalogue, confirmation UI and cancel are not built yet, so nothing creates commands except code calling the queue. watchpost can ask a host to:
 
 - change a fan floor;
 - switch a fan controller between dry run and active;
@@ -61,7 +61,16 @@ This section is a contract shared with the hostwatch-control daemon. Change it o
 - **Private key:** an unencrypted PKCS8 PEM file at `plugin_settings.control.signing_key_file` (default `/run/secrets/watchpost_control_key`). On POSIX the plugin refuses to start when the file is readable by group or others, and also when it is missing or is not an Ed25519 key. It is never served, logged or audited.
 - **Creating a key:** `python -m watchpost --control-keygen PATH` writes a new key at PATH with mode 0600, refuses to overwrite an existing file, and prints only the public key.
 - **Control keys:** a host's daemon pulls with a `wpc_` key bound to its host name. Admins create and revoke these in the key screen or with `--ingest-key-create HOST --ingest-key-scope wpc` and `--ingest-key-revoke ID`. A `wpc_` key is refused by host ingest and by field reports, and `wpi_` and `wpf_` keys are refused by the control routes. A `wpc_` key may pull only for its own host: another `host` value gets 403.
-- **Settings** (`plugin_settings.control`): `signing_key_file`, `pull_interval_s` (the polling interval the daemon is advised to use, default 5), `max_pending_per_action` (1), `max_commands_per_host_per_hour` (10) and `reboot_min_interval_s` (900).
+- **Settings** (`plugin_settings.control`): `signing_key_file`, `pull_interval_s` (the polling interval the daemon is advised to use, default 5), `max_pending_per_action` (1), `max_commands_per_host_per_hour` (10), `reboot_min_interval_s` (900) and `command_ttl_s` (how long a new command stays valid, default 120).
+
+## Queue, pull and results
+
+- **Tables:** `control_commands` holds id, host, action, params (canonical JSON text), requested_by, issued_at, expires_at, seq, state and signature. `seq` starts at 1 for each host and goes up by one, and is unique per host. `control_results` holds one row per reported result: command id, host, state, redacted output, whether it was truncated, started and finished times, duration, received time and the key prefix. Both are created by the plugin's own migrations.
+- **States:** `requested` (written), `pulled` (first handed to the daemon), `scheduled` (the daemon accepted a delayed action such as a reboot), and the final states `done`, `failed`, `refused`, `cancelled` and `unknown`.
+- **Pull:** `GET /api/v1/control/commands?host=` with a `wpc_` key returns `{"host": ..., "commands": [{"command": {...}, "signature": "..."}]}` in seq order. It holds only that host's commands that are not final and have not expired, plus any `scheduled` command, which has already been answered. The first delivery of a command is audited as `control_pull`; an empty poll writes nothing.
+- **Results:** `POST /api/v1/control/results` takes `{"id", "state", "output", "started_at", "finished_at"}`, where state is `done`, `failed`, `refused` or `scheduled`, output is optional text and the times are optional seconds. Output is stripped of control characters, redacted (key-shaped text, `Bearer` values, and values after `password`, `token`, `secret` or `api_key`) and cut to 4096 characters before it is stored. The route answers 404 for an unknown id and for another host's id, with the same body, so ids cannot be probed, and 409 for a command that is already final or has expired. Every refusal is audited with the reason. A `scheduled` command may receive a later result such as `done`.
+- **Expiry:** a `requested` or `pulled` command whose `expires_at` has passed with no result becomes `unknown` (audited as `control_expired`), and a late result is refused. It is never shown as done, because watchpost cannot tell whether the host acted. Admins read recent commands, with their state and latest result, at `GET /api/plugins/control/commands`.
+- **Rate limits** are checked when a command is written, in the same transaction that assigns `seq`, so concurrent requests cannot pass them together: at most `max_pending_per_action` open commands per host and action (an open command is requested, pulled or scheduled), at most `max_commands_per_host_per_hour` per host, and one `host.reboot` per `reboot_min_interval_s` per host. A refusal is audited as `control_request_refused`, and a written command as `control_requested` with who, what and the parameters.
 
 ### Test vector
 
@@ -144,7 +153,7 @@ Parameters: none, apart from the host name the admin typed on the watchpost side
 
 ## Limits and safety
 
-- **Rate limits:** at most one pending command per host per action, and at most 10 commands per host per hour. Reboot is limited to once per 15 minutes.
+- **Rate limits:** at most one pending command per host per action, and at most 10 commands per host per hour. Reboot is limited to once per 15 minutes. These are enforced when the command is written (see Queue, pull and results).
 - **Results:** a command with no result after its expiry is shown as `unknown`, never as done.
 - **Health checks after an action:**
   - After a fan change, watchpost shows the controller status from the next agent batch.

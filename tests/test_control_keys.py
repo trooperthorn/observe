@@ -230,7 +230,6 @@ class Env:
         self.path = str(tmp_path / "w.db")
         key_file = tmp_path / "control.key"
         keygen(key_file)
-        self.store = Store(self.path)
         self.cfg = make_config(
             [{"name": "p", "type": "ping", "host": "127.0.0.1"}],
             plugins=["control", "pockethernet"],
@@ -238,6 +237,7 @@ class Env:
             server={"db_path": self.path, "argon2_time_cost": 1, "argon2_memory_kib": 8,
                     "argon2_parallelism": 1})
         loaded = load_plugins(self.cfg, _entry_points())
+        self.store = Store(self.path, loaded)
         alerter = Alerter(self.cfg)
         sched = Scheduler(self.cfg, self.store, alerter)
         self.clock = Clock()

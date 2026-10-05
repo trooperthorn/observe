@@ -440,8 +440,12 @@ reports, and `wpi` and `wpf` keys are refused by the control routes. The plugin 
 with an Ed25519 key. Create one with `python -m watchpost --control-keygen /run/secrets/watchpost_control_key`,
 which writes the private key with mode 0600 and prints only the public key to pin on each host;
 the plugin refuses to start if that file is readable by group or others on POSIX. Set the path
-with `plugin_settings.control.signing_key_file`. This slice has no actions yet, and the pull route
-returns an empty queue. The signing format and a test vector are in `docs/CONTROL.md`.
+with `plugin_settings.control.signing_key_file`. The plugin also keeps the signed command
+queue: `GET /api/v1/control/commands` returns a host's own unexpired, unfinished commands and
+`POST /api/v1/control/results` records the outcome, with output redacted and truncated. A command
+that expires without a result is shown as `unknown`, and each host is limited to one pending
+command per action, 10 commands per hour and one reboot per 15 minutes. There is no screen or
+action catalogue yet, so nothing creates commands. The signing format and a test vector are in `docs/CONTROL.md`.
 
 Logins use Argon2id password hashes and server-side sessions. Create the first
 admin with `python -m watchpost --config watchpost.yaml --create-admin NAME`; it
