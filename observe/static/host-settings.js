@@ -239,6 +239,7 @@ function drawInstallCard() {
   const s = settings;
   $("install-card").hidden = !s.enrolled;
   $("cleanup").hidden = !s.can_cleanup || !s.installed;
+  $("pool-field").hidden = s.platform !== "truenas";
 }
 
 $("regen").addEventListener("click", async () => {
@@ -250,7 +251,7 @@ $("regen").addEventListener("click", async () => {
   $("regen").disabled = true;
   try {
     const path = settings.installed ? "/enrolment/reissue" : "/enrolment/regenerate";
-    const made = await api("POST", hostUrl(path), csrf, { confirmed: true });
+    const made = await api("POST", hostUrl(path), csrf, { confirmed: true, pool: $("pool").value.trim() });
     shown = { kind: "install", made };
     install = null;
     await reload(true);

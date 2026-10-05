@@ -313,6 +313,9 @@ def test_status_is_pending_then_written_then_applied_after_a_control_pull(env):
     assert settings(env).json()["allowlist_status"]["state"] == "pending"
     env.clock.now += 5
     assert step(env, key, "control_config").status_code == 204
+    assert settings(env).json()["allowlist_status"]["state"] == "pending"
+    env.clock.now += 5
+    assert step(env, key, "control_unit").status_code == 204
     written = settings(env).json()["allowlist_status"]
     assert written["state"] == "written" and written["written_at"] == env.clock()
     # A pull from before the write does not count. The next pull does.
@@ -332,6 +335,7 @@ def test_a_pull_older_than_the_write_leaves_the_status_at_written(env):
     key = secrets_of(env.client.get(f"/t/{token}").text)["STEP_KEY"]
     env.clock.now += 10
     step(env, key, "control_config")
+    step(env, key, "control_unit")
     assert settings(env).json()["allowlist_status"]["state"] == "written"
 
 
@@ -545,12 +549,22 @@ def test_remove_deletes_the_host_and_its_data_but_keeps_the_audit_log(env):
     assert create(env, hdr, platform="linux").status_code == 200
 
 
-def test_a_host_listed_in_the_config_cannot_be_removed(tmp_path):
+def test_a_host_listed_in_the_config_cannot_be_removed(tmp_path, monkeypatch):
+    from tests import test_auth
+    from tests.conftest import make_config
     from tests.test_auth import Env
+    pushed = {"name": "nas01", "type": "pushed_host", "host": "nas01", "group": "storage",
+              "components": [{"source": "hwmon", "metric": "cpu_temp_c", "direction": "above",
+                              "warn": 70, "crit": 90}], "stale_after": 120}
+    monkeypatch.setattr(test_auth, "make_config",
+                        lambda monitors, **kw: make_config([*monitors, pushed], **kw))
     e = Env(tmp_path)
     try:
         hdr = admin(e)
-        # The default test config has a ping monitor named "p", not a pushed_host one.
+        r = e.client.post("/api/hosts/nas01/remove", json={"confirm_host": "nas01"}, headers=hdr)
+        assert r.status_code == 409 and "Observe config" in r.text
+        assert e.client.post("/api/hosts/nas01/remove", json={"confirm_host": "x"},
+                             headers=hdr).status_code == 400
         assert e.client.post("/api/hosts/p/remove", json={"confirm_host": "p"}, headers=hdr
                              ).status_code == 404
     finally:
@@ -561,3 +575,100 @@ def test_a_host_listed_in_the_config_cannot_be_removed(tmp_path):
 def test_tasks_helper_remove_host_reports_none_for_an_unknown_host(env):
     assert asyncio.run(hosttasks.remove_host(env.store, "ghost", 1.0)) is None
     assert asyncio.run(hosttasks.revoke_host_keys(env.store, "ghost", 1.0)) == 0
+
+
+# ---------------------------------------------------------------- schema 12 from schema 11
+
+
+def test_a_version_11_database_with_enrolments_migrates_to_12(tmp_path):
+    import sqlite3
+    from observe.store import MIGRATIONS, SCHEMA_VERSION, Store, migrate
+    path = str(tmp_path / "w.db")
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+    db.commit()
+    newer = {v: m for v, m in MIGRATIONS.items() if v > 11}
+    assert newer and SCHEMA_VERSION == 12
+    for v in newer:
+        del MIGRATIONS[v]
+    try:
+        migrate(db)
+    finally:
+        MIGRATIONS.update(newer)
+    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 11
+    assert not db.execute("SELECT name FROM sqlite_master WHERE name='host_tasks'").fetchall()
+    assert "allowlist_rev" not in [r[1] for r in db.execute("PRAGMA table_info(enrolments)")]
+    db.execute("INSERT INTO enrolments (host, platform, agent, control, allowlist, token_hash, "
+               "created, created_by, expires_at) VALUES ('nas01','linux',1,1,'{}','h',1.0,'a',2.0)")
+    db.commit()
+    db.close()
+    Store(path).close()
+    db = sqlite3.connect(path)
+    try:
+        assert db.execute("SELECT allowlist_rev, allowlist_saved_at, reissued_at FROM enrolments "
+                          "WHERE host='nas01'").fetchone() == (0, None, None)
+        assert db.execute("SELECT COUNT(*) FROM host_tasks").fetchone() == (0,)
+        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 12
+    finally:
+        db.close()
+
+
+def test_reissue_refuses_a_bad_pool_and_changes_nothing(env):
+    hdr = admin(env)
+    old = enrol_host(env, hdr)
+    url = "/api/hosts/nas01/enrolment/reissue"
+    for pool in ("Apps", "../x"):
+        r = env.client.post(url, json={"confirmed": True, "pool": pool}, headers=hdr)
+        assert r.status_code == 400, pool
+    assert ingest_for(env, "nas01", secrets_of(old)["AGENT_KEY"]).status_code == 200
+    assert env.rows("SELECT COUNT(*) FROM ingest_keys WHERE host='nas01' AND revoked_at IS NULL"
+                    ) == [(2,)]
+
+
+def test_reissue_for_truenas_uses_the_pool_asked_for_or_refuses_it(env):
+    hdr = admin(env)
+    enrol_host(env, hdr, name="tn01", platform="truenas", control=False, allowlist=None)
+    url = "/api/hosts/tn01/enrolment/reissue"
+    bad = env.client.post(url, json={"confirmed": True, "pool": "a b;"}, headers=hdr)
+    assert bad.status_code == 400
+    assert env.rows("SELECT COUNT(*) FROM ingest_keys WHERE host='tn01' AND revoked_at IS NULL"
+                    ) == [(1,)]
+    ok = env.client.post(url, json={"confirmed": True, "pool": "tank"}, headers=hdr)
+    assert ok.status_code == 200 and "tank" in ok.json()["command"]
+
+
+def test_a_failed_update_never_reads_as_applied_even_if_the_old_daemon_pulls(env):
+    hdr = admin(env)
+    script = enrol_host(env, hdr)
+    env.clock.now += 10
+    pull(env, script, env.clock())
+    env.clock.now += 10
+    token = task_token(put(env, hdr))
+    key = secrets_of(env.client.get(f"/t/{token}").text)["STEP_KEY"]
+    env.clock.now += 5
+    step(env, key, "control_config")
+    env.clock.now += 5
+    pull(env, script, env.clock())
+    assert settings(env).json()["allowlist_status"]["state"] == "pending"
+    env.clock.now += 5
+    step(env, key, "control_unit", status="failed")
+    env.clock.now += 5
+    pull(env, script, env.clock())
+    status = settings(env).json()["allowlist_status"]
+    assert status["state"] == "pending" and status["applied_at"] is None
+    assert settings(env).json()["task"]["state"] == "failed"
+
+
+def test_a_pull_before_the_restart_report_does_not_count_as_applied(env):
+    hdr = admin(env)
+    script = enrol_host(env, hdr)
+    env.clock.now += 10
+    token = task_token(put(env, hdr))
+    key = secrets_of(env.client.get(f"/t/{token}").text)["STEP_KEY"]
+    env.clock.now += 5
+    step(env, key, "control_config")
+    env.clock.now += 5
+    pull(env, script, env.clock())
+    env.clock.now += 5
+    step(env, key, "control_unit")
+    assert settings(env).json()["allowlist_status"]["state"] == "written"

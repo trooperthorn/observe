@@ -409,9 +409,9 @@ back the host settings page (`GET /hosts/{name}/settings`, the static `host-sett
   folder and account, and keeps the data volumes and folders. It does not revoke keys.
 - **Status.** `hosttasks.allowlist_status` derives `pending`, `written` and `applied`. The list is
   written when the install script was fetched after the save (and did not report a failure), or when
-  an update script of the current revision reported `control_config` ok. It is applied when the
-  `wpc` key's last use is not older than that write, because only a daemon that was restarted with
-  the new file pulls again. `none` is a host without control.
+  an update script of the current revision reported `control_unit` ok (the service restart) with no
+  failed or refused step in that task, because the daemon reads control.toml only when it starts.
+  It is applied when the `wpc` key's last use is not older than that write. `none` is a host without control.
 - **Reissue.** `POST /api/hosts/{name}/enrolment/reissue` (admin and CSRF, `confirmed: true`) is the
   regenerate that also works after the script was fetched. In one transaction it replaces the token,
   revokes every `wpi` and `wpc` key bound to the host, and clears the fetch, the step key, the

@@ -90,7 +90,9 @@ def test_update_has_the_install_guards_in_the_install_order_before_any_change():
     first_change = min(main.index(c) for c in ("umask 077", "control.toml.new\"", "visudo",
                                                 "systemctl restart"))
     assert root < host < observe_id < observe_addr < has_install < first_change
-    assert scripts._GUARDS.rstrip("\n") in script
+    # The guard code is the install's own, with only the heading line renamed.
+    assert scripts._GUARDS.rstrip("\n").replace(
+        "Observe install for", "Observe settings update for") in script
     assert "This command was made for the host" in script
     head = script[:script.index("main() {")]
     for forbidden in ("mkdir", "chown", "useradd", "systemctl", "visudo", "mv ", "install -o"):
@@ -265,3 +267,32 @@ def test_each_renderer_refuses_the_platforms_it_has_no_script_for():
 def test_no_script_has_a_carriage_return_or_an_unfilled_marker():
     for script in (update(), cleanup(), cleanup("truenas"), cleanup("windows")):
         assert "\r" not in script and "@@" not in script
+
+
+def test_update_script_text_names_the_update_and_keeps_a_backup_with_rollback():
+    script = update()
+    assert "Observe settings update for $HOST_NAME" in script
+    assert "Observe install for" not in script
+    main = script[script.index("main() {"):]
+    assert (main.index('cp -p "$ETC/control.toml" "$ETC/control.toml.bak"')
+            < main.index('mv -f "$ETC/control.toml.new"')
+            < main.index("/etc/sudoers.d/hostwatch-control")
+            < main.index('mv -f "$ETC/control.toml.bak" "$ETC/control.toml"')
+            < main.index("report control_config ok") < main.index("systemctl restart"))
+
+
+def test_cleanup_guard_comment_matches_its_guards():
+    for platform in ("linux", "truenas"):
+        script = cleanup(platform)
+        assert "unless all three pass" not in script
+        assert 'say "Observe install for' not in script and 'say "Observe cleanup for' in script
+
+
+def test_windows_cleanup_leaves_the_control_install_alone_and_waits_for_the_service():
+    win = cleanup("windows")
+    assert "Remove-Item -LiteralPath $install" not in win
+    assert "'venv'" in win and win.count("-Recurse") == 1
+    assert "Stop-Service -Name $svc -Force -ErrorAction Stop" in win
+    assert "WaitForStatus('Stopped'" in win
+    assert win.index("WaitForStatus") < win.index("sc.exe delete") < win.index("Remove-Item")
+    assert "partly removed" in win

@@ -80,6 +80,10 @@
   <section class="card" id="install-card" aria-labelledby="install-h" hidden>
     <h3 id="install-h">Install command</h3>
     <p class="card-sub">A new full install command for this host. The command that exists now stops working, and so do this host's agent and control keys, until the new command is run on the host. Its stored data is kept.</p>
+    <label class="wiz-field" id="pool-field" hidden>TrueNAS pool
+      <input id="pool" name="pool" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Apps">
+      <span class="field-hint">Use the pool the host was installed on. Files left on another pool keep the old key until they are removed (use Clean up this machine).</span>
+    </label>
     <div class="row-actions">
       <button type="button" class="btn" id="regen">Regenerate command</button>
       <button type="button" class="btn" id="cleanup">Clean up this machine</button>

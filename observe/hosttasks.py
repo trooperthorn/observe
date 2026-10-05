@@ -174,9 +174,10 @@ async def allowlist_status(store: Store, host: str) -> dict[str, Any] | None:
 
     The state is `none` when control was not chosen, `pending` while the saved allowlist has not
     reached the host (the update command was not run, or the install was not run yet), `written`
-    once control.toml holds it but the host has not pulled since, and `applied` after the
-    control daemon's first pull with its key later than the write, which proves the daemon was
-    restarted with the new file and is running. `applied_at` is that pull.
+    the file is on the host and the service was restarted but the host has not pulled since, and
+    `applied` after the control daemon's first pull with its key later than the restart. An
+    update counts as written only when its script reported the restart and no step of that task
+    failed, because the daemon reads control.toml only at start. `applied_at` is that pull.
     """
     rows = await store._run(
         "SELECT control, allowlist_rev, allowlist_saved_at, created, fetched_at, control_prefix, "
@@ -201,8 +202,14 @@ async def allowlist_status(store: Store, host: str) -> dict[str, Any] | None:
             "AND fetched_at IS NOT NULL AND created>=? ORDER BY id DESC",
             (host, rev, reissued_at if reissued_at is not None else 0.0))
         for (raw,) in tasks:
-            for r in json.loads(raw):
-                if r["step"] == "control_config" and r["status"] == "ok":
+            reports = json.loads(raw)
+            # The daemon reads control.toml only when it starts, so the file counts as picked up
+            # only when the script got as far as restarting the service, and never after any
+            # failed or refused step. The restart report is the time the new file was loaded.
+            if any(r["status"] in ("failed", "refused") for r in reports):
+                continue
+            for r in reports:
+                if r["step"] == "control_unit" and r["status"] == "ok":
                     written = max(written or 0.0, r["at"])
     out["written_at"] = written
     pulled = None

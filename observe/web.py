@@ -1160,18 +1160,22 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             return await settings_refused(sess, request, "enrol_reissue_failed", host, 400,
                                           "the request was not confirmed")
         now = auth_clock()
+        row = await store._run("SELECT platform FROM enrolments WHERE host=?", (host,))
+        if not row:
+            return await settings_refused(sess, request, "enrol_reissue_failed", host, 404,
+                                          "this host was not added through the console")
+        # A pool that does not validate is refused, never replaced by the default, so a command
+        # is never made for a different pool than the one asked for.
+        try:
+            pool = enrol.parse_pool(body.get("pool"), row[0][0])
+        except enrol.EnrolError as exc:
+            return await settings_refused(sess, request, "enrol_reissue_failed", host, 400,
+                                          str(exc))
         made = await enrol.reissue_enrolment(store, host, now)
         if made is None:
             return await settings_refused(sess, request, "enrol_reissue_failed", host, 404,
                                           "this host was not added through the console")
         token, spec, revoked = made
-        # An update command made for the old install is dead too: the new script carries the
-        # saved allowlist.
-        await store._run("DELETE FROM host_tasks WHERE host=? AND fetched_at IS NULL", (host,))
-        try:
-            pool = enrol.parse_pool(body.get("pool"), spec.platform)
-        except enrol.EnrolError:
-            pool = ""
         await audit.record(store, "enrol_reissued", actor=sess.username, method="POST",
                            path="/api/hosts/[host]/enrolment/reissue", status=200,
                            remote=request.client.host if request.client else "",

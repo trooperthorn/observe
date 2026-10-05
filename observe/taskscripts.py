@@ -22,7 +22,10 @@ from .hosttasks import CLEANUP_PLATFORMS, UPDATE_PLATFORMS, RedeemedTask
 from .scripts import (_GUARDS, _HELPERS, _KEY, _MACHINE_ID, _NAME, _URL, MACHINE_ID_LINE, Context,
                       ScriptError, _need, _pq, _q, control_toml, usable_address)
 
-_ROOT_GUARD = _GUARDS[:_GUARDS.index("  want=$(lower")]
+_ROOT_GUARD = _GUARDS[:_GUARDS.index("  want=$(lower")].replace(
+    "Observe install for", "Observe cleanup for").replace(
+    "unless all three pass", "unless the root guard and the match guard below pass")
+_UPDATE_GUARDS = _GUARDS.replace("Observe install for", "Observe settings update for")
 
 
 def task_supported(kind: str, platform: str) -> bool:
@@ -54,7 +57,7 @@ _UP_HEAD = r"""#!/bin/sh
 # Observe settings update for @@NAME@@ (@@LABEL@@). Run on @@NAME@@ only.
 # It refuses to run on any other machine and on the Observe host. It prints no key.
 # It rewrites the control allowlist (control.toml and the sudoers rules) and restarts the
-# control service. It does not touch the keys.
+# control service. It does not touch the keys. The old control.toml is kept as control.toml.bak.
 set -u
 umask 022
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -95,13 +98,22 @@ main() {
     rm -f "$sudoers_tmp"
     fail sudoers "visudo rejected the rules" "visudo rejected the generated rules, so nothing was changed"
   fi
+  # The old file is kept as control.toml.bak (a hand edit on the host is not lost), and it is put
+  # back if the rules cannot be installed, so the file and the rules never disagree.
+  backed=0
+  if [ -f "$ETC/control.toml" ]; then
+    cp -p "$ETC/control.toml" "$ETC/control.toml.bak" ||
+      { rm -f "$sudoers_tmp"; fail control_config "cannot back up settings" "cannot keep a copy of control.toml, so nothing was changed"; }
+    backed=1
+  fi
   mv -f "$ETC/control.toml.new" "$ETC/control.toml" ||
     { rm -f "$sudoers_tmp"; fail control_config "cannot move settings into place" "cannot move control.toml into place"; }
-  report control_config ok "control settings written"
   if ! install -o root -g root -m 0440 "$sudoers_tmp" /etc/sudoers.d/hostwatch-control; then
     rm -f "$sudoers_tmp"
-    fail sudoers "install failed" "could not install the sudoers rules"
+    if [ "$backed" = 1 ]; then mv -f "$ETC/control.toml.bak" "$ETC/control.toml" || say "Could not put the old control.toml back. It is at $ETC/control.toml.bak." >&2; fi
+    fail sudoers "install failed" "could not install the sudoers rules; the old control.toml was put back"
   fi
+  report control_config ok "control settings written"
   rm -f "$sudoers_tmp"
   report sudoers ok "sudoers checked and installed"
 
@@ -131,7 +143,7 @@ def render_update(task: RedeemedTask, ctx: Context) -> str:
     for marker, value in fills.items():
         script = script.replace(marker, value)
     # The multi-line fills go last so a value can never be mistaken for a marker.
-    return script.replace("@@GUARDS@@", _GUARDS.rstrip("\n")).replace("@@TOML@@", "\n".join(lines))
+    return script.replace("@@GUARDS@@", _UPDATE_GUARDS.rstrip("\n")).replace("@@TOML@@", "\n".join(lines))
 
 
 _CL_HEAD = r"""#!/bin/sh
@@ -238,8 +250,7 @@ def _cleanup_sh(task: RedeemedTask, ctx: Context, platforms: tuple[str, ...], ma
              "@@Q_URL@@": _q(url), "@@Q_STEPKEY@@": _q(step)}
     for marker, value in fills.items():
         script = script.replace(marker, value)
-    root = _ROOT_GUARD.rstrip("\n").replace("Observe install for", "Observe cleanup for")
-    return script.replace("@@ROOT@@", root)
+    return script.replace("@@ROOT@@", _ROOT_GUARD.rstrip("\n"))
 
 
 def render_cleanup_linux(task: RedeemedTask, ctx: Context) -> str:
@@ -253,7 +264,7 @@ def render_cleanup_truenas(task: RedeemedTask, ctx: Context) -> str:
 _CW = r"""# Observe cleanup for @@NAME@@ (Windows). Removes what the Observe install script put on THIS
 # machine for @@NAME@@. Run it only on the machine that holds that install.
 # It refuses to run on a machine with no install made for @@NAME@@. It prints no key.
-# The data folder is kept.
+# The data folder is kept. A hostwatch-control install is not touched.
 function Invoke-ObserveCleanup {
   $ErrorActionPreference = 'Stop'
   $HostName = @@P_NAME@@
@@ -308,14 +319,21 @@ function Invoke-ObserveCleanup {
     # 2. Remove the service, the environment and the protected settings file.
     $svc = 'hostwatch-agent'
     if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
-      Stop-Service -Name $svc -ErrorAction SilentlyContinue
+      # The service must be stopped before anything is deleted, so a service that holds its
+      # files stops the cleanup with the install still whole.
+      try {
+        Stop-Service -Name $svc -Force -ErrorAction Stop
+        (Get-Service -Name $svc).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+      } catch { Stop-Fail 'cleanup_agent' 'service did not stop' 'the hostwatch-agent service did not stop, so nothing was removed.' }
       & sc.exe delete $svc | Out-Null
     }
-    $install = Join-Path $env:ProgramFiles 'hostwatch'
+    # Only the agent's own folder, as hostwatch's uninstall script does. A hostwatch-control
+    # folder (control-venv) in the same install folder is not Observe's and is left alone.
+    $venv = Join-Path (Join-Path $env:ProgramFiles 'hostwatch') 'venv'
     try {
-      if (Test-Path -LiteralPath $install) { Remove-Item -LiteralPath $install -Recurse -Force }
+      if (Test-Path -LiteralPath $venv) { Remove-Item -LiteralPath $venv -Recurse -Force }
       Remove-Item -LiteralPath $envFile -Force
-    } catch { Stop-Fail 'cleanup_agent' 'cannot remove files' 'could not remove the agent files.' }
+    } catch { Stop-Fail 'cleanup_agent' 'cannot remove files' 'could not remove the agent files. The service was already deleted, so the install is partly removed. Close what holds the files and run the command again.' }
     Send-Step 'cleanup_agent' 'ok' 'agent removed'
     Send-Step 'cleanup_files' 'ok' 'files removed'
     Send-Step 'done' 'ok' 'cleanup finished'

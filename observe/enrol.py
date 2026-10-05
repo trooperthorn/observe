@@ -246,6 +246,8 @@ async def reissue_enrolment(store: Store, host: str, now: float) -> tuple[str, S
                 "fetched_at=NULL, step_hash=NULL, reports='[]', agent_prefix=NULL, "
                 "control_prefix=NULL, reissued_at=? WHERE host=?",
                 (_digest(token), now, now + TOKEN_TTL_S, now, host))
+            # An update command made for the old install is dead in the same transaction.
+            store._db.execute("DELETE FROM host_tasks WHERE host=? AND fetched_at IS NULL", (host,))
             return row, revoked
 
     made = await asyncio.to_thread(work)
