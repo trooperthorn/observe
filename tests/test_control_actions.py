@@ -219,10 +219,7 @@ def schedule(env, csrf):
 def test_cancel_works_only_while_scheduled(env):
     csrf = login(env)
     cid = schedule(env, csrf)
-    # Requested, not yet scheduled by the host.
-    r = post(env, csrf, {}, f"/commands/{cid}/cancel")
-    assert r.status_code == 409 and env.state(cid) == "requested"
-    assert env.result(env.key(), {"id": cid, "state": "scheduled"}).status_code == 200
+    assert env.answer(env.key(), {"id": cid, "state": "scheduled"}).status_code == 200
     r = post(env, csrf, {}, f"/commands/{cid}/cancel")
     assert r.status_code == 200 and r.json()["state"] == "cancelled"
     assert env.state(cid) == "cancelled"
@@ -230,20 +227,22 @@ def test_cancel_works_only_while_scheduled(env):
     assert post(env, csrf, {}, f"/commands/{cid}/cancel").status_code == 409
     assert env.result(env.key(), {"id": cid, "state": "done"}).status_code == 409
     assert env.state(cid) == "cancelled"
-    # The daemon sees it leave the pull list.
-    assert env.pull(env.key()).json()["commands"] == []
+    # The daemon is told through the cancel list.
+    got = env.pull(env.key()).json()
+    assert got["commands"] == [] and got["cancel"] == [cid]
     assert env.audit("control_cancelled") == [{"command_id": cid, "host": HOST}]
-    assert len(env.audit("control_cancel_refused")) == 2
+    assert len(env.audit("control_cancel_refused")) == 1
 
 
 def test_cancel_is_refused_after_done_and_for_other_actions(env):
     csrf = login(env)
     cid = schedule(env, csrf)
-    env.result(env.key(), {"id": cid, "state": "scheduled"})
+    env.answer(env.key(), {"id": cid, "state": "scheduled"})
     env.result(env.key(), {"id": cid, "state": "done"})
     assert post(env, csrf, {}, f"/commands/{cid}/cancel").status_code == 409
     assert env.state(cid) == "done"
     other = post(env, csrf, req()).json()["id"]
+    env.pull(env.key())  # pulled commands can no longer be cancelled
     assert post(env, csrf, {}, f"/commands/{other}/cancel").status_code == 409
     assert post(env, csrf, {}, "/commands/nope/cancel").status_code == 404
 
@@ -257,6 +256,53 @@ def test_cancel_of_an_expired_command_is_refused(env):
     assert env.state(cid) == "unknown"
 
 
+def test_cancel_of_a_requested_command_of_any_action(env):
+    csrf = login(env)
+    cid = post(env, csrf, req()).json()["id"]
+    r = post(env, csrf, {}, f"/commands/{cid}/cancel")
+    assert r.status_code == 200 and env.state(cid) == "cancelled"
+    got = env.pull(env.key()).json()
+    assert got["commands"] == [] and got["cancel"] == []  # never pulled, nothing to tell
+    assert env.result(env.key(), {"id": cid, "state": "done"}).status_code == 409
+
+
+def test_scheduled_reboot_is_not_served_again_and_blocks_no_other_action(env):
+    csrf = login(env)
+    cid = schedule(env, csrf)
+    env.answer(env.key(), {"id": cid, "state": "scheduled"})
+    fan = post(env, csrf, req()).json()["id"]
+    got = env.pull(env.key()).json()
+    assert [c["command"]["id"] for c in got["commands"]] == [fan] and got["cancel"] == []
+    assert env.state(cid) == "scheduled"
+    assert env.result(env.key(), {"id": cid, "state": "done"}).status_code == 200
+
+
+def test_result_for_an_unpulled_command_is_refused(env):
+    csrf = login(env)
+    cid = post(env, csrf, req()).json()["id"]
+    r = env.result(env.key(), {"id": cid, "state": "done"})
+    assert r.status_code == 409 and env.state(cid) == "requested"
+
+
+def test_scheduled_is_refused_for_other_actions_than_reboot(env):
+    csrf = login(env)
+    cid = post(env, csrf, req()).json()["id"]
+    env.pull(env.key())
+    r = env.result(env.key(), {"id": cid, "state": "scheduled"})
+    assert r.status_code == 422 and env.state(cid) == "pulled"
+
+
+def test_signed_params_of_a_reboot_carry_no_confirm_host(env):
+    csrf = login(env)
+    cid = post(env, csrf, req("host.reboot", {}, confirm_host=HOST)).json()["id"]
+    (item,) = env.pull(env.key()).json()["commands"]
+    assert item["command"]["id"] == cid and item["command"]["params"] == {}
+    assert "confirm_host" not in json.dumps(item["command"])
+    other = post(env, csrf, req("host.reboot", {"confirm_host": "nas02"}, host="nas02",
+                                      confirm_host="nas02"))
+    assert other.status_code == 422
+
+
 # ---- history --------------------------------------------------------------------------------
 
 def test_history_shows_states_for_one_host(env):
@@ -268,7 +314,7 @@ def test_history_shows_states_for_one_host(env):
     key = env.key()
     env.pull(key)
     env.result(key, {"id": b, "state": "failed", "output": "unit not found"})
-    env.result(key, {"id": c, "state": "scheduled"})
+    env.result(key, {"id": c, "state": "scheduled"})  # pulled above
     states = {x["id"]: x["state"] for x in commands(env)}
     assert states == {a: "pulled", b: "failed", c: "scheduled"}
     failed = next(x for x in commands(env) if x["id"] == b)
@@ -283,7 +329,7 @@ def test_history_shows_states_for_one_host(env):
 def test_hostile_strings_come_back_as_json_data(env):
     csrf = login(env)
     cid = post(env, csrf, req("service.restart", {"name": "ok"}, host=HOSTILE)).json()["id"]
-    env.result(env.key(HOSTILE), {"id": cid, "state": "failed", "output": HOSTILE + "<img>"})
+    env.answer(env.key(HOSTILE), {"id": cid, "state": "failed", "output": HOSTILE + "<img>"}, HOSTILE)
     r = env.client.get(f"{BASE}/commands", params={"host": HOSTILE})
     assert r.headers["content-type"].startswith("application/json")
     (item,) = r.json()["commands"]

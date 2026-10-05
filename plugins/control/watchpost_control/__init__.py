@@ -72,9 +72,9 @@ def build_pull_router() -> APIRouter:
         if host != bound:
             raise HTTPException(403, "this key is bound to another host")
         remote = request.client.host if request.client else ""
-        items = await pull_commands(request.app.state.plugin_store, bound, prefix, remote,
-                                    _now(request))
-        return {"host": bound, "commands": items}
+        got = await pull_commands(request.app.state.plugin_store, bound, prefix, remote,
+                                  _now(request))
+        return {"host": bound, **got}
 
     @router.post("/control/results")
     async def post_result(request: Request) -> JSONResponse:

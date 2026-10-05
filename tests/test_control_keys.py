@@ -293,7 +293,7 @@ def test_wpc_key_is_bound_to_a_host(env):
 def test_wpc_key_pulls_only_for_its_own_host(env):
     key, _ = run(create_control_key(env.store, "nas01"))
     ok = env.pull(key, "nas01")
-    assert ok.status_code == 200 and ok.json() == {"host": "nas01", "commands": []}
+    assert ok.status_code == 200 and ok.json() == {"host": "nas01", "commands": [], "cancel": []}
     assert env.pull(key, "nas02").status_code == 403
     assert env.pull(key, "").status_code == 403
     assert env.pull(None).status_code == 401

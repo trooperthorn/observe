@@ -161,8 +161,8 @@ function historyTable(commands) {
     st.append(cel("span", `pill ctl-${c.state}`, c.state));
     r.append(st, cel("td", null, c.result ? `${c.result.state}${c.result.output ? ": " + c.result.output : ""}` : ""));
     const act = cel("td");
-    if (c.action === "host.reboot" && c.state === "scheduled") {
-      const b = cel("button", null, "Cancel reboot");
+    if (c.state === "requested" || (c.action === "host.reboot" && c.state === "scheduled")) {
+      const b = cel("button", null, c.state === "requested" ? "Cancel" : "Cancel reboot");
       b.type = "button";
       b.addEventListener("click", async () => {
         b.disabled = true;

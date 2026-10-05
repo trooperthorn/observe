@@ -78,6 +78,11 @@ class Env:
         return self.client.post("/api/v1/control/results", content=json.dumps(body),
                                 headers=bearer(key))
 
+    def answer(self, key, body, host="nas01"):
+        """Pull as the host would (a result is accepted only for a pulled command), then post."""
+        assert self.pull(key, host).status_code == 200
+        return self.result(key, body)
+
     def rows(self, sql, *args):
         db = sqlite3.connect(self.path)
         try:
@@ -165,6 +170,7 @@ def test_result_records_outcome_redacted_truncated_with_timings(env):
     env.pull(key)
     secret = "wpc_abcdef123456_" + "s" * 32
     out = f"ok token=hunter2 {secret} " + "line of output " * 400
+    env.pull(key)
     r = env.result(key, {"id": cmd["id"], "state": "done", "output": out,
                          "started_at": 100.0, "finished_at": 102.5})
     assert r.status_code == 200 and r.json() == {"id": cmd["id"], "state": "done"}
@@ -197,11 +203,12 @@ def test_result_for_another_hosts_command_is_refused_and_audited(env):
 def test_result_is_final_once_and_bad_results_are_refused(env):
     cmd = env.enqueue()["command"]
     key = env.key()
-    assert env.result(key, {"id": cmd["id"], "state": "failed",
+    assert env.answer(key, {"id": cmd["id"], "state": "failed",
                             "output": "boom"}).status_code == 200
     assert env.result(key, {"id": cmd["id"], "state": "done"}).status_code == 409
     assert env.state(cmd["id"]) == "failed"
     c2 = env.enqueue("nas01", "service.restart", {"name": "x"})["command"]
+    env.pull(key)
     for bad in ({"id": c2["id"], "state": "cancelled"}, {"id": c2["id"], "state": "unknown"},
                 {"id": c2["id"], "state": "done", "extra": 1},
                 {"id": c2["id"], "state": "done", "started_at": 5, "finished_at": 1},
@@ -210,7 +217,7 @@ def test_result_is_final_once_and_bad_results_are_refused(env):
         assert env.result(key, bad).status_code == 422, bad
     assert env.client.post("/api/v1/control/results", content=b"{nope",
                            headers=bearer(key)).status_code == 422
-    assert env.state(c2["id"]) == "requested"
+    assert env.state(c2["id"]) == "pulled"
 
 
 def test_scheduled_then_done_is_two_results_for_one_command(env):
@@ -220,7 +227,7 @@ def test_scheduled_then_done_is_two_results_for_one_command(env):
     assert env.result(key, {"id": cmd["id"], "state": "scheduled"}).status_code == 200
     assert env.state(cmd["id"]) == "scheduled"
     env.clock.now += 10_000  # a scheduled command has been answered, so expiry does not apply
-    assert len(env.pull(key).json()["commands"]) == 1
+    assert env.pull(key).json()["commands"] == []  # and it is not served again
     assert env.state(cmd["id"]) == "scheduled"
     assert env.result(key, {"id": cmd["id"], "state": "done"}).status_code == 200
     assert env.rows("SELECT COUNT(*) FROM control_results") == [(2,)]
@@ -285,7 +292,7 @@ def test_one_pending_per_host_and_action(env):
 
 def test_pending_clears_after_a_result_or_expiry(env):
     first = env.enqueue()["command"]
-    env.result(env.key(), {"id": first["id"], "state": "done"})
+    env.answer(env.key(), {"id": first["id"], "state": "done"})
     second = env.enqueue()["command"]
     assert second["seq"] == 2
     env.clock.now = second["expires_at"]
@@ -295,7 +302,7 @@ def test_pending_clears_after_a_result_or_expiry(env):
 def test_ten_commands_per_host_per_hour(env):
     for i in range(10):
         cmd = env.enqueue("nas01", params={**FLOOR, "min_duty": 20 + i})["command"]
-        env.result(env.key("nas01"), {"id": cmd["id"], "state": "done"})
+        env.answer(env.key("nas01"), {"id": cmd["id"], "state": "done"})
         env.clock.now += 5
     with pytest.raises(QueueError, match="too many commands"):
         env.enqueue("nas01")
@@ -306,7 +313,7 @@ def test_ten_commands_per_host_per_hour(env):
 
 def test_reboot_once_per_fifteen_minutes(env):
     first = env.enqueue("nas01", "host.reboot", {})["command"]
-    env.result(env.key(), {"id": first["id"], "state": "done"})
+    env.answer(env.key(), {"id": first["id"], "state": "done"})
     env.clock.now += 600
     with pytest.raises(QueueError, match="reboot was already requested"):
         env.enqueue("nas01", "host.reboot", {})
