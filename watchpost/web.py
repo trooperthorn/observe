@@ -36,6 +36,7 @@ from .config import Config
 from .infra import InfraError, InfraService
 from .infra_map import MapService
 from .infra_match import LivePort, Matcher, PortMatch
+from .infra_port import PortPages
 from .ingest.api import DenialAggregator, RateLimiter, build_router
 from .ingest.keys import IngestKeyError, create_key, list_keys, revoke_key
 from .ingest.schema import MAX_NAME
@@ -544,6 +545,51 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     async def infra_findings(_: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
         """Field conflicts, computed now. Dashboard only; nothing here raises an alert."""
         return {"findings": [f.as_dict() for f in await matcher.findings(live_port)]}
+
+    ports = PortPages(infra, matcher, mapper, map_clock)
+
+    @app.get("/api/infra/port", include_in_schema=False)
+    async def infra_port(switch_id: str, port: str,
+                         _: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
+        """One port: live state, properties and history, findings and matched monitors."""
+        view = await ports.port_view(switch_id, port, live_port)
+        if view is None:
+            raise HTTPException(404, "unknown port")
+        return view
+
+    @app.post("/api/admin/infra/findings/ack", include_in_schema=False)
+    async def admin_finding_ack(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        fields = [body.get(k) if isinstance(body, dict) else None
+                  for k in ("switch_id", "port_key", "kind")]
+        if not all(isinstance(f, str) for f in fields):
+            return JSONResponse({"detail": "switch_id, port_key and kind are required"},
+                                status_code=422)
+        remote = request.client.host if request.client else ""
+        try:
+            await ports.acknowledge(fields[0], fields[1], fields[2], live_port, sess.username,
+                                    remote)
+        except InfraError as err:
+            return JSONResponse({"detail": str(err)}, status_code=422)
+        return JSONResponse({"ok": True})
+
+    @app.get("/map", include_in_schema=False)
+    async def map_page() -> FileResponse:
+        # Like /host, the page holds no data; map.js sends a visitor without a session to /login.
+        return FileResponse(STATIC / "map.html")
+
+    @app.get("/port", include_in_schema=False)
+    async def port_page() -> FileResponse:
+        return FileResponse(STATIC / "port.html")
+
+    @app.get("/admin/infra", include_in_schema=False)
+    async def admin_infra_page() -> FileResponse:
+        # The page holds no data; infra-admin.js needs an admin session for everything it shows.
+        return FileResponse(STATIC / "infra-admin.html")
 
     @app.get("/admin", include_in_schema=False)
     async def admin_page() -> FileResponse:

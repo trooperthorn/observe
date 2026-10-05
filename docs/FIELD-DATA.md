@@ -1,6 +1,6 @@
 # Field data from the Pockethernet app
 
-Status: design; the plugin loader, per-plugin migrations, plugin pages, the infrastructure tables with port keys and property history, monitor matching with conflict findings, and map data with ageing and inferred dependencies are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
+Status: design; the plugin loader, per-plugin migrations, plugin pages, the infrastructure tables with port keys and property history, monitor matching with conflict findings, map data with ageing and inferred dependencies, and the map, port and map admin pages are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
 Pockethernet Android app (repo `pocketethernet-app`) become properties of switch
 ports in watchpost, and how the mapping data in those results builds an
 infrastructure map with live availability and health.
@@ -194,6 +194,16 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 - **Effective set.** `Config.parents` returns the YAML parents plus the applied edges, so the rollup and the scheduler's parent confirmation use both. The applied edges live in memory, are recomputed from the links on every map or dependency read and once a minute by a scheduler hook, and are never written to the YAML. A contradicted, closed or hidden link removes its edge.
 - **Cycles.** An edge that would close a cycle with the YAML and the edges already applied is refused, listed under `refused`, and cannot be accepted.
 
+### Built: map, port and map admin pages (slice 7)
+
+`watchpost/infra_port.py`, three static pages and schema version 8 implement the views for the core map. Details that the sketch above left open:
+
+- **Pages.** `/map`, `/port?switch_id=&port=` and `/admin/infra` are static files with no data. Their scripts send a visitor without a session to `/login`, and the admin page shows nothing without an admin session. All text is written with `textContent`, and there is no `innerHTML`, inline script or inline style.
+- **Map page.** Switches are placed by uplink depth from the map's port links: a switch with nothing above it but switches below is core, the deepest is access, and anything between is distribution. A switch with no uplink links is shown as access. Each node shows its state in words (Up, Warning, Down, Unreachable with the blocking ancestor, Pending, State unknown) as well as colour. Stale links are dashed, and a links table repeats every edge as text. The site and building filters are filled from the jacks in the unfiltered map.
+- **Port page.** `GET /api/infra/port` returns live values and state of the matched monitors, the current properties, up to 50 history rows per property, and the findings for the port. The field report list and jack pages come with the Pockethernet plugin slices.
+- **Acknowledging findings.** `POST /api/admin/infra/findings/ack` (admin session, CSRF token, body `switch_id`, `port_key`, `kind`) stores the acknowledged message in `infra_finding_acks`. It is audited as `infra_finding_acknowledged` or `infra_finding_ack_failed`. A finding that no longer exists cannot be acknowledged, and when the facts change the message changes and the finding shows as new. An acknowledged warning no longer turns a passing port to Warning. Acknowledging sends no alert.
+- **Map admin page.** It lists the unlinked switch queue with a choice of snmp, unifi_network, ping or tcp monitors, and the pending, rejected and refused dependency proposals. Accept and Reject use the existing routes; a rejected proposal can still be accepted.
+
 ## Build order
 
 **watchpost core.**
@@ -203,7 +213,7 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 4. Infrastructure tables, port-key normalisation and property history (built).
 5. Monitor matching and conflict findings (built).
 6. Map data, ageing and inferred dependencies (built).
-7. Map and port pages.
+7. Map and port pages (built).
 
 **Pockethernet plugin.**
 1. Report schema.

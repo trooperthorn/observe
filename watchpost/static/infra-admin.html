@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>map admin - watchpost</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <h1><a href="/" class="home">watchpost</a></h1>
+  <a href="/admin" class="home">admin</a>
+  <a href="/map" class="home">map</a>
+</header>
+<main class="adminpage">
+  <p id="msg" role="alert"></p>
+  <section>
+    <h2>Unlinked switches</h2>
+    <p class="note">Switches seen in the field that match no monitor. Linking never creates a monitor.</p>
+    <table id="unlinked"><thead><tr><th>Switch</th><th>Name</th><th>Addresses</th><th>Last seen</th><th>Link to monitor</th></tr></thead><tbody></tbody></table>
+  </section>
+  <section>
+    <h2>Pending dependency proposals</h2>
+    <p class="note">Weaker links wait here until an admin accepts or rejects them.</p>
+    <table id="pending"><thead><tr><th>Depends</th><th>On</th><th>Source</th><th>Seen</th><th></th></tr></thead><tbody></tbody></table>
+  </section>
+  <section>
+    <h2>Decided and refused</h2>
+    <table id="decided"><thead><tr><th>Depends</th><th>On</th><th>Outcome</th><th>Reason</th><th></th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+<script src="/static/infra-common.js"></script>
+<script src="/static/infra-admin.js"></script>
+</body>
+</html>

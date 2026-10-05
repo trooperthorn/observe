@@ -255,6 +255,9 @@ class MapService:
 
     # Map --------------------------------------------------------------------------------
 
+    def monitor_state(self, slug: str | None) -> dict[str, Any]:
+        return self._state(slug)
+
     def _state(self, slug: str | None) -> dict[str, Any]:
         got = self._state_of(slug) if slug else None
         if got is None:

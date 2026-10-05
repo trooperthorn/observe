@@ -85,3 +85,22 @@ a.home { color: inherit; text-decoration: none; }
 .adminpage th, .adminpage td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .adminpage form { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; }
 .adminpage code { word-break: break-all; }
+.mappage { padding: 0 1rem 2rem; max-width: 80rem; margin: 0 auto; }
+.note { color: var(--muted); font-size: .85rem; }
+.layers { position: relative; }
+.layers svg.edges { position: absolute; top: 0; left: 0; pointer-events: none; }
+.layers .layer, .layers .row { position: relative; }
+.layers .row { display: flex; flex-wrap: wrap; gap: .75rem; }
+.node { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--pending);
+        border-radius: 8px; padding: .5rem .7rem; min-width: 12rem; max-width: 22rem; overflow-wrap: anywhere; }
+.node.up { border-left-color: var(--up); } .node.warn { border-left-color: var(--warn); }
+.node.down { border-left-color: var(--down); } .node.unreachable { border-left-color: var(--unreach); }
+.node-title { font-weight: 600; }
+.node-state { font-size: .85rem; }
+ul.chips { list-style: none; margin: .3rem 0 0; padding: 0; font-size: .8rem; }
+ul.chips li { padding: .1rem 0; }
+.edge { stroke: var(--muted); stroke-width: 1.5; }
+.edge.stale { stroke-dasharray: 5 4; opacity: .6; }
+ul.findings { list-style: none; padding: 0; margin: 0; }
+ul.findings li { padding: .3rem 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.mappage table, .hostpage table { overflow-wrap: anywhere; }

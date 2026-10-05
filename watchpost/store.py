@@ -168,6 +168,16 @@ MAP_DEPENDENCY_TABLES = (
 )""",
 )
 
+# An admin's acknowledgement of a field finding. Findings are computed on each read and never
+# stored; an acknowledgement names the finding by kind and port and keeps the message it was
+# given for, so a finding whose facts changed is shown as new again.
+FINDING_ACK_TABLES = (
+    """CREATE TABLE IF NOT EXISTS infra_finding_acks (
+  kind TEXT NOT NULL, switch_id TEXT NOT NULL, port_key TEXT NOT NULL, message TEXT NOT NULL,
+  acked_by TEXT NOT NULL, acked_at REAL NOT NULL, PRIMARY KEY (kind, switch_id, port_key)
+)""",
+)
+
 # Stored as the reason when an agent says a source does not exist on the host.
 ABSENT_REASON = "not present on this host"
 
@@ -184,6 +194,7 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     5: PLUGIN_TABLES,
     6: INFRA_TABLES,
     7: MAP_DEPENDENCY_TABLES,
+    8: FINDING_ACK_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

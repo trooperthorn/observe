@@ -489,7 +489,7 @@ an admin. Switches that match nothing are listed at `GET /api/admin/infra/unlink
 admin links one with `POST /api/admin/infra/link` (audited). `GET /api/infra/findings` lists
 conflicts between field results and live state: speed above live, VLAN mismatch, PoE verified
 but no power, and re-patched. Findings are computed on request, are for the dashboard only,
-and never send alerts. The map and port pages are later slices.
+and never send alerts.
 
 `GET /api/infra/map` returns nodes and edges with live state from the matched monitors and
 can be filtered by `site` and `building`. A link nobody has confirmed for `map.stale_days`
@@ -501,9 +501,18 @@ UNREACHABLE and only the switch alerts. Weaker edges are listed at `GET /api/inf
 until an admin accepts or rejects them (`POST /api/admin/infra/depends/accept` and `/reject`,
 audited). An edge that would create a cycle is refused and listed.
 
+Three pages show this data and need a login. `/map` draws core, distribution, access, jacks
+and endpoints from `GET /api/infra/map`, spells out each node's state in words as well as
+colour, and filters by site and building. `/port?switch_id=...&port=...` shows one port: live
+state from its matched monitors, current properties, property history, findings and the
+matched monitors. An admin can acknowledge a finding there (`POST /api/admin/infra/findings/ack`,
+audited); an acknowledgement covers that finding's current message only, so a changed finding
+shows as new again, and it never sends an alert. `/admin/infra` lists the unlinked switch queue
+with a monitor choice for each, and the pending dependency proposals with Accept and Reject.
+
 ## Not implemented
 
-Network discovery, automated remediation actions, the map and port pages, native DCOM WMI,
+Network discovery, automated remediation actions, native DCOM WMI,
 Holt-Winters seasonal forecasting, alerts on forecasts,
 SNMP traps, maintenance windows, and editing monitors from the UI (the YAML stays the
 source of truth for polled monitors). See `docs/VERIFICATION.md` for what has and

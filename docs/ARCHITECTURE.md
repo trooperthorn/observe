@@ -374,6 +374,22 @@ hook that runs once a minute. `decide` records an admin decision and audits it. 
 `GET /api/infra/map` and `GET /api/infra/dependencies` (session), and
 `POST /api/admin/infra/depends/accept` and `/reject` (admin session and CSRF token).
 
+Map pages. `watchpost/infra_port.py` (`PortPages`) builds `GET /api/infra/port?switch_id=&port=`
+(session): the port's switch, role, the matched monitors with their state and last polled
+speed, VLAN and PoE, the current properties, up to 50 history rows per property, and the
+findings for that port. A port is `up` only when no matched monitor is worse and no
+unacknowledged warning finding exists. Schema version 8 adds `infra_finding_acks`, keyed by
+finding kind and port, which stores the message acknowledged; `acknowledge` refuses a finding
+that does not exist now, and a finding whose message changed is shown as unacknowledged. The
+route is `POST /api/admin/infra/findings/ack` (admin session and CSRF token, audited as
+`infra_finding_acknowledged` and `infra_finding_ack_failed`). The pages `/map`, `/port` and
+`/admin/infra` are static files like `/host`: they hold no data and their scripts send a
+visitor without a session to `/login`; `infra-admin.js` also needs an admin session for all of
+its data. They share `infra-common.js` and write every string with `textContent`. The map
+places each switch by its uplink depth (core, distribution, access), draws edges in an SVG
+overlay with stale links dashed, and repeats the links as a table so the picture is never the
+only source. Colour is paired with a word for every state.
+
 ## Phase 2 (planned): control
 
 Nothing in this section is built. It records the intended design so that
