@@ -551,6 +551,8 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 - Service names are now matched against the control daemon's own pattern (no `@`, no leading dash, no `..`) when a host is created.
 - Tests: `tests/test_install_script.py`. The script is only syntax checked (`bash -n` and `sh -n`); it has not been run on a real machine.
 - Deviations: `control.toml` has a single `min_duty_floor`, so the largest per-header `min_duty_limit` is used. Regenerate (S13) is not built, so a run on the wrong machine, which still spends the token, needs a new host entry.
+- Also: `machine_id` is written before the first table in `control.toml`, because the daemon reads it only as a top-level key. `control.env` is `root:hostwatch-control` 0640 to match hostwatch's install contract (`deploy-agents.md`), although systemd reads it as root and 0600 would also work. Both files are written beside the live ones and moved into place only after the sudoers rules render and pass `visudo -c`.
+- Limits: progress reports are best effort. A missing `curl` or a failed report is ignored, so Observe can show no install steps for a run that did happen; the screen output of the script is the full record. A run replaces any container named `hostwatch-agent`, including one started from hostwatch's compose file; the script says so, and the old agent's data volume is kept, not deleted, while the new agent uses the volume `hostwatch-agent-data`. Refused step reports write at most one audit row per peer per minute, with a count.
 
 ### S9 notes (done)
 

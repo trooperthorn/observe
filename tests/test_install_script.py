@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
+import tomllib
 import subprocess
 from types import SimpleNamespace
 
@@ -297,3 +298,40 @@ def test_step_key_expires_two_hours_after_the_fetch(env):
     assert asyncio.run(enrol.record_step(env.store, step_key, "done", "ok", "x", late)) is None
     soon = env.clock() + 5
     assert asyncio.run(enrol.record_step(env.store, step_key, "done", "ok", "x", soon)) == "nas01"
+
+
+def test_machine_id_is_a_top_level_key_before_any_table(tmp_path):
+    script = scripts.render_linux(red(), CTX)
+    nl = chr(10)
+    open_brace = "  umask 077" + nl + "  {" + nl
+    start = script.index(open_brace, script.index("install_control() {"))
+    block = script[start + len("  umask 077" + nl):script.index('  } > "$ETC/control.toml.new"')]
+    sh = shutil.which("sh")
+    assert sh, "sh is needed to render the control.toml body"
+    done = subprocess.run([sh, "-c", "here_id=" + MACHINE_ID + nl + block + "}"],
+                          capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, done.stderr
+    data = tomllib.loads(done.stdout)
+    assert data["machine_id"] == MACHINE_ID
+    assert data["host"] == "nas01"
+    for table in ("fan", "services", "reboot"):
+        assert "machine_id" not in data[table]
+    assert done.stdout.index("machine_id") < done.stdout.index("[fan]")
+
+
+def test_refused_step_reports_write_a_bounded_number_of_audit_rows(env):
+    fetched_keys(env)
+    for _ in range(5):
+        assert env.client.post("/api/enrol/step", json={"step": "agent", "status": "ok"}
+                               ).status_code == 401
+    assert audit_kinds(env).count("enrol_step_refused") == 1
+
+
+def test_script_replaces_and_reports_an_existing_agent_container_and_checks_writes():
+    script = scripts.render_linux(red(), CTX)
+    assert "An existing hostwatch-agent container was found" in script
+    assert "com.docker.compose.project" in script
+    assert '} || fail control_unit "cannot write the unit"' in script
+    assert 'chmod 0755 "$ETC" || fail' in script
+    # The live control files are replaced only after the sudoers rules passed visudo.
+    assert script.index("visudo -c -f") < script.index('mv -f "$ETC/control.toml.new"')

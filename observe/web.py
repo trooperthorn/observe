@@ -186,6 +186,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     key_peer_limiter = RateLimiter(config.server.plugin_rate_per_minute, ingest_clock)
     key_fail_limiter = RateLimiter(config.server.plugin_rate_per_minute, ingest_clock)
     plugin_denials = DenialAggregator(ingest_clock)
+    step_denials = DenialAggregator(ingest_clock)
 
     async def plugin_rate_limit(request: Request) -> None:
         peer = request.client.host if request.client else "unknown"
@@ -843,7 +844,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                                    detail={"reason": str(err), "token_spent": False})
                 return PlainTextResponse("echo 'Observe could not build this script' >&2; exit 1\n",
                                          status_code=500)
-        red =await enrol.redeem(store, token, now, remote)
+        red = await enrol.redeem(store, token, now, remote)
         if red is None:
             return PlainTextResponse("This install command was already used or has expired. "
                                      "Make a new one in the Observe console.\n", status_code=410)
@@ -879,8 +880,15 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             store, key, str(body["step"]) if ok else "", str(body["status"]) if ok else "",
             body.get("note", "") if ok else "", auth_clock()) if key and ok else None
         if host is None:
-            await audit.record(store, "enrol_step_refused", method="POST",
-                               path="/api/enrol/step", status=401, remote=remote)
+            # Bounded like login and plugin denials: one row per peer per window, with a count.
+            covered = step_denials.note(remote or "unknown")
+            if covered is not None:
+                detail: dict[str, Any] = {}
+                if covered:
+                    detail["denials_covered"] = covered
+                await audit.record(store, "enrol_step_refused", method="POST",
+                                   path="/api/enrol/step", status=401, remote=remote,
+                                   detail=detail)
             raise HTTPException(401, "missing or invalid step key",
                                 headers={"WWW-Authenticate": "Bearer"})
         if body["status"] in ("failed", "refused"):

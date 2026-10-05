@@ -108,6 +108,8 @@ def control_toml(host: str, allow: dict[str, Any], public_key: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+MACHINE_ID_LINE = r"""    if [ -n "$here_id" ]; then printf 'machine_id = "%s"\n' "$here_id"; fi"""
+
 _UNIT = """[Unit]
 Description=hostwatch control daemon
 Documentation=https://github.com/trooperthorn/hostwatch
@@ -244,7 +246,7 @@ main() {
     report rerun ok "updating an existing install"
   fi
   mkdir -p "$ETC" || fail root "cannot create the settings folder" "cannot create $ETC"
-  chmod 0755 "$ETC"
+  chmod 0755 "$ETC" || fail root "cannot set the settings folder mode" "cannot set the mode of $ETC"
 
   if [ "$WANT_AGENT" = 1 ]; then install_agent; fi
   if [ "$WANT_CONTROL" = 1 ]; then install_control; fi
@@ -273,6 +275,12 @@ install_agent() {
   docker rm -f hostwatch-agent-prev >/dev/null 2>&1 || true
   had_old=0
   if docker inspect hostwatch-agent >/dev/null 2>&1; then
+    say "An existing hostwatch-agent container was found and will be replaced."
+    project=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' hostwatch-agent 2>/dev/null || true)
+    if [ -n "$project" ]; then
+      say "It is managed by Docker Compose (project $project). Its data volume is kept, not deleted, and the new agent uses the volume hostwatch-agent-data."
+    fi
+    report rerun ok "replacing an existing agent container"
     docker stop hostwatch-agent >/dev/null 2>&1 || true
     docker rename hostwatch-agent hostwatch-agent-prev >/dev/null 2>&1 &&
       had_old=1 || docker rm -f hostwatch-agent >/dev/null 2>&1 || true
@@ -311,7 +319,8 @@ install_control() {
   fi
   report control_account ok "account present"
 
-  mkdir -p /opt/hostwatch-control && chmod 0755 /opt/hostwatch-control
+  { mkdir -p /opt/hostwatch-control && chmod 0755 /opt/hostwatch-control; } ||
+    fail control_install "cannot create the install folder" "cannot create /opt/hostwatch-control"
   if [ ! -x "$VENV/bin/python" ]; then
     python3 -m venv "$VENV" || fail control_install "venv failed" "could not create the Python environment"
   fi
@@ -322,12 +331,13 @@ install_control() {
   umask 077
   {
 @@TOML@@
-    if [ -n "$here_id" ]; then printf 'machine_id = "%s"\n' "$here_id"; fi
   } > "$ETC/control.toml.new" || fail control_config "cannot write settings" "cannot write control.toml"
   umask 022
-  # The daemon runs as hostwatch-control and must read these, so they are root:hostwatch-control 0640.
-  { chown root:hostwatch-control "$ETC/control.toml.new" && chmod 0640 "$ETC/control.toml.new" &&
-      mv -f "$ETC/control.toml.new" "$ETC/control.toml"; } ||
+  # Both files are root:hostwatch-control 0640, which is the install contract in hostwatch's
+  # deploy-agents.md. systemd reads control.env as root, so 0600 root:root would also work.
+  # They are written beside the live files and moved into place only after the sudoers rules
+  # have rendered and passed visudo, so a failed render changes nothing that is live.
+  chown root:hostwatch-control "$ETC/control.toml.new" && chmod 0640 "$ETC/control.toml.new" ||
     fail control_config "cannot set modes" "cannot secure control.toml"
   umask 077
   {
@@ -335,18 +345,19 @@ install_control() {
     printf 'HOSTWATCH_CONTROL_KEY=%s\n' "$CONTROL_KEY"
   } > "$ETC/control.env.new" || fail control_config "cannot write settings" "cannot write control.env"
   umask 022
-  { chown root:hostwatch-control "$ETC/control.env.new" && chmod 0640 "$ETC/control.env.new" &&
-      mv -f "$ETC/control.env.new" "$ETC/control.env"; } ||
+  chown root:hostwatch-control "$ETC/control.env.new" && chmod 0640 "$ETC/control.env.new" ||
     fail control_config "cannot set modes" "cannot secure control.env"
-  report control_config ok "control settings written"
 
   sudoers_tmp=$(mktemp) || fail sudoers "no temporary file" "cannot create a temporary file"
-  "$VENV/bin/python" -c 'import sys; from hostwatch.control import config, actions_linux; sys.stdout.write(actions_linux.render_sudoers(config.load("/etc/hostwatch/control.toml")))' > "$sudoers_tmp" ||
+  "$VENV/bin/python" -c 'import sys; from hostwatch.control import config, actions_linux; sys.stdout.write(actions_linux.render_sudoers(config.load("/etc/hostwatch/control.toml.new")))' > "$sudoers_tmp" ||
     { rm -f "$sudoers_tmp"; fail sudoers "render failed" "could not render the sudoers rules"; }
   if ! visudo -c -f "$sudoers_tmp" >/dev/null 2>&1; then
     rm -f "$sudoers_tmp"
     fail sudoers "visudo rejected the rules" "visudo rejected the generated rules, so none were installed"
   fi
+  { mv -f "$ETC/control.toml.new" "$ETC/control.toml" && mv -f "$ETC/control.env.new" "$ETC/control.env"; } ||
+    { rm -f "$sudoers_tmp"; fail control_config "cannot move settings into place" "cannot move the control settings into place"; }
+  report control_config ok "control settings written"
   if ! install -o root -g root -m 0440 "$sudoers_tmp" /etc/sudoers.d/hostwatch-control; then
     rm -f "$sudoers_tmp"
     fail sudoers "install failed" "could not install the sudoers rules"
@@ -354,8 +365,10 @@ install_control() {
   rm -f "$sudoers_tmp"
   report sudoers ok "sudoers checked and installed"
 
-  cat > /etc/systemd/system/hostwatch-control.service <<'UNIT_EOF'
+  {
+    cat > /etc/systemd/system/hostwatch-control.service <<'UNIT_EOF'
 @@UNIT@@UNIT_EOF
+  } || fail control_unit "cannot write the unit" "cannot write the service file"
   chmod 0644 /etc/systemd/system/hostwatch-control.service ||
     fail control_unit "cannot set unit mode" "cannot set the mode of the service file"
   systemctl daemon-reload &&
@@ -393,7 +406,11 @@ def render_linux(red: Redeemed, ctx: Context) -> str:
     unit = ""
     if control:
         body = control_toml(name, red.allowlist, ctx.public_key)
-        toml = "\n".join(f"    printf '%s\\n' {_q(line)}" for line in body.splitlines())
+        # machine_id is a top-level key, so it goes before the first [table] header. A key after
+        # a header belongs to that table, and the daemon would not see it.
+        out = [f"    printf '%s\\n' {_q(line)}" for line in body.splitlines()]
+        out.insert(2, MACHINE_ID_LINE)
+        toml = "\n".join(out)
         unit = _UNIT
     elif red.allowlist.get("fans") or red.allowlist.get("services") or red.allowlist.get("reboot"):
         raise ScriptError("an allowlist needs control")

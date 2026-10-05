@@ -306,8 +306,7 @@ def test_phase5_database_migrates_keeping_rows(tmp_path):
     assert counts == {"results": 1, "hosts": 1, "audit": 1, "plugin_schema": 1,
                       **{t: 0 for t in INFRA}}
     assert INFRA <= tables(path)
-    assert SCHEMA_VERSION >= 10
-    assert 10 in MIGRATIONS and 11 in MIGRATIONS  # 11 is the S11b enrolment reports step
+    assert SCHEMA_VERSION == 11  # 11 is the S11b enrolment reports step
     assert "infra_dependencies" in tables(path)
 
 
@@ -329,3 +328,34 @@ def test_infra_step_is_safe_to_rerun(tmp_path):
         store._db.execute(stmt)
     assert store._exec("SELECT COUNT(*) FROM port_properties") == [(1,)]
     store.close()
+
+
+def test_version_10_database_with_enrolments_survives_the_reports_migration(tmp_path):
+    path = str(tmp_path / "w.db")
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+    db.commit()
+    from observe.store import migrate
+    newer = {v: s for v, s in MIGRATIONS.items() if v > 10}
+    for v in newer:
+        del MIGRATIONS[v]
+    try:
+        migrate(db)
+    finally:
+        MIGRATIONS.update(newer)
+    db.execute("INSERT INTO enrolments (host, platform, agent, control, token_hash, created,"
+               " expires_at, fetched_at) VALUES ('pending1', 'linux', 1, 0, 'h1', 1.0, 9.0, NULL)")
+    db.execute("INSERT INTO enrolments (host, platform, agent, control, token_hash, created,"
+               " expires_at, fetched_at) VALUES ('fetched1', 'linux', 1, 1, 'h2', 1.0, 9.0, 2.0)")
+    db.commit()
+    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 10
+    assert "step_hash" not in {r[1] for r in db.execute("PRAGMA table_info(enrolments)")}
+    db.close()
+    store = Store(path)
+    rows = store._exec("SELECT host, fetched_at, step_hash, reports FROM enrolments ORDER BY host")
+    store.close()
+    assert [tuple(r) for r in rows] == [("fetched1", 2.0, None, "[]"),
+                                        ("pending1", None, None, "[]")]
+    db = sqlite3.connect(path)
+    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 11
+    db.close()
