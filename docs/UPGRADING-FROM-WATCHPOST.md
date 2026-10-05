@@ -15,7 +15,7 @@ The product formerly called watchpost is now Observe. The old names still work f
 | Compose service, container and image `watchpost` | `observe` |
 | `python -m watchpost` | `python -m observe` |
 
-The key markers `wpi_`, `wpc_` and `wpf_` are opaque markers already issued to hosts and phones. They are unchanged, and so is the `watchpost_public_key` setting in a host's `control.toml`, which the host daemon reads.
+The key markers `wpi_`, `wpc_` and `wpf_` are opaque markers already issued to hosts and phones. They are unchanged. A host's `control.toml` now names the public key `observe_public_key`; the host daemon still reads the old `watchpost_public_key` name, so existing hosts keep working, and you can rename the key there whenever you like.
 
 ## Commands for the Raspberry Pi at ~/observe
 
