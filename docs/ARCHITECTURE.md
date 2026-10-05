@@ -406,7 +406,7 @@ property rows that carry its report id, and a jack to its history through its `j
 rows. The plugin's `pages()` hook registers three static files from `pages/` at
 `/plugins/pockethernet`, `/report` and `/jack`, `nav_entries()` registers "Field reports", and
 `static_dir()` serves `static/pockethernet.js` at `/plugins/pockethernet/static`. The script
-shares `infra-common.js` with the core pages and writes every string with `textContent`.
+shares the `infra-common.js` module (which builds on `js/dom.js` and `js/api.js`) with the other map pages and writes every string with `textContent`.
 `index.html` and `app.js` read `GET /api/plugins` for the navigation links.
 
 ## Infrastructure map core
@@ -488,7 +488,7 @@ route is `POST /api/admin/infra/findings/ack` (admin session and CSRF token, aud
 `infra_finding_acknowledged` and `infra_finding_ack_failed`). The pages `/map`, `/port` and
 `/admin/infra` are static files like `/host`: they hold no data and their scripts send a
 visitor without a session to `/login`; `infra-admin.js` also needs an admin session for all of
-its data. They share `infra-common.js` and write every string with `textContent`. The map
+its data. They load as ES modules (`<script type="module">`, allowed by `default-src 'self'`), share `infra-common.js` and write every string with `textContent`. The map
 places each switch by its uplink depth (core, distribution, access), draws edges in an SVG
 overlay with stale links dashed, and repeats the links as a table so the picture is never the
 only source. Colour is paired with a word for every state.

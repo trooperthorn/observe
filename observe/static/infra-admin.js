@@ -2,7 +2,7 @@
 // decision. Every change is a fetch with the session's CSRF token; the CSP forbids native
 // form posts. Every string came from a field report or the config, so it is written with
 // textContent only.
-"use strict";
+import { el, when, api, whoami } from "/static/infra-common.js";
 
 let csrf = "";
 const msg = document.getElementById("msg");

@@ -1,6 +1,6 @@
 // Infrastructure map: core, distribution, access, jacks and endpoints, drawn from
 // /api/infra/map. Every node shows its state in words, so colour is never the only signal.
-"use strict";
+import { el, stateText, portHref, api, STATE_WORDS } from "/static/infra-common.js";
 
 const LAYER_TITLES = [
   ["core", "Core"], ["distribution", "Distribution"], ["access", "Access"],

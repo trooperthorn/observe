@@ -23,7 +23,7 @@ from .conftest import make_config
 
 PASSWORD = "correct horse battery"
 STATIC = Path(__file__).parent.parent / "observe" / "static"
-PAGES = {"/map": ["map.html", "map.js"], "/port": ["port.html", "port.js"],
+PAGES = {"/map": ["map.html", "pages/map.js"], "/port": ["port.html", "port.js"],
          "/admin/infra": ["infra-admin.html", "infra-admin.js"]}
 HOSTILE = '<img src=x onerror="alert(1)">&"\'</script>'
 SID = switch_id("aa:bb:cc:dd:ee:02")
@@ -77,10 +77,11 @@ def web(tmp_path):
 def test_pages_are_served_with_the_csp_and_hold_no_data(web):
     for path, files in PAGES.items():
         r = web.client.get(path)
-        assert r.status_code == 200 and files[1] in r.text
+        assert r.status_code == 200 and f'type="module" src="/static/{files[1]}"' in r.text
         assert "default-src 'self'" in r.headers["content-security-policy"]
         assert "script-src" not in r.headers["content-security-policy"]
-        assert web.client.get(f"/static/{files[1]}").status_code == 200
+        js = web.client.get(f"/static/{files[1]}")
+        assert js.status_code == 200 and "javascript" in js.headers["content-type"]
 
 
 async def test_data_behind_every_page_needs_a_login(web):
@@ -94,7 +95,7 @@ async def test_data_behind_every_page_needs_a_login(web):
     # Each page script sends a visitor without a session to the login page.
     for files in PAGES.values():
         js = (STATIC / files[1]).read_text(encoding="utf-8") + (
-            STATIC / "infra-common.js").read_text(encoding="utf-8")
+            STATIC / "js" / "api.js").read_text(encoding="utf-8")
         assert 'assign("/login")' in js
     await web.login("bob", admin=False)
     assert web.client.get("/api/infra/map").status_code == 200
@@ -107,7 +108,8 @@ async def test_data_behind_every_page_needs_a_login(web):
 def test_static_files_use_no_innerhtml_and_no_inline_script_or_style():
     sinks = re.compile(r"innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|"
                        r"new Function|setAttribute\(\s*[\"']on|setAttribute\(\s*[\"']style")
-    for name in ("infra-common.js", "map.js", "port.js", "infra-admin.js", "map.html",
+    for name in ("infra-common.js", "js/dom.js", "js/api.js", "pages/map.js", "port.js",
+                 "infra-admin.js", "map.html",
                  "port.html", "infra-admin.html"):
         text = (STATIC / name).read_text(encoding="utf-8")
         assert not sinks.search(text), name
@@ -117,7 +119,7 @@ def test_static_files_use_no_innerhtml_and_no_inline_script_or_style():
             assert scripts and all('src="/static/' in s for s in scripts), name
             assert not re.search(r"<style|https?://", text), name
         else:
-            assert "textContent" in text or name == "infra-common.js"
+            assert "textContent" in text or name in ("infra-common.js", "js/api.js")
 
 
 async def test_port_view_has_state_properties_history_findings_and_monitors(web):
@@ -209,3 +211,14 @@ async def test_hostile_strings_reach_the_pages_only_as_json_data(web):
     # The pages themselves are static and never contain stored strings.
     for path in PAGES:
         assert "onerror" not in web.client.get(path).text
+
+
+def test_map_and_helpers_are_es_modules_with_one_shared_dom_helper():
+    for name in ("map.html", "port.html", "infra-admin.html"):
+        scripts = re.findall(r"<script\b[^>]*>", (STATIC / name).read_text(encoding="utf-8"))
+        assert len(scripts) == 1 and 'type="module"' in scripts[0], name
+    common = (STATIC / "infra-common.js").read_text(encoding="utf-8")
+    assert 'from "/static/js/dom.js"' in common and "function el(" not in common
+    for name in ("js/dom.js", "js/api.js", "infra-common.js", "pages/map.js"):
+        assert "export " in (STATIC / name).read_text(encoding="utf-8") or name == "pages/map.js"
+    assert not (STATIC / "map.js").exists()

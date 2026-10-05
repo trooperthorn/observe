@@ -1,7 +1,7 @@
 // Port page: live state, current properties, property history, findings with acknowledge,
 // and matched monitors. Every string came from a field report, so it is written with
 // textContent only, never as markup.
-"use strict";
+import { el, statePill, when, api, whoami } from "/static/infra-common.js";
 
 const page = document.getElementById("page");
 const params = new URLSearchParams(location.search);
