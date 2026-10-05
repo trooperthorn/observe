@@ -38,7 +38,8 @@ from .infra_map import MapService
 from .infra_match import LivePort, Matcher, PortMatch
 from .infra_port import PortPages
 from .ingest.api import DenialAggregator, RateLimiter, build_router
-from .ingest.keys import MARKER, IngestKeyError, create_key, list_keys, revoke_key
+from .ingest.keys import (MARKER, IngestKeyError, create_key, key_host, list_keys, revoke_key,
+                          verify_key)
 from .ingest.schema import MAX_NAME
 from .plugins import PAGE_PREFIX, ROUTE_PREFIX, LoadedPlugins
 from .scheduler import Scheduler
@@ -183,32 +184,68 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             return await guards.admin(request)
         return await guards.admin_mutating(request)
 
+    # What a plugin handler may use: the store and the wall clock, and nothing of the core's
+    # auth. Key-authenticated handlers read request.state.plugin_key, set by the dependency.
+    app.state.plugin_store = store
+    app.state.plugin_clock = auth_clock
+
+    def plugin_key(scope: str) -> Callable[[Request], Awaitable[tuple[str, str]]]:
+        async def dependency(request: Request) -> tuple[str, str]:
+            header = request.headers.get("authorization", "")
+            key = header[7:].strip() if header[:7].lower() == "bearer " else ""
+            bound = await key_host(store, key, scope) if key else None
+            # The body is not read before this passes. A second check records last use.
+            if bound is None or not await verify_key(store, key, bound[1], scope=scope):
+                raise HTTPException(401, "missing or invalid key",
+                                    headers={"WWW-Authenticate": "Bearer"})
+            request.state.plugin_key = bound
+            return bound
+        return dependency
+
     # The core, not the plugin, chooses the dependencies: rate limit first, then the session
-    # and CSRF checks. A plugin can only ask for the admin role, never for less.
+    # or key check and CSRF. A plugin can only ask for the admin role, never for less. A
+    # key-authenticated router is mounted under /api/plugins/<name>, or under the /api/v1
+    # prefix it asked for; either way the audit middleware below covers it.
+    public_routes: list[tuple[str, str]] = []  # (static path prefix, plugin) outside ROUTE_PREFIX
     for loaded in plugins.plugins:
         for pr in loaded.routers:
-            app.include_router(
-                pr.router, prefix=f"{ROUTE_PREFIX}/{loaded.name}",
-                dependencies=[Depends(plugin_rate_limit),
-                              Depends(plugin_admin if pr.admin else plugin_session)])
+            if pr.key_scope is not None:
+                prefix = pr.public_prefix or f"{ROUTE_PREFIX}/{loaded.name}"
+                deps = [Depends(plugin_rate_limit), Depends(plugin_key(pr.key_scope))]
+                if pr.public_prefix is not None:
+                    public_routes += [((prefix + r.path).split("{")[0], loaded.name)
+                                      for r in pr.router.routes if hasattr(r, "path")]
+            else:
+                prefix = f"{ROUTE_PREFIX}/{loaded.name}"
+                deps = [Depends(plugin_rate_limit),
+                        Depends(plugin_admin if pr.admin else plugin_session)]
+            app.include_router(pr.router, prefix=prefix, dependencies=deps)
+
+    def plugin_of(path: str) -> str | None:
+        if path.startswith(ROUTE_PREFIX + "/"):
+            return path[len(ROUTE_PREFIX) + 1:].split("/", 1)[0][:64]
+        return next((name for static, name in public_routes if path.startswith(static)), None)
 
     @app.middleware("http")
     async def plugin_audit(request: Request, call_next: Any) -> Response:
         """Audit every plugin request that changes state, and every refused one."""
         path = request.url.path
-        if not path.startswith(ROUTE_PREFIX + "/"):
+        plugin = plugin_of(path)
+        if plugin is None:
             return await call_next(request)
         remote = request.client.host if request.client else ""
-        plugin = path[len(ROUTE_PREFIX) + 1:].split("/", 1)[0][:64]
         try:
             resp: Response = await call_next(request)
         except Exception as err:
             sess = getattr(request.state, "session", None)
-            await audit.record(store, "plugin_failed", actor=sess.username if sess else "",
+            key = getattr(request.state, "plugin_key", None)
+            await audit.record(store, "plugin_failed",
+                               actor=sess.username if sess else (key[0] if key else ""),
                                method=request.method, path=path, status=500, remote=remote,
                                detail={"plugin": plugin, "error": type(err).__name__})
             raise
         sess = getattr(request.state, "session", None)
+        key = getattr(request.state, "plugin_key", None)
         if resp.status_code in (401, 403, 429):
             # Bounded like login failures: one row per peer per window, with a count.
             covered = plugin_denials.note(remote or "unknown")
@@ -216,13 +253,19 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                 detail: dict[str, Any] = {"plugin": plugin}
                 if covered:
                     detail["denials_covered"] = covered
-                await audit.record(store, "plugin_denied", actor=sess.username if sess else "",
+                await audit.record(store, "plugin_denied",
+                                   actor=sess.username if sess else (key[0] if key else ""),
                                    method=request.method, path=path, status=resp.status_code,
                                    remote=remote, detail=detail)
-        elif sess is not None and request.method not in ("GET", "HEAD"):
-            await audit.record(store, "plugin_request", actor=sess.username,
+        elif (sess is not None or key is not None) and request.method not in ("GET", "HEAD"):
+            # A handler may add facts about the outcome (never secrets) in audit_detail.
+            extra = getattr(request.state, "audit_detail", None)
+            detail = {"plugin": plugin, **(extra if isinstance(extra, dict) else {})}
+            if key is not None:
+                detail["device"] = key[1]
+            await audit.record(store, "plugin_request", actor=sess.username if sess else key[0],
                                method=request.method, path=path, status=resp.status_code,
-                               remote=remote, detail={"plugin": plugin})
+                               remote=remote, detail=detail)
         return resp
 
     # Pages and static files exist only for listed plugins, so a disabled plugin has no
@@ -486,6 +529,20 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
 
     mapper = MapService(config, infra, matcher, state_of, map_clock)
     scheduler.hooks.append(mapper.refresh)
+
+    last_prune = [0.0]
+
+    async def prune_plugins() -> None:
+        """Each listed plugin applies its own retention, about once an hour."""
+        now = map_clock()
+        if now - last_prune[0] < 3600:
+            return
+        last_prune[0] = now
+        for loaded in plugins.plugins:
+            await loaded.plugin.prune(store, now)
+
+    if plugins.plugins:
+        scheduler.hooks.append(prune_plugins)
 
     @app.get("/api/infra/map", include_in_schema=False)
     async def infra_map(site: str | None = None, building: str | None = None,

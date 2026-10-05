@@ -47,6 +47,7 @@ PAGE_PREFIX = "/plugins"  # plugin pages and static files: /plugins/<name>/...
 RESERVED_SCOPES = frozenset({"wpi"})  # the core's own ingest key scope
 _NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _SCOPE = re.compile(r"^[a-z]{3,8}$")
+_PUBLIC_PREFIX = re.compile(r"^/api/v1(/[a-z0-9][a-z0-9-]*)*$")
 MAX_LABEL = 64
 
 
@@ -56,10 +57,19 @@ class PluginError(Exception):
 
 @dataclass(frozen=True)
 class PluginRouter:
-    """A router and the strictest role it needs. `admin=True` can only tighten access."""
+    """A router and the strictest role it needs. `admin=True` can only tighten access.
+
+    `key_scope` makes the router key-authenticated instead of session-authenticated: the core
+    requires a bearer key of that scope, which must be one of the plugin's own key scopes, and
+    puts (key prefix, bound device) on `request.state.plugin_key`. It cannot be combined with
+    `admin`. `public_prefix` mounts a key-authenticated router at `/api/v1` or below instead
+    of `/api/plugins/<name>`, for a stable path that a device is configured with.
+    """
 
     router: APIRouter
     admin: bool = False
+    key_scope: str | None = None
+    public_prefix: str | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +135,7 @@ class Plugin(Protocol):
     def monitor_types(self) -> dict[str, Any]: ...
     def map_contribution(self, store: Any) -> Awaitable[MapContribution]: ...
     def configure(self, settings: BaseModel | None) -> None: ...
+    def prune(self, store: Any, now: float) -> Awaitable[int]: ...
 
 
 class PluginBase:
@@ -164,6 +175,10 @@ class PluginBase:
 
     def configure(self, settings: BaseModel | None) -> None:
         """Called once with the validated settings section, or None when there is no model."""
+
+    async def prune(self, store: Any, now: float) -> int:
+        """Apply the plugin's own retention. Called about once an hour; returns rows changed."""
+        return 0
 
 
 @dataclass(frozen=True)
@@ -240,6 +255,24 @@ def _check_routers(name: str, routers: list[PluginRouter]) -> None:
             if not isinstance(route, APIRoute):
                 raise PluginError(f"plugin {name!r}: only plain HTTP routes are allowed, "
                                   f"not {type(route).__name__}")
+
+
+def _check_router_auth(name: str, routers: list[PluginRouter], scopes: list[KeyScope]) -> None:
+    """Key-authenticated routers may use only the plugin's own scopes, and never the admin role."""
+    own = {s.marker for s in scopes}
+    for pr in routers:
+        if pr.key_scope is None:
+            if pr.public_prefix is not None:
+                raise PluginError(f"plugin {name!r}: public_prefix needs a key_scope")
+            continue
+        if pr.key_scope not in own:
+            raise PluginError(f"plugin {name!r}: router key scope {pr.key_scope!r} is not one "
+                              "of the plugin's own key scopes")
+        if pr.admin:
+            raise PluginError(f"plugin {name!r}: a key-authenticated router cannot be admin")
+        if pr.public_prefix is not None and not _PUBLIC_PREFIX.match(pr.public_prefix):
+            raise PluginError(f"plugin {name!r}: public_prefix {pr.public_prefix!r} must be "
+                              "/api/v1 or a path below it")
 
 
 def _check_scopes(name: str, scopes: list[KeyScope], seen: set[str]) -> None:
@@ -329,6 +362,7 @@ def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
         raise PluginError(f"plugin {name!r}: a hook failed: {type(err).__name__}: {err}") from err
     _check_routers(name, routers)
     _check_scopes(name, scopes, scopes_seen)
+    _check_router_auth(name, routers, scopes)
     _check_migrations(name, migrations)
     _check_nav_and_pages(name, nav, pages, static_dir)
     _check_monitor_types(name, mtypes)

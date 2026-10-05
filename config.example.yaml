@@ -524,4 +524,5 @@ monitors:
 # Plugins (watchpost/plugins.py). Only names listed here are loaded.
 # plugins: [pockethernet]
 # plugin_settings:
-#   pockethernet: {}
+#   pockethernet:
+#     evidence_retention_days: 365  # how long a report body is kept

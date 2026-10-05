@@ -1,6 +1,6 @@
 # Field data from the Pockethernet app
 
-Status: design; the Pockethernet report schema and key scope, the plugin loader, per-plugin migrations, plugin pages, the infrastructure tables with port keys and property history, monitor matching with conflict findings, map data with ageing and inferred dependencies, and the map, port and map admin pages are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
+Status: design; the Pockethernet report schema and key scope, the plugin loader, per-plugin migrations, plugin pages, the upload endpoint, the infrastructure tables with port keys and property history, monitor matching with conflict findings, map data with ageing and inferred dependencies, and the map, port and map admin pages are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
 Pockethernet Android app (repo `pocketethernet-app`) become properties of switch
 ports in watchpost, and how the mapping data in those results builds an
 infrastructure map with live availability and health.
@@ -150,7 +150,7 @@ watchpost gains a plugin system, and this design is split between the core and t
 
 - Settings live under `plugin_settings.<name>` next to `plugins:`, because the core config rejects unknown keys.
 - Routers, the config section and navigation entries are active. Key scopes, monitor types and map contributions are declared and validated at load, and applied by the slices that build them (build order item 6 and the plugin's key scope work).
-- Every plugin route needs a login session for now. A key-authenticated route, as the phone upload needs, comes with the key scope slice and will be mounted by the core in the same way.
+- Plugin routes need a login session, except a router that declares a key scope, which the core authenticates with a key of that scope (see the upload endpoint slice).
 - Audit kinds are `plugin_request` (state-changing requests), `plugin_denied` and `plugin_failed`. Successful reads are not audited.
 - A plugin's monitor type names must start with `<plugin>.`, and key scope markers may not be `wpi`.
 
@@ -214,7 +214,20 @@ The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `poc
 - **Caps.** 256 KiB per body (413), JSON nesting 16 (400), strings 1024 characters (names 128, notes 4096), 64 steps and fields, 8 neighbours, 32 tool results, 16 addresses per list. Control characters are refused (notes may keep a newline), and NaN and the infinities are refused, both as JSON literals and as floats.
 - **Location and Wi-Fi** are accepted, as decided. They are stored with the report and never become port properties.
 - **Key scope.** `wpf_<prefix>_<secret>` keys are stored in `ingest_keys` with scope `wpf`, bound to a device label in the host column. The core checks the marker and the stored scope, so `verify_key` and `key_host` for `wpi` refuse a `wpf` key and the plugin's `verify_field_key` refuses a `wpi` key. Admins issue them from the admin create route with `scope: "wpf"` or with `--ingest-key-scope wpf`, and only when the plugin is listed.
-- **Not built yet.** The upload route, the report store, the mapping to properties and links, and the pages. The plugin is not yet copied into the Docker image.
+- **Not built yet.** The mapping to properties and links, and the pages. The plugin is not yet copied into the Docker image.
+
+### Built: upload endpoint (plugin slice 3)
+
+`upload.py` and `reports.py` in the plugin, and a key-authenticated router option in the core, implement the upload. Details that the sketch above left open:
+
+- **Core hook.** `PluginRouter(router, key_scope="wpf", public_prefix="/api/v1")`. The core applies the rate limit and a bearer key check for that scope before the body is read, and audits the request, so the earlier note that every plugin route needs a session no longer holds for such a router. A plugin may only name its own scope, never `admin` with it, and `public_prefix` must be `/api/v1` or below. A `prune` hook lets a plugin apply retention; the core calls it about hourly.
+- **Routes.** `POST /api/v1/field-reports` and `GET /api/v1/field-reports/ping` (returns the device label, the server time, the size cap and the accepted encodings). The mount point is the one in the sketch, not `/api/plugins/pockethernet/`.
+- **Order.** Rate limit (429), key (401), body cap 256 KiB on the wire (413), content encoding (415), gzip inflate, schema (400, 413 or 422), clock, store.
+- **Gzip.** One gzip member only. Output is capped at 256 KiB (413) and at 50 times the compressed size when above 16 KiB (413). Truncated, trailing or non-gzip data is 400. The stored body is the inflated JSON.
+- **Idempotency.** Table `field_reports`, keyed by `(source, report_id)`, with the source being the key's device label (a deviation from "by report id alone": another phone's key cannot replace or hide a report). Higher revision replaces (`replaced`), equal is `duplicate`, lower is `ignored`; all answer 200 so the phone's outbox drops the item.
+- **Clock.** The sketch said only "correction beyond 300 s". A phone cannot be corrected from its own report time alone, so the phone may send `X-Report-Sent-Ms` (its clock at send). A difference over 300 s from the server clock is added to the report time. A report time more than 300 s ahead of the server is set to now regardless. `clock_corrected` is returned and stored, with both times kept. A bad header value is 400.
+- **Audit.** Every state-changing request with a valid key is a `plugin_request` row (actor is the key prefix, detail has the device, result, report id, revisions, `clock_corrected` and size, or the reason for a refusal); 401 and 429 are `plugin_denied`. No key and no report content is written.
+- **Retention.** `plugin_settings.pockethernet.evidence_retention_days` (default 365, 1 to 3650) drops the body of a report not updated for that long and keeps the summary row.
 
 ## Build order
 
@@ -230,7 +243,7 @@ The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `poc
 **Pockethernet plugin.**
 1. Report schema (built).
 2. Key scope (built).
-3. Upload endpoint.
+3. Upload endpoint (built).
 4. Report to properties and edges.
 5. Report and jack pages.
 6. Findings on the dashboard.

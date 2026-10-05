@@ -480,15 +480,35 @@ plugin_settings:
 
 A listed plugin that is not installed, or that does not support this watchpost
 version, stops startup with a message naming it (`--validate` checks this too).
-Plugin routes live under `/api/plugins/<name>/` and always need a login
+Plugin routes live under `/api/plugins/<name>/` and need a login
 session, the CSRF token for anything but a read, and count against
 `server.plugin_rate_per_minute`; state changes and refusals are written to the
-audit log. A plugin keeps its own tables and schema version in the same database;
+audit log. A plugin may also declare a route that takes a key of its own scope
+instead of a session, which the core checks and audits in the same way. A plugin keeps its own tables and schema version in the same database;
 its migrations run at startup, and a database written by a newer release of the
 plugin is refused. Removing a plugin from `plugins:` hides its pages, navigation
 entries and routes but keeps its data, so listing it again resumes where it
 stopped. Plugin pages live under `/plugins/<name>/` and need a login. Plugins run in the same process with full trust, so install only
 plugins you trust. The design is in `docs/FIELD-DATA.md`.
+
+The Pockethernet plugin accepts field reports from the phone at
+`POST /api/v1/field-reports` with a `wpf` key (`Authorization: Bearer wpf_...`), and
+`GET /api/v1/field-reports/ping` checks a key and returns the server time. A body is
+JSON, at most 256 KiB, and may be gzip with `Content-Encoding: gzip` if it inflates to
+no more than 256 KiB at no more than 50 times its compressed size. A report is kept by
+its `report_id` and `revision` per phone: a higher revision replaces it, the same one
+is a duplicate and a lower one is ignored. A phone whose clock is more than 5 minutes
+off is corrected, using the optional `X-Report-Sent-Ms` header, and the report is
+flagged `clock_corrected`. Each upload counts against `server.plugin_rate_per_minute`
+and is audited. The raw report is evidence and is kept for
+`plugin_settings.pockethernet.evidence_retention_days` (default 365) before the body
+is dropped.
+
+```yaml
+plugin_settings:
+  pockethernet:
+    evidence_retention_days: 365
+```
 
 The core also keeps an infrastructure map in the same database: switches, ports, wall jacks,
 links, endpoints and port properties with history. Port names are normalised, so

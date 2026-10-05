@@ -323,9 +323,56 @@ Audit rows: `plugin_request` for every state-changing request from a session
 answers (at most one per peer per minute, with a count), and `plugin_failed`
 when a route raises. Reads that succeed are not audited, like the core read
 routes. `GET /api/plugins` lists loaded plugins and the navigation entries the
-caller may see. Key-authenticated plugin routes, such as phone uploads, arrive
-with the upload endpoint slice; until then every plugin route needs a session.
-The key scope itself is built: see "Ingest keys".
+caller may see.
+
+A router may instead be key-authenticated: `PluginRouter(router, key_scope="wpf")`.
+The scope must be one the plugin registered, and the router cannot also be
+`admin`. The core then replaces the session check with a bearer key check for that
+scope (`plugin_key` in `create_app`): rate limit first, then the key (401 with
+`WWW-Authenticate: Bearer`), and the body is not read before the key passes. The
+key prefix and bound device label are set on `request.state.plugin_key`. A
+`public_prefix` of `/api/v1` or a path below it mounts the router there instead of
+under `/api/plugins/<name>`, so a device can be configured with a stable path; the
+audit middleware covers both. A key request that changes state is audited as
+`plugin_request` with the key prefix as actor and the device in the detail, a
+handler may add facts about the outcome through `request.state.audit_detail`, and
+refusals are `plugin_denied`. Handlers reach the store and the wall clock through
+`app.state.plugin_store` and `app.state.plugin_clock`. The optional `prune(store,
+now)` hook lets a plugin apply its own retention; a scheduler hook calls it for
+each listed plugin about once an hour. The key scope itself is built: see "Ingest
+keys".
+
+### Pockethernet upload
+
+`plugins/pockethernet/watchpost_pockethernet/upload.py` serves
+`POST /api/v1/field-reports` and `GET /api/v1/field-reports/ping` with the `wpf`
+key scope. After the core's rate limit and key checks, an upload is read under a
+256 KiB cap (413), `Content-Encoding` must be absent, `identity` or `gzip` (415),
+and a gzip body is inflated by `zlib.decompressobj` with a maximum output of the cap
+plus one byte, refused when it exceeds the cap or a ratio of 50 inflated bytes per
+compressed byte (413, the ratio is checked above 16 KiB), and refused when truncated
+or followed by more data (400). The schema then validates the report. The ping
+route checks a key and returns the server time and the limits.
+
+Reports are stored in the plugin's `field_reports` table (plugin schema version 1),
+keyed by `(source, report_id)` where the source is the key's device label, so one
+phone's key cannot replace another phone's report. The row holds summary columns
+and the exact inflated body. A higher revision replaces the row, an equal revision
+is a duplicate and a lower one is ignored; the decision and write are one
+transaction under the store lock. The answer is `200` with `result` of `accepted`,
+`replaced`, `duplicate` or `ignored`.
+
+Clock correction (`correct_clock`): a phone may send `X-Report-Sent-Ms`, its clock
+at send time. When that differs from the server clock by more than 300 s, the whole
+difference is added to the report time. Whatever the header says, a report time
+more than 300 s in the future is set to now. Either case sets `clock_corrected`,
+and both the corrected `taken_at_ms` and the phone's `reported_taken_at_ms` are
+kept. A past time without the header is kept, because a queued report is old on
+purpose.
+
+Retention is `plugin_settings.pockethernet.evidence_retention_days` (default 365).
+After that long without an update the body is set to null by the plugin's `prune`
+hook and the summary row stays, so a late replay is still a duplicate.
 
 ## Infrastructure map core
 
