@@ -95,7 +95,7 @@ infrastructure tables (see "Infrastructure map core"). Version 9 adds the
 `scope` column to `ingest_keys`; existing keys get `wpi`. Version 10 adds
 `enrolments` (see "Host enrolment") and version 11 adds its `step_hash` and `reports` columns. Version 12 adds
 the `allowlist_rev`, `allowlist_saved_at` and `reissued_at` columns of `enrolments` and the `host_tasks` table (see "Host
-settings"). A migration step may
+settings"). Version 13 adds `ui_layouts` (see "Dashboard layout"). A migration step may
 be a function as well as a statement, so an `ALTER TABLE` can check first and
 stay safe to run again. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
@@ -596,6 +596,23 @@ and deterministic, limited to 300 nodes), `render.js` (canvas painter reading co
 tokens, with a status ring and glyph on each node) and `view.js` (camera, input, resize and
 repaint scheduling), with `css/graph.css`. The code is ported from relationship-maps (commit
 0c4d268) via ha_Int_soc, both MIT and the same owner. No page loads it yet.
+
+## Dashboard layout
+
+`observe/layout.py` and the `ui_layouts` table (schema version 13) hold one row per user and view:
+the tile order and the hidden tiles as JSON. `GET /api/ui/layout/{view}` needs a session and returns
+only the caller's own row (`order`, `hidden`, `saved`; an empty, unsaved layout when none exists).
+`PUT` needs a session and the CSRF token, and `DELETE` resets to the declared order. Only the view
+`dashboard` exists; any other name is a 404. A tile id is `capacity`, `findings`, `events` or
+`group:<name>`. The server checks the shape of every id, drops ids of the wrong shape and repeats,
+keeps at most 200 ids per list and refuses a body over 32 KiB (413). It does not know which groups
+still exist when a layout is read, so the client does that: `effectiveOrder` in
+`js/tiles-logic.js` drops saved ids that are no longer shown and appends new ones in declared
+order (groups by name, then the three fixed cards). `js/tiles.js` draws the Up, Down and Hide
+controls and, because the CSP forbids inline styles, orders the cards by appending them to
+`#sections` in order. A failed load keeps the declared order and a failed save keeps the screen
+and shows a message. There is no drag and drop. Layout changes are not audited, because they hold
+no secret and are the user's own preference.
 
 ## Infrastructure map core
 

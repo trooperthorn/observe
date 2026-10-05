@@ -580,7 +580,7 @@ def test_tasks_helper_remove_host_reports_none_for_an_unknown_host(env):
 # ---------------------------------------------------------------- schema 12 from schema 11
 
 
-def test_a_version_11_database_with_enrolments_migrates_to_12(tmp_path):
+def test_a_version_11_database_with_enrolments_migrates_to_13(tmp_path):
     import sqlite3
     from observe.store import MIGRATIONS, SCHEMA_VERSION, Store, migrate
     path = str(tmp_path / "w.db")
@@ -588,7 +588,7 @@ def test_a_version_11_database_with_enrolments_migrates_to_12(tmp_path):
     db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
     db.commit()
     newer = {v: m for v, m in MIGRATIONS.items() if v > 11}
-    assert newer and SCHEMA_VERSION == 12
+    assert newer and SCHEMA_VERSION == 13
     for v in newer:
         del MIGRATIONS[v]
     try:
@@ -608,7 +608,7 @@ def test_a_version_11_database_with_enrolments_migrates_to_12(tmp_path):
         assert db.execute("SELECT allowlist_rev, allowlist_saved_at, reissued_at FROM enrolments "
                           "WHERE host='nas01'").fetchone() == (0, None, None)
         assert db.execute("SELECT COUNT(*) FROM host_tasks").fetchone() == (0,)
-        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 12
+        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 13
     finally:
         db.close()
 

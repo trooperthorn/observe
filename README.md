@@ -66,7 +66,10 @@ fastest way to prove credentials and firewall paths before running the service.
 Add `--only <slug>` to poll one monitor. The exit code is 0, 1 (a WARN), or
 2 (a FAIL), so it also works from cron or a script.
 
-Dashboard: `http://<host>:8080/`. Also `/api/monitors`,
+Dashboard: `http://<host>:8080/`. The Customize button lets each signed-in user reorder and hide
+the group cards and the capacity, findings and events cards with Up, Down and Hide controls; the
+layout is saved per user on the server (`GET`, `PUT` and `DELETE /api/ui/layout/dashboard`), so it
+follows the user between devices, and hiding a card never deletes data. Also `/api/monitors`,
 `/api/monitors/<slug>/history?hours=24`, `/api/groups`, `/api/forecasts`,
 `/api/events`, `/metrics`
 (Prometheus text format), and `/healthz`.

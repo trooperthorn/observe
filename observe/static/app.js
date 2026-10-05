@@ -5,12 +5,15 @@
 import { el } from "/static/js/dom.js";
 import { statusChip, statusIcon } from "/static/js/chips.js";
 import { stateInfo } from "/static/js/chip-states.js";
+import { applyLayout, initTiles, setDeclared } from "/static/js/tiles.js";
+import { groupTile } from "/static/js/tiles-logic.js";
 
 const ORDER = { down: 0, unreachable: 1, warn: 2, pending: 3, up: 4 };
 const expanded = new Set();
 const rows = new Map();
 const tpl = document.getElementById("row-tpl");
 const groupsEl = document.getElementById("groups");
+const sectionsEl = document.getElementById("sections");
 const stateFilter = document.getElementById("state-filter");
 const search = document.getElementById("search");
 const closedGroups = new Set();
@@ -155,6 +158,13 @@ async function loadHistory(slug, node) {
 }
 
 function render(data) {
+  const focused = document.activeElement && document.activeElement.dataset
+    ? document.activeElement.dataset.ctl : "";
+  drawDashboard(data);
+  applyLayout(focused);
+}
+
+function drawDashboard(data) {
   const counts = { down: 0, unreachable: 0, warn: 0, pending: 0, up: 0 };
   const groups = new Map();
   for (const m of data.monitors) {
@@ -193,6 +203,7 @@ function render(data) {
     const visible = mons.filter(shown);
     if (!visible.length) continue;
     const card = el("details", "card");
+    card.dataset.tile = groupTile(name);
     card.open = !closedGroups.has(name);
     card.addEventListener("toggle", () => {
       if (card.open) closedGroups.delete(name); else closedGroups.add(name);
@@ -222,7 +233,10 @@ function render(data) {
     card.append(ul);
     frag.append(card);
   }
+  // Group cards from the last render were moved into #sections by applyLayout; drop them.
+  for (const old of sectionsEl.querySelectorAll(':scope > [data-tile^="group:"]')) old.remove();
   groupsEl.replaceChildren(frag);
+  setDeclared(groups.keys());
 
   // Capacity outlook: every projected crossing inside the horizon, soonest first.
   const outlook = data.monitors
@@ -283,12 +297,13 @@ async function refresh() {
 function rerender() { if (lastData) render(lastData); }
 stateFilter.addEventListener("change", rerender);
 search.addEventListener("input", rerender);
-function jump(state) { stateFilter.value = state; rerender(); groupsEl.scrollIntoView(); }
+function jump(state) { stateFilter.value = state; rerender(); sectionsEl.scrollIntoView(); }
 document.getElementById("kpi-down").addEventListener("click", () => jump("down"));
 document.getElementById("kpi-warn").addEventListener("click", () => jump("warn"));
 document.getElementById("kpi-capacity").addEventListener("click", () => {
   const panel = document.getElementById("capacity-panel");
   if (!panel.hidden) { panel.open = true; panel.scrollIntoView(); }
 });
+initTiles(() => { if (lastData) render(lastData); });
 refresh();
 setInterval(refresh, 10000);

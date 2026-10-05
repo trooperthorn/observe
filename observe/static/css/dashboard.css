@@ -26,3 +26,15 @@ ul.group { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--o-
 .when { color: var(--o-text-muted); }
 .kpi-value.kpi-alert { color: var(--o-down); }
 .kpi-label:empty { display: none; }
+
+/* Customise (docs/GUI-DESIGN.md section 2.11). tiles.js appends every tile to #sections in the
+   user's order. #groups is only the place new group cards are built, so it takes no box. */
+#groups { display: contents; }
+.tile-hidden { display: none; }
+.tile-off { opacity: .6; }
+.tile-edit { border-style: dashed; border-color: var(--o-accent); }
+.tile-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: var(--o-s2);
+            padding: var(--o-s2); margin-top: var(--o-s2); background: var(--o-accent-tint);
+            border-radius: var(--o-radius-sm); }
+.tile-ctl .tile-name { flex: 1; font-weight: 600; }
+.tile-hide { display: flex; align-items: center; gap: var(--o-s1); color: var(--o-text-muted); }

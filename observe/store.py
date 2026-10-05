@@ -247,6 +247,14 @@ HOST_TASK_TABLES = (
     "CREATE INDEX IF NOT EXISTS host_tasks_host ON host_tasks(host, id)",
 )
 
+# Per-user dashboard layouts (observe/layout.py): one JSON row per user and view.
+LAYOUT_TABLES = (
+    """CREATE TABLE IF NOT EXISTS ui_layouts (
+  user_id INTEGER NOT NULL REFERENCES users(id), view TEXT NOT NULL, layout TEXT NOT NULL,
+  updated REAL NOT NULL, PRIMARY KEY (user_id, view)
+)""",
+)
+
 MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = {
     1: BASELINE,
     2: HOST_TABLES,
@@ -260,6 +268,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     10: ENROLMENT_TABLES,
     11: ENROLMENT_REPORT_TABLES,
     12: HOST_TASK_TABLES,
+    13: LAYOUT_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

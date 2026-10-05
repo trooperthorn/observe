@@ -32,7 +32,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from . import audit
 from . import auth as authmod
-from . import enrol, hosttasks, scripts, taskscripts
+from . import enrol, hosttasks, layout, scripts, taskscripts
 from . import hostview
 from .alerts import Alerter
 from .config import Config
@@ -373,6 +373,47 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     @app.get("/api/session", include_in_schema=False)
     async def whoami(sess: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
         return {"username": sess.username, "is_admin": sess.is_admin, "csrf": sess.csrf}
+
+    @app.get("/api/ui/layout/{view}", include_in_schema=False)
+    async def ui_layout_get(view: str,
+                            sess: authmod.Session = Depends(guards.session)) -> Response:
+        """This user's saved tile order and hidden tiles for one view. Never another user's."""
+        try:
+            layout.check_view(view)
+        except layout.LayoutError as err:
+            return JSONResponse({"detail": err.reason}, status_code=err.status)
+        return JSONResponse(await layout.load(store, sess.user_id, view),
+                            headers={"Cache-Control": "no-store"})
+
+    @app.put("/api/ui/layout/{view}", include_in_schema=False)
+    async def ui_layout_put(view: str, request: Request,
+                            sess: authmod.Session = Depends(guards.mutating)) -> Response:
+        """Save this user's layout. Session and CSRF; ids of the wrong shape are dropped."""
+        try:
+            layout.check_view(view)
+            raw = await request.body()
+            if len(raw) > layout.MAX_BODY:
+                raise layout.LayoutError("layout is too large", 413)
+            try:
+                body = json.loads(raw)
+            except ValueError:
+                body = None
+            clean = layout.parse(body)
+        except layout.LayoutError as err:
+            return JSONResponse({"detail": err.reason}, status_code=err.status)
+        await layout.save(store, sess.user_id, view, clean, auth_clock())
+        return JSONResponse({"view": view, **clean, "saved": True})
+
+    @app.delete("/api/ui/layout/{view}", include_in_schema=False)
+    async def ui_layout_reset(view: str,
+                              sess: authmod.Session = Depends(guards.mutating)) -> Response:
+        """Back to the declared order for this user."""
+        try:
+            layout.check_view(view)
+        except layout.LayoutError as err:
+            return JSONResponse({"detail": err.reason}, status_code=err.status)
+        await layout.reset(store, sess.user_id, view)
+        return JSONResponse({"view": view, "order": [], "hidden": [], "saved": False})
 
     @app.get("/api/plugins", include_in_schema=False)
     async def plugin_list(sess: authmod.Session = Depends(guards.session)) -> dict[str, Any]:

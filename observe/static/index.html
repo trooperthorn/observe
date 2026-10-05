@@ -44,21 +44,26 @@
       </select>
     </label>
     <label>Search <input id="search" type="search" autocomplete="off"></label>
+    <button id="customize" class="btn" type="button" aria-pressed="false">Customize</button>
+    <span id="customize-tools" hidden><button id="customize-reset" class="btn ghost" type="button">Reset to default</button></span>
+    <span id="customize-msg" class="note" role="status"></span>
   </div>
-  <div id="groups" class="groups"></div>
-  <details id="capacity-panel" class="card" open hidden>
+  <div id="sections" class="groups">
+    <div id="groups"></div>
+  <details id="capacity-panel" data-tile="capacity" class="card" open hidden>
     <summary>Capacity outlook</summary>
     <ol id="capacity"></ol>
   </details>
-  <details id="findings-panel" class="card" open hidden>
+  <details id="findings-panel" data-tile="findings" class="card" open hidden>
     <summary>Field findings</summary>
     <p class="note">From field tests. These never send alerts.</p>
     <ul id="findings" class="findings"></ul>
   </details>
-  <details id="events-panel" class="card" open>
+  <details id="events-panel" data-tile="events" class="card" open>
     <summary>Recent state changes</summary>
     <ol id="events"></ol>
   </details>
+  </div>
 </main>
 <footer id="footer"></footer>
 <template id="row-tpl">
