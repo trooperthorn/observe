@@ -500,7 +500,7 @@ its `report_id` and `revision` per phone: a higher revision replaces it, the sam
 is a duplicate and a lower one is ignored. A phone whose clock is more than 5 minutes
 off is corrected, using the optional `X-Report-Sent-Ms` header, and the report is
 flagged `clock_corrected`. Each upload counts against `server.plugin_rate_per_minute`
-and is audited. The raw report is evidence and is kept for
+and is audited (valid keys are counted per key and per peer, failed keys per peer separately). The raw report is evidence and is kept for
 `plugin_settings.pockethernet.evidence_retention_days` (default 365) before the body
 is dropped. Each accepted report is also turned into map data: the LLDP or CDP neighbour
 gives a switch and port, the site port id gives a jack patched to that port, and the

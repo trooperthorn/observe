@@ -60,9 +60,15 @@ class World:
         """A core and an edge switch, an uplink port on the edge and an access port."""
         await self.infra.upsert_switch(CORE, mgmt_addresses=["10.0.0.1"], now=T0)
         await self.infra.upsert_switch(EDGE, mgmt_addresses=["10.0.0.2"], now=T0)
+        await self.confirm()
         await self.infra.upsert_port(CORE, "Gi1/0/1", role="access", now=T0)
         await self.infra.upsert_port(EDGE, "Gi1/0/48", role="uplink", now=T0)
         await self.infra.upsert_port(EDGE, "Gi1/0/5", role="access", now=T0)
+
+    async def confirm(self) -> None:
+        """An admin confirms the two address matches, which are only proposals otherwise."""
+        await self.matcher.link_switch(CORE, "core-sw", "admin")
+        await self.matcher.link_switch(EDGE, "edge-sw", "admin")
 
     async def uplink(self, source: str = "lldp", now: float = T0) -> int:
         return await self.infra.upsert_link(
@@ -309,6 +315,7 @@ async def test_a_cycle_is_refused_and_listed(w):
     w.cfg.monitors[1].depends_on = ["core-sw"]
     await w.infra.upsert_switch(CORE, mgmt_addresses=["10.0.0.1"], now=T0)
     await w.infra.upsert_switch(EDGE, mgmt_addresses=["10.0.0.2"], now=T0)
+    await w.confirm()
     await w.infra.upsert_port(CORE, "Gi1/0/1", role="uplink", now=T0)
     await w.infra.upsert_port(EDGE, "Gi1/0/48", role="access", now=T0)
     await w.uplink(source="lldp")

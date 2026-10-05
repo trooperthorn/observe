@@ -310,7 +310,10 @@ markers are three to eight lower-case letters that may not be `wpi`.
 The core mounts every plugin router under `/api/plugins/<name>/` and chooses
 the dependencies itself (`create_app` in `watchpost/web.py`):
 
-1. a per-peer rate limit (`server.plugin_rate_per_minute`, default 300);
+1. a per-peer rate limit (`server.plugin_rate_per_minute`, default 300). A route
+   that takes a plugin key counts valid keys per key and per peer, and failed or
+   missing keys per peer in a separate counter, so bad-key traffic cannot block a
+   valid key;
 2. a login session for `GET` and `HEAD`, and a session plus the CSRF token for
    every other method; a router may ask for `admin=True`, which also requires
    the admin role, and can never ask for less;

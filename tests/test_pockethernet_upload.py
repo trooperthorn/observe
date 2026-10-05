@@ -288,6 +288,51 @@ def test_rate_limit_is_429_and_uploads_stop(tmp_path):
         e.close()
 
 
+def test_bad_key_flood_is_limited_but_never_blocks_a_valid_key(tmp_path):
+    e = Env(tmp_path, rate=3)
+    try:
+        codes = [e.post(FIXTURE, key="wpf_bad").status_code for _ in range(6)]
+        assert codes == [401, 401, 401, 429, 429, 429]
+        # The same peer's valid key is counted on its own and is still accepted.
+        assert [e.post(FIXTURE).status_code for _ in range(3)] == [200, 200, 200]
+        assert e.post(FIXTURE).status_code == 429  # the valid key's own limit still holds
+        # A flood from another peer does not touch the first peer's counters either way.
+        other = TestClient(e.client.app, base_url="https://testserver",
+                           client=("203.0.113.9", 5000))
+        try:
+            for _ in range(5):
+                other.post(URL, content=dump(FIXTURE), headers={"Authorization": "Bearer wpf_bad"})
+            second, _info = run(create_field_key(e.store, "other-phone"))
+            r = other.post(URL, content=dump(e.report(report_id="other-1")),
+                           headers={"Authorization": f"Bearer {second}"})
+            assert r.status_code == 200
+        finally:
+            other.close()
+    finally:
+        e.close()
+
+
+def test_valid_key_limit_is_per_key_and_per_peer(tmp_path):
+    e = Env(tmp_path, rate=2)
+    try:
+        assert [e.post(FIXTURE).status_code for _ in range(3)] == [200, 200, 429]
+        other = TestClient(e.client.app, base_url="https://testserver",
+                           client=("203.0.113.10", 5000))
+        try:
+            # The first key stays limited from a new peer; a new key from a new peer is fine.
+            r = other.post(URL, content=dump(FIXTURE),
+                           headers={"Authorization": f"Bearer {e.key}"})
+            assert r.status_code == 429
+            second, _info = run(create_field_key(e.store, "other-phone"))
+            r = other.post(URL, content=dump(e.report(report_id="other-2")),
+                           headers={"Authorization": f"Bearer {second}"})
+            assert r.status_code == 200
+        finally:
+            other.close()
+    finally:
+        e.close()
+
+
 def test_audit_rows_for_accepted_refused_and_denied_uploads(env):
     env.post(FIXTURE)
     env.post(env.report(revision=2), headers={"X-Report-Sent-Ms": "1"})

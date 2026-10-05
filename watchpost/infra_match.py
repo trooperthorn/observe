@@ -1,11 +1,11 @@
 """Match infrastructure switches and ports to configured monitors, and compute field findings.
 
-Matching only links; it never creates, edits or enables a monitor. A switch matches by LLDP
-chassis MAC (a UniFi device monitor configured with that MAC), by management address (the
-target host of an snmp, ping or tcp monitor), or by sysName (the target host or UniFi device
-name). Those keys are tried in that order, and the first key that finds candidates decides.
-If the candidates of the best type tie, nothing is matched, because guessing would attach live
-state to the wrong switch. A link made by an admin is kept for as long as its monitor is
+Matching only links; it never creates, edits or enables a monitor. A switch is matched
+automatically only by LLDP chassis MAC (a UniFi device monitor configured with that MAC) or by
+an admin's confirmed link. A management address (the target host of an snmp, ping or tcp
+monitor) or a sysName (the target host or UniFi device name) is only a proposal, because a
+field report can claim any address or name; an admin confirms it with the link route, which
+is audited. If the candidates of the best type tie, nothing is proposed or matched. A link made by an admin is kept for as long as its monitor is
 configured, enabled or not, and is never replaced here. Matching is computed on each read
 and never written; only an admin link is stored.
 
@@ -101,13 +101,18 @@ class Matcher:
     # Switches ---------------------------------------------------------------------------
 
     def match_switch(self, sid: str, name: str, addresses: list[str]) -> str | None:
-        """The slug of the monitor for a switch, or None."""
+        """The slug applied automatically: only a chassis MAC match counts."""
         chassis = sid[4:] if sid.startswith("mac:") else None
         if chassis:
-            hit = _pick([m for m in self._monitors
-                         if m.type == "unifi_network" and _mac_of(m.device) == chassis])
-            if hit:
-                return hit
+            return _pick([m for m in self._monitors
+                          if m.type == "unifi_network" and _mac_of(m.device) == chassis])
+        return None
+
+    def propose_switch(self, sid: str, name: str, addresses: list[str]) -> str | None:
+        """The slug a weak key (management address, then sysName) suggests, or None.
+
+        A report can claim any address or name, so this is never applied; an admin confirms it.
+        """
         addrs = {_norm_host(a) for a in addresses if a}
         if addrs:
             hit = _pick([m for m in self._monitors
@@ -130,7 +135,8 @@ class Matcher:
 
         The stored column holds only an admin's link. It wins while its monitor is still
         configured, even if that monitor is disabled, so the link comes back when the monitor
-        is enabled again. Otherwise the automatic match is used.
+        is enabled again. Otherwise only a chassis id match is applied; address and name
+        matches are proposals (see `proposals`).
         """
         def go(db: Any) -> list[tuple[Any, ...]]:
             return db.execute("SELECT switch_id, name, mgmt_addresses, matched_monitor "
@@ -143,16 +149,33 @@ class Matcher:
                 out[sid] = self.match_switch(sid, name, json.loads(addrs))
         return out
 
-    async def unlinked(self) -> list[dict[str, Any]]:
-        """The queue: switches seen but matching no monitor, oldest first."""
+    async def proposals(self) -> dict[str, str]:
+        """Weak match proposals for switches with no applied match: switch id to slug."""
         matches = await self.effective_matches()
+
+        def go(db: Any) -> list[tuple[Any, ...]]:
+            return db.execute("SELECT switch_id, name, mgmt_addresses "
+                              "FROM infra_switches ORDER BY first_seen, switch_id").fetchall()
+        out: dict[str, str] = {}
+        for sid, name, addrs in await self._infra._run(go):
+            if matches.get(sid) is None:
+                hit = self.propose_switch(sid, name, json.loads(addrs))
+                if hit:
+                    out[sid] = hit
+        return out
+
+    async def unlinked(self) -> list[dict[str, Any]]:
+        """The queue: switches with no applied match, oldest first, with any proposal."""
+        matches = await self.effective_matches()
+        proposed = await self.proposals()
 
         def go(db: Any) -> list[tuple[Any, ...]]:
             return db.execute(
                 "SELECT switch_id, name, mgmt_addresses, vendor, platform, first_seen, last_seen "
                 "FROM infra_switches ORDER BY first_seen, switch_id").fetchall()
         return [{"switch_id": r[0], "name": r[1], "mgmt_addresses": json.loads(r[2]),
-                 "vendor": r[3], "platform": r[4], "first_seen": r[5], "last_seen": r[6]}
+                 "vendor": r[3], "platform": r[4], "first_seen": r[5], "last_seen": r[6],
+                 "proposed_monitor": proposed.get(r[0])}
                 for r in await self._infra._run(go) if matches.get(r[0]) is None]
 
     async def link_switch(self, sid: str, slug: str, actor: str, remote: str = "") -> None:
@@ -164,6 +187,8 @@ class Matcher:
                               "unknown or unsuitable monitor")
             raise InfraError("unknown or unsuitable monitor")
 
+        basis = "proposal" if (await self.proposals()).get(sid) == slug else "manual"
+
         def go(db: Any) -> bool:
             cur = db.execute("UPDATE infra_switches SET matched_monitor=? WHERE switch_id=?",
                              (slug, sid))
@@ -172,11 +197,13 @@ class Matcher:
             await self._audit("infra_switch_link_failed", actor, remote, sid, slug,
                               "unknown switch")
             raise InfraError("unknown switch")
-        await self._audit("infra_switch_linked", actor, remote, sid, slug, "")
+        await self._audit("infra_switch_linked", actor, remote, sid, slug, "", basis)
 
     async def _audit(self, kind: str, actor: str, remote: str, sid: str, slug: str,
-                     reason: str) -> None:
+                     reason: str, basis: str = "") -> None:
         detail = {"switch_id": sid[:140], "monitor": slug[:140]}
+        if basis:
+            detail["basis"] = basis
         if reason:
             detail["reason"] = reason
         await audit.record(self._infra._store, kind, actor=actor, method="POST",

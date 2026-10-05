@@ -55,16 +55,38 @@ async def add(infra: InfraService, sid: str, **kw: Any) -> str:
     return sid
 
 
-async def test_switch_matches_by_chassis_address_and_sysname(world):
+async def test_chassis_matches_automatically_but_address_and_name_only_propose(world):
     _, infra, m = world
     by_mac = await add(infra, switch_id(CHASSIS), name="whatever")
     by_addr = await add(infra, switch_id("aa:bb:cc:dd:ee:02"), mgmt_addresses=["10.0.0.2"])
     by_name = await add(infra, switch_id(sys_name="DIST1.lab"))
     got = await m.effective_matches()
     assert got[by_mac] == "uni-core"
-    assert got[by_addr] == "snmp-edge"
-    assert got[by_name] == "ping-dist"
-    assert await m.unlinked() == []
+    assert got[by_addr] is None and got[by_name] is None
+    assert await m.proposals() == {by_addr: "snmp-edge", by_name: "ping-dist"}
+    queue = {s["switch_id"]: s["proposed_monitor"] for s in await m.unlinked()}
+    assert queue == {by_addr: "snmp-edge", by_name: "ping-dist"}
+
+
+async def test_address_claim_is_a_proposal_until_an_admin_confirms_it(world):
+    _, infra, m = world
+    sid = await add(infra, switch_id("de:ad:be:ef:00:01"), name="evil",
+                    mgmt_addresses=["10.0.0.2"])
+    assert (await m.effective_matches())[sid] is None
+    await m.link_switch(sid, "snmp-edge", "alice", "10.1.1.1")
+    assert (await m.effective_matches())[sid] == "snmp-edge"
+    assert await m.proposals() == {}
+    (row,) = await infra._run(lambda d: d.execute(
+        "SELECT kind, detail FROM audit ORDER BY id").fetchall())
+    assert row[0] == "infra_switch_linked" and '"basis": "proposal"' in row[1]
+
+
+async def test_a_manual_link_that_differs_from_the_proposal_is_audited_as_manual(world):
+    _, infra, m = world
+    sid = await add(infra, switch_id("de:ad:be:ef:00:02"), mgmt_addresses=["10.0.0.2"])
+    await m.link_switch(sid, "ping-dist", "alice")
+    (row,) = await infra._run(lambda d: d.execute("SELECT detail FROM audit").fetchall())
+    assert '"basis": "manual"' in row[0]
 
 
 async def test_chassis_beats_address_and_ties_are_not_guessed(world):
@@ -74,6 +96,7 @@ async def test_chassis_beats_address_and_ties_are_not_guessed(world):
     rows = await m.effective_matches()
     assert rows[both] == "uni-core"
     assert rows[tie] is None
+    assert await m.proposals() == {}
     assert [s["switch_id"] for s in await m.unlinked()] == [tie]
 
 

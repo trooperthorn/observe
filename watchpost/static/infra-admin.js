@@ -49,7 +49,8 @@ function linker(sw, monitors) {
     sel.append(o);
   }
   sel.disabled = !monitors.length;
-  wrap.append(sel, " ", act("Link", () => api("POST", "/api/admin/infra/link", csrf,
+  if (sw.proposed_monitor) sel.value = sw.proposed_monitor;
+  wrap.append(sel, " ", act(sw.proposed_monitor ? "Confirm proposed link" : "Link", () => api("POST", "/api/admin/infra/link", csrf,
     { switch_id: sw.switch_id, monitor: sel.value })));
   return wrap;
 }

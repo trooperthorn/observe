@@ -166,6 +166,11 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
 
     plugins = plugins or LoadedPlugins()
     plugin_limiter = RateLimiter(config.server.plugin_rate_per_minute, ingest_clock)
+    # Key-authenticated plugin routes count three ways, so bad-key traffic never uses up a
+    # valid key's allowance: per valid key, per peer for valid keys, and per peer for failures.
+    key_limiter = RateLimiter(config.server.plugin_rate_per_minute, ingest_clock)
+    key_peer_limiter = RateLimiter(config.server.plugin_rate_per_minute, ingest_clock)
+    key_fail_limiter = RateLimiter(config.server.plugin_rate_per_minute, ingest_clock)
     plugin_denials = DenialAggregator(ingest_clock)
 
     async def plugin_rate_limit(request: Request) -> None:
@@ -194,16 +199,21 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             header = request.headers.get("authorization", "")
             key = header[7:].strip() if header[:7].lower() == "bearer " else ""
             bound = await key_host(store, key, scope) if key else None
+            peer = request.client.host if request.client else "unknown"
             # The body is not read before this passes. A second check records last use.
             if bound is None or not await verify_key(store, key, bound[1], scope=scope):
+                if not key_fail_limiter.allow(peer):
+                    raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": "60"})
                 raise HTTPException(401, "missing or invalid key",
                                     headers={"WWW-Authenticate": "Bearer"})
+            if not (key_limiter.allow(bound[0]) and key_peer_limiter.allow(peer)):
+                raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": "60"})
             request.state.plugin_key = bound
             return bound
         return dependency
 
-    # The core, not the plugin, chooses the dependencies: rate limit first, then the session
-    # or key check and CSRF. A plugin can only ask for the admin role, never for less. A
+    # The core, not the plugin, chooses the dependencies: a session route is rate limited
+    # first, then checked with CSRF; a key route is checked and limited by plugin_key. A plugin can only ask for the admin role, never for less. A
     # key-authenticated router is mounted under /api/plugins/<name>, or under the /api/v1
     # prefix it asked for; either way the audit middleware below covers it.
     public_routes: list[tuple[str, str]] = []  # (static path prefix, plugin) outside ROUTE_PREFIX
@@ -211,7 +221,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         for pr in loaded.routers:
             if pr.key_scope is not None:
                 prefix = pr.public_prefix or f"{ROUTE_PREFIX}/{loaded.name}"
-                deps = [Depends(plugin_rate_limit), Depends(plugin_key(pr.key_scope))]
+                deps = [Depends(plugin_key(pr.key_scope))]
                 if pr.public_prefix is not None:
                     public_routes += [((prefix + r.path).split("{")[0], loaded.name)
                                       for r in pr.router.routes if hasattr(r, "path")]

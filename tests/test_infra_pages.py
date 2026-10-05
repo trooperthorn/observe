@@ -185,7 +185,7 @@ async def test_decisions_and_link_from_the_admin_page_need_admin_and_csrf(web):
                       ("/api/admin/infra/depends/accept", {"child": "a", "parent": "b"}),
                       ("/api/admin/infra/depends/reject", {"child": "a", "parent": "b"})):
         assert web.client.post(url, json=body).status_code == 403
-    assert web.client.get("/api/admin/infra/unlinked").json()[0]["switch_id"] == unlinked
+    assert unlinked in [r["switch_id"] for r in web.client.get("/api/admin/infra/unlinked").json()]
     assert web.client.post("/api/admin/infra/link",
                            json={"switch_id": unlinked, "monitor": "edge-sw"},
                            headers=csrf).status_code == 200

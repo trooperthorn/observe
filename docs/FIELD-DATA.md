@@ -54,7 +54,7 @@ except a new `scope` column on `ingest_keys`.
    - The site port id gives the jack its room and panel.
 2. **From live data**, as a later slice. An `snmp` monitor can read the switch's LLDP neighbour table (LLDP-MIB `lldpRemTable`). That gives port-to-port uplinks without anyone visiting the site.
 3. **Matching to monitors.**
-   - A switch matches a monitor when its management address or sysName equals the monitor's target.
+   - A switch is matched to a monitor automatically only by its LLDP chassis id or an admin-confirmed link. A management address or sysName that equals the monitor's target is a proposal that an admin confirms.
    - A port matches an SNMP `interface` monitor by ifName or ifDescr.
    - A port matches a UniFi device port by device MAC and port index.
    - Matching only links things; it never creates a monitor.
@@ -135,7 +135,7 @@ watchpost gains a plugin system, and this design is split between the core and t
   - pages and navigation entries;
   - monitor types;
   - map contributions: nodes, edges, property writes and suggested dependencies.
-- **Core enforcement.** Every plugin route gets the core's authentication, CSRF, rate limiting and audit, so a plugin cannot bypass them.
+- **Core enforcement.** Every plugin route gets the core's authentication, CSRF, rate limiting and audit, so a plugin cannot bypass them. A key-authenticated route counts valid requests per key and per peer, and counts failed or missing keys per peer separately, each against `server.plugin_rate_per_minute`, so bad-key traffic cannot use up a valid key's allowance.
 - **Trust.** Plugins run in-process with full trust. Only plugins installed into the image and named in the config are loaded, and nothing is downloaded at runtime.
 - **Pockethernet plugin** (package `watchpost-pockethernet`, kept in this repository under `plugins/pockethernet` until it needs its own):
   - the report schema and the `wpf` key scope;
@@ -174,8 +174,8 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 
 `watchpost/infra_match.py` implements the matching and findings. Details that the sketch above left open:
 
-- A switch matches by chassis MAC, then management address, then sysName; the first key with candidates decides. The sketch said address or sysName equals the monitor's target; the chassis MAC was added for UniFi device monitors, whose `device` may be a MAC.
-- The best monitor type wins (snmp, unifi_network, ping, tcp). A tie between monitors of that type matches nothing and the switch goes to the unlinked queue. SNMP interface monitors belong to ports and never match a switch.
+- A switch is matched automatically by chassis MAC (a UniFi device monitor whose `device` is that MAC) or by an admin link. A management address or sysName equal to the monitor's target is only a proposal, because a report can claim any address or name. The proposal is never applied, so it gives the monitor's live state to no switch until an admin confirms it. `GET /api/admin/infra/unlinked` lists each queued switch with its `proposed_monitor`, and confirming it uses the link route; the audit row records `basis` as `proposal` or `manual`.
+- For a proposal the best monitor type wins (snmp, unifi_network, ping, tcp). A tie between monitors of that type proposes nothing and the switch goes to the unlinked queue without a proposal. SNMP interface monitors belong to ports and never match a switch.
 - Matches are computed on each read and never written. `matched_monitor` holds only an admin link, which is kept while its monitor is configured, enabled or not.
 - The unlinked queue is the set of switches with no admin link and no automatic match. `GET /api/admin/infra/unlinked` lists it, and `POST /api/admin/infra/link` with `switch_id` and `monitor` links one. Both need an admin session, the post needs the CSRF token, and the result is audited.
 - Findings are `speed_above_live`, `vlan_mismatch`, `poe_no_power` and `repatched`, computed on each `GET /api/infra/findings`. Live values come from the last polled check detail. The SNMP interface check now reports `speed_mbps`. VLAN, PoE power and UniFi per-port values are used when a check reports them (`vlan`, `poe_w`, or `ports.<index>` for UniFi); until then those comparisons produce nothing, never a guess.
@@ -220,7 +220,7 @@ The package `watchpost_pockethernet` in `plugins/pockethernet` (entry point `poc
 
 `upload.py` and `reports.py` in the plugin, and a key-authenticated router option in the core, implement the upload. Details that the sketch above left open:
 
-- **Core hook.** `PluginRouter(router, key_scope="wpf", public_prefix="/api/v1")`. The core applies the rate limit and a bearer key check for that scope before the body is read, and audits the request, so the earlier note that every plugin route needs a session no longer holds for such a router. A plugin may only name its own scope, never `admin` with it, and `public_prefix` must be `/api/v1` or below. A `prune` hook lets a plugin apply retention; the core calls it about hourly.
+- **Core hook.** `PluginRouter(router, key_scope="wpf", public_prefix="/api/v1")`. The core applies a bearer key check for that scope and the rate limits described above before the body is read, and audits the request, so the earlier note that every plugin route needs a session no longer holds for such a router. A plugin may only name its own scope, never `admin` with it, and `public_prefix` must be `/api/v1` or below. A `prune` hook lets a plugin apply retention; the core calls it about hourly.
 - **Routes.** `POST /api/v1/field-reports` and `GET /api/v1/field-reports/ping` (returns the device label, the server time, the size cap and the accepted encodings). The mount point is the one in the sketch, not `/api/plugins/pockethernet/`.
 - **Order.** Rate limit (429), key (401), body cap 256 KiB on the wire (413), content encoding (415), gzip inflate, schema (400, 413 or 422), clock, store.
 - **Gzip.** One gzip member only. Output is capped at 256 KiB (413) and at 50 times the compressed size when above 16 KiB (413). Truncated, trailing or non-gzip data is 400. The stored body is the inflated JSON.
