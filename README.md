@@ -339,6 +339,20 @@ binary sensor. Each target has `notify_on` (default `[down, up]`) and each
 monitor can restrict itself to named targets with `alerts:`. Failed deliveries
 are retried once, then shown in the dashboard footer.
 
+## Adding a host
+
+Admins add a host through the API that the console wizard will use. `POST /api/hosts`
+(admin session and CSRF) takes a host name, a platform (`linux`, `truenas`,
+`windows` or `raspberry-pi`), whether to enrol the agent and control, and a
+control allowlist. It returns an install command headed with the host name and
+platform, backed by a single-use token that lasts 30 minutes and is stored only
+as a digest. The host's `wpi` and `wpc` keys are created when the token is
+redeemed. `GET /api/hosts/{name}/enrolment` reports progress: script fetched,
+first data, control first pull, ready or expired. Control is not offered for
+Windows yet. The install script route and the wizard page come in later slices
+(`docs/GUI-DESIGN.md` S11b and S12). See `docs/ARCHITECTURE.md`, "Host
+enrolment".
+
 ## Direction: no longer read-only
 
 The owner reversed the earlier decision that Observe is read-only by

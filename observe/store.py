@@ -197,6 +197,17 @@ def _add_key_scope(db: sqlite3.Connection) -> None:
 
 KEY_SCOPE_TABLES = (_add_key_scope,)
 
+# Host enrolment (observe/enrol.py): one row per host being added through the console. Only a
+# digest of the single-use token is stored, and the keys are minted when it is redeemed.
+ENROLMENT_TABLES = (
+    """CREATE TABLE IF NOT EXISTS enrolments (
+  host TEXT PRIMARY KEY, platform TEXT NOT NULL, agent INTEGER NOT NULL, control INTEGER NOT NULL,
+  allowlist TEXT NOT NULL DEFAULT '{}', token_hash TEXT NOT NULL UNIQUE, created REAL NOT NULL,
+  created_by TEXT NOT NULL DEFAULT '', expires_at REAL NOT NULL, fetched_at REAL,
+  expiry_audited INTEGER NOT NULL DEFAULT 0, agent_prefix TEXT, control_prefix TEXT
+)""",
+)
+
 MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = {
     1: BASELINE,
     2: HOST_TABLES,
@@ -207,6 +218,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     7: MAP_DEPENDENCY_TABLES,
     8: FINDING_ACK_TABLES,
     9: KEY_SCOPE_TABLES,
+    10: ENROLMENT_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

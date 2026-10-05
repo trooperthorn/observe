@@ -533,6 +533,15 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 | S14 | Customise dashboard (optional) | `/api/ui/layout/{view}` per user, `tiles.js` with up/down and hide. | TestClient: per-user isolation, stale IDs dropped, unknown view rejected, size cap. |
 | S15 | Cleanup and rename | Remove legacy aliases and `app.css`, change the old name to "Observe" in titles and brand. | Static scan: no `var(--bg)` and similar remain, every `<title>` ends with "- Observe". |
 
+### S11a notes (done)
+
+- S11 is split. S11a is `POST /api/hosts`, `GET /api/hosts/{name}/enrolment`, the `enrolments` table (schema version 10) and `observe/enrol.py`, including `redeem`, which spends the token and mints the `wpi` and `wpc` keys. S11b is `GET /i/{token}` and the install scripts, which call `redeem`. Until S11b the printed command does not resolve.
+- The create body is `name`, `platform`, `agent`, `control` and `allowlist` (`fans`, `services`, `reboot`). A fan entry is a name or `{"header", "min_duty_limit"}`, so thermalctl gets a floor limit per header. Windows with control is a 422 with the reason (Q10). The response has `command` (two lines, the first a comment naming the host and platform), `expires_at` and `ttl_s`. The token is only in that response.
+- The progress response has `state` (`waiting`, `script_fetched`, `first_data`, `control_pulled`, `ready`, `expired`), `ready`, `expired` and a `steps` list of `{id, label, status, at}` for `script`, `data`, `control` and `ready`, which is what the step 5 chip rows (S12) draw. A step is `done`, `waiting`, `skipped` or `expired`.
+- Audit kinds are `enrol_created`, `enrol_create_failed`, `enrol_fetched`, `enrol_fetch_failed` and `enrol_expired`.
+- Tests: `tests/test_enrol_api.py`. The control pull is simulated by an authenticated `wpc` key check, because the control plugin is not loaded in these tests.
+- Deviations: the `GET /i/{token}` route is not part of this slice (see S11b above). Regenerate (S13) is not built, so an expired enrolment cannot be replaced yet.
+
 ### S9 notes (done)
 
 - `js/graph/force.js` holds `layoutForce`, a d3-free simulation (velocity decay 0.4, alpha decay for 300 steps, link, charge, centre, collide and radial forces) with the constants of section 2.10. It starts from the fixed ring and uses no random numbers, so the same input gives the same positions. Ticks are `min(360, floor(60000 / n))`. Charge and collide are O(n^2). Over 300 nodes it simulates nothing and returns `limited: true`, so the page falls back to the tiered view with a note (the other option in 2.10, a coarse grid, was not needed). An optional `fixed` map pins nodes, so one expanded switch can be re-laid out while the rest stay put.

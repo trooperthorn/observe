@@ -92,7 +92,8 @@ Version 2 adds `hosts`, `host_samples`, `host_sources` and `host_events`.
 Version 3 adds `ingest_keys`, `users`, `sessions` and `audit`, and version 4 adds
 `ingest_batches`, version 5 adds `plugin_schema`, and version 6 adds the
 infrastructure tables (see "Infrastructure map core"). Version 9 adds the
-`scope` column to `ingest_keys`; existing keys get `wpi`. A migration step may
+`scope` column to `ingest_keys`; existing keys get `wpi`. Version 10 adds
+`enrolments` (see "Host enrolment"). A migration step may
 be a function as well as a statement, so an `ALTER TABLE` can check first and
 stay safe to run again. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
@@ -276,6 +277,47 @@ created key is returned once in the create response and is never listed. The
 last active admin cannot be disabled or demoted, enforced in one SQL
 statement. Rendering uses `textContent` only. Host confirmation is not on the
 screen yet, and no control changes a host.
+
+### Host enrolment
+
+`observe/enrol.py` and the `enrolments` table (schema version 10) back the Add
+host flow of `docs/GUI-DESIGN.md` section 3.10. `POST /api/hosts` (admin
+session and CSRF) takes `name` (lower-case letters, digits and dashes, 1 to 63
+characters), `platform` (`linux`, `truenas`, `windows` or `raspberry-pi`),
+`agent`, `control` and an `allowlist` of `fans` (a header name, or an object
+with `header` and `min_duty_limit` from 0 to 100, which thermalctl needs per
+header for remote floors), `services` and `reboot`. Every entry is matched
+against the same character set the control daemon accepts, so none can hold
+shell syntax. Control is refused for Windows until thermal-control has a
+Windows path (Q10), and an allowlist needs control. A name that is already
+enrolled or already reporting is refused with 409.
+
+The response carries the install command once. Its first line is a comment
+that names the host and platform, for example `# Observe install for nas01
+(TrueNAS). Run this on nas01 only.`, followed by a `curl ... | sudo sh` line
+(a PowerShell `irm ... | iex` line for Windows) with the token in the path
+(Q9). The token is `wpe_` plus 256 random bits, valid for 30 minutes and one
+redemption (Q8). Only its SHA-256 digest is stored. Redeeming it, which is the
+install script fetch, claims the row with one conditional `UPDATE`, so two
+fetches cannot both win, and then mints the host-bound keys: a `wpi` key for
+the agent and a `wpc` key for control. Until then no key exists. The function
+is `enrol.redeem`; the `GET /i/{token}` route and the script body that use it
+are the next slice (S11b), so the command does not resolve yet.
+
+`GET /api/hosts/{name}/enrolment` (admin session) returns the state machine:
+steps `script` (fetched), `data` (first batch, which is the `hosts` row),
+`control` (the `wpc` key's first authenticated pull, from its last-use time)
+and `ready`, each `done`, `waiting`, `skipped` or `expired`, with the time.
+`state` is `waiting`, `script_fetched`, `first_data`, `control_pulled`, `ready`
+or `expired`. A token that was never fetched reads as expired from 30 minutes
+after creation. The route is registered before `/api/hosts/{host:path}`, which
+would otherwise answer it.
+
+Audit kinds: `enrol_created`, `enrol_create_failed`, `enrol_fetched`,
+`enrol_fetch_failed` and `enrol_expired` (one row per enrolment, written when
+the expiry is first observed). The rows name the host, the actor and the
+choices, never the token or a key. The audit redactor also recognises `wpc_`
+and `wpe_` shapes.
 
 `admin.js`, `audit.js`, `infra-admin.js` and `port.js` are ES modules that use the shared
 `table.js`, `chips.js`, `dialog.js` and `toast.js` modules, plus `js/admin-ui.js` (card, button,

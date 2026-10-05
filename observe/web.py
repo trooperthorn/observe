@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from . import audit
 from . import auth as authmod
+from . import enrol
 from . import hostview
 from .alerts import Alerter
 from .config import Config
@@ -728,6 +729,62 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             if view is not None:
                 out.append(hostview.summarize(view))
         return {"hosts": out}
+
+    @app.post("/api/hosts", include_in_schema=False)
+    async def create_host(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Add a host: validate, store a single-use enrolment token (30 minutes) and return the
+        install command once. Admin session and CSRF. The token is in this response only, which
+        is sent with Cache-Control: no-store; it is never logged or audited."""
+        remote = request.client.host if request.client else ""
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        shown = {"host": str(body.get("name"))[:MAX_NAME] if isinstance(body, dict) else ""}
+
+        async def refused(status: int, reason: str) -> JSONResponse:
+            await audit.record(store, "enrol_create_failed", actor=sess.username, method="POST",
+                               path="/api/hosts", status=status, remote=remote,
+                               detail={**shown, "reason": reason})
+            return JSONResponse({"detail": reason}, status_code=status)
+
+        try:
+            spec = enrol.parse_spec(body)
+            now = auth_clock()
+            if spec.name in pushed:
+                raise enrol.EnrolError("a host with this name already exists", 409)
+            token = await enrol.create_enrolment(store, spec, sess.username, now)
+        except enrol.EnrolError as err:
+            return await refused(err.status, err.reason)
+        await audit.record(store, "enrol_created", actor=sess.username, method="POST",
+                           path="/api/hosts", status=200, remote=remote,
+                           detail={"host": spec.name, "platform": spec.platform,
+                                   "agent": spec.agent, "control": spec.control,
+                                   "reboot": spec.reboot, "fans": len(spec.fans),
+                                   "services": len(spec.services)})
+        return JSONResponse({
+            "host": spec.name, "platform": spec.platform,
+            "platform_label": enrol.PLATFORMS[spec.platform],
+            "expires_at": now + enrol.TOKEN_TTL_S, "ttl_s": enrol.TOKEN_TTL_S,
+            "command": enrol.command_text(spec.name, spec.platform, str(request.base_url),
+                                          token)})
+
+    @app.get("/api/hosts/{host}/enrolment", include_in_schema=False)
+    async def host_enrolment(host: str, request: Request,
+                             sess: authmod.Session = Depends(guards.admin)) -> Response:
+        """Progress of one enrolment: script fetched, first data, control first pull, ready, or
+        expired. Admin session. It never returns the token or a key."""
+        now = auth_clock()
+        state = await enrol.progress(store, host, now)
+        if state is None:
+            raise HTTPException(404, "no enrolment for this host")
+        if state["expired"] and await enrol.claim_expiry_audit(store, host, now):
+            await audit.record(store, "enrol_expired", actor=sess.username, method="GET",
+                               path=f"/api/hosts/{host[:64]}/enrolment", status=200,
+                               remote=request.client.host if request.client else "",
+                               detail={"host": host[:MAX_NAME]})
+        return JSONResponse(state)
 
     @app.get("/api/hosts/{host:path}", include_in_schema=False)
     async def host_detail(host: str,
