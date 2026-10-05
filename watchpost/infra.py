@@ -273,10 +273,35 @@ class InfraService:
                 "confidence=excluded.confidence, closed_at=NULL, "
                 "last_seen=MAX(last_seen, excluded.last_seen)",
                 (*ends[0], *ends[1], source, float(confidence), ts, ts))
+            self._close_contradicted(db, ends, source, ts)
             return int(db.execute(
                 "SELECT id FROM infra_links WHERE a_kind=? AND a_ref=? AND b_kind=? AND b_ref=? "
                 "AND source=?", (*ends[0], *ends[1], source)).fetchone()[0])
         return int(await self._run(go))
+
+    @staticmethod
+    def _close_contradicted(db: Any, ends: list[tuple[str, str]], source: str,
+                            ts: float) -> None:
+        """A report that puts a jack on another port, or a port against another neighbour,
+        closes the older link at once. Only point-to-point kinds contradict: a jack has one
+        port and a port has one uplink neighbour. Endpoints do not (a port may serve several),
+        and admin `config` links are neither closed nor closing."""
+        kinds = {ends[0][0], ends[1][0]}
+        if source == "config" or kinds not in ({"jack", "port"}, {"port"}):
+            return
+        mine = {tuple(ends[0]), tuple(ends[1])}
+        for end in (ends[0], ends[1]):
+            if kinds == {"jack", "port"} and end[0] != "jack":
+                continue
+            rows = db.execute(
+                "SELECT id, a_kind, a_ref, b_kind, b_ref FROM infra_links WHERE closed_at IS NULL "
+                "AND source != 'config' AND ((a_kind=? AND a_ref=?) OR (b_kind=? AND b_ref=?))",
+                (*end, *end)).fetchall()
+            for lid, ak, ar, bk, br in rows:
+                pair = {(ak, ar), (bk, br)}
+                if pair == mine or {ak, bk} != kinds:
+                    continue
+                db.execute("UPDATE infra_links SET closed_at=? WHERE id=?", (ts, lid))
 
     # Port properties --------------------------------------------------------------------
 

@@ -26,6 +26,13 @@ server:
   basic_auth_user: ops
   basic_auth_password: ${WATCHPOST_UI_PASSWORD}
 
+# Infrastructure map (docs/FIELD-DATA.md). Links not confirmed for stale_days are drawn faded,
+# and hidden after twice that. With auto_depends, a dependency confirmed by LLDP or CDP within
+# stale_days is applied to the rollup; weaker ones wait for an admin to accept them.
+map:
+  stale_days: 90
+  auto_depends: true
+
 # Capacity forecasting, applied to monitors with forecast: true.
 forecast:
   lookback_days: 7      # history fitted

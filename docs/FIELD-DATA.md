@@ -1,6 +1,6 @@
 # Field data from the Pockethernet app
 
-Status: design; the plugin loader, per-plugin migrations, plugin pages, the infrastructure tables with port keys and property history, and monitor matching with conflict findings are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
+Status: design; the plugin loader, per-plugin migrations, plugin pages, the infrastructure tables with port keys and property history, monitor matching with conflict findings, and map data with ageing and inferred dependencies are built, the rest is not. Owner decisions recorded 2026-10-04 are in the last section. This document describes how test results from the
 Pockethernet Android app (repo `pocketethernet-app`) become properties of switch
 ports in watchpost, and how the mapping data in those results builds an
 infrastructure map with live availability and health.
@@ -182,6 +182,18 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 - `repatched` is derived from the `jack_label` property history: the newest row for a label is on a different port than an older row for the same label.
 - Findings are never stored, never acknowledged yet (the port page slice adds that), and never call an alert target.
 
+### Built: map data, ageing and inferred dependencies (slice 6)
+
+`watchpost/infra_map.py` implements `GET /api/infra/map`, the ageing and the dependency plan. Schema version 7 adds `infra_dependencies`, which stores only an admin's decision. Details that the sketch above left open:
+
+- **Map.** `GET /api/infra/map?site=&building=` (login session) returns `nodes` and `edges`. A node has an `id` (`switch:<id>`, `port:<id>|<key>`, `jack:<key>`, `endpoint:<n>`), a `kind`, a `label`, the matched `monitor` slug, and a live `state` that is one of `up`, `warn`, `down`, `unreachable`, `pending` or `unknown`, with `blocked_by` naming the ancestor behind an unreachable one. A port also carries its `parent` switch, `role` and `findings`; a port whose check passes but which has a field finding is shown as `warn`. Switches, and the ports that have a visible link or a patched jack, are nodes. Building is the second part of the app's site port id (`site/building/room/panel/NN`). A filter keeps the matching jacks, the ports they reach, the switches of those ports and the switches one uplink away; a site filter also keeps ports whose newest `site` property matches. Edges carry `source`, `confidence`, `state` (`active` or `stale`) and `age_days`.
+- **Ageing.** Computed on read from `last_seen` and the clock. Older than `map.stale_days` is stale, older than twice that is hidden, and a link with `closed_at` is never shown. Rows are never deleted, and confirming a link again brings it back.
+- **Contradiction.** `InfraService.upsert_link` closes the older link at once when a report puts a jack on a different port, or a port against a different neighbour port. Endpoints do not contradict one another, and `config` links are neither closed nor closing.
+- **Proposals.** An endpoint whose monitor (or pushed host) sits on a switch port proposes a dependency on that switch's monitor. A port-to-port link proposes that the switch whose port has role `uplink` depends on the switch at the other end; when neither or both ends are uplinks the direction is unknown and nothing is proposed. Both sides must match an enabled monitor. A proposal is strong when its link source is `lldp`, `cdp` or `snmp_lldp` and it was confirmed within `stale_days`; every other proposal is weak.
+- **Applying.** With `map.auto_depends` (default true) strong proposals are applied; weak ones are pending. `POST /api/admin/infra/depends/accept` and `/reject` (admin session, CSRF token, body `child` and `parent` monitor slugs) record a decision, audited as `infra_depends_accepted`, `infra_depends_rejected` or `infra_depends_failed`. A rejection holds even for a strong proposal, and an acceptance is applied before the automatic edges. `GET /api/infra/dependencies` lists `applied`, `pending`, `refused` (with the reason), `rejected` and the `configured` YAML edges.
+- **Effective set.** `Config.parents` returns the YAML parents plus the applied edges, so the rollup and the scheduler's parent confirmation use both. The applied edges live in memory, are recomputed from the links on every map or dependency read and once a minute by a scheduler hook, and are never written to the YAML. A contradicted, closed or hidden link removes its edge.
+- **Cycles.** An edge that would close a cycle with the YAML and the edges already applied is refused, listed under `refused`, and cannot be accepted.
+
 ## Build order
 
 **watchpost core.**
@@ -190,7 +202,7 @@ Schema version 6 and `watchpost/portkey.py` and `watchpost/infra.py` implement t
 3. Plugin pages and navigation (built).
 4. Infrastructure tables, port-key normalisation and property history (built).
 5. Monitor matching and conflict findings (built).
-6. Map data, ageing and inferred dependencies.
+6. Map data, ageing and inferred dependencies (built).
 7. Map and port pages.
 
 **Pockethernet plugin.**

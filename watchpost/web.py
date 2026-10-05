@@ -34,6 +34,7 @@ from . import hostview
 from .alerts import Alerter
 from .config import Config
 from .infra import InfraError, InfraService
+from .infra_map import MapService
 from .infra_match import LivePort, Matcher, PortMatch
 from .ingest.api import DenialAggregator, RateLimiter, build_router
 from .ingest.keys import IngestKeyError, create_key, list_keys, revoke_key
@@ -93,7 +94,8 @@ def _page_handler(file: Path) -> Callable[[], Awaitable[FileResponse]]:
 def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Alerter,
                ingest_clock: Callable[[], float] = time.monotonic,
                auth_clock: Callable[[], float] = time.time,
-               plugins: LoadedPlugins | None = None) -> FastAPI:
+               plugins: LoadedPlugins | None = None,
+               map_clock: Callable[[], float] = time.time) -> FastAPI:
     app = FastAPI(title="watchpost", version=__version__, docs_url=None, redoc_url=None,
                   openapi_url=None)
     user, pw = config.server.basic_auth_user, config.server.basic_auth_password
@@ -452,7 +454,8 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                            status=200, remote=remote, detail=detail)
         return JSONResponse({"ok": True})
 
-    matcher = Matcher(config, InfraService(store))
+    infra = InfraService(store)
+    matcher = Matcher(config, infra)
 
     def live_port(match: PortMatch) -> LivePort | None:
         """The last polled state of a matched port. Only what the check reported is used."""
@@ -466,6 +469,51 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             if not isinstance(detail, dict):
                 return None
         return LivePort(detail.get("speed_mbps"), detail.get("vlan"), detail.get("poe_w"))
+
+    def state_of(slug: str) -> tuple[str, str | None] | None:
+        return scheduler.rollup.effective(slug) if slug in scheduler.states else None
+
+    mapper = MapService(config, infra, matcher, state_of, map_clock)
+    scheduler.hooks.append(mapper.refresh)
+
+    @app.get("/api/infra/map", include_in_schema=False)
+    async def infra_map(site: str | None = None, building: str | None = None,
+                        _: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
+        """Nodes and edges with live state, for a site and building when given."""
+        await mapper.refresh()
+        return await mapper.map_data(site, building, live_port)
+
+    @app.get("/api/infra/dependencies", include_in_schema=False)
+    async def infra_dependencies(_: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
+        """Applied, pending, refused and rejected dependency edges, computed now."""
+        return (await mapper.refresh()).as_dict()
+
+    async def decide_dependency(request: Request, sess: authmod.Session,
+                                decision: str) -> Response:
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        child = body.get("child") if isinstance(body, dict) else None
+        parent = body.get("parent") if isinstance(body, dict) else None
+        if not isinstance(child, str) or not isinstance(parent, str):
+            return JSONResponse({"detail": "child and parent are required"}, status_code=422)
+        remote = request.client.host if request.client else ""
+        try:
+            await mapper.decide(child, parent, decision, sess.username, remote)
+        except InfraError as err:
+            return JSONResponse({"detail": str(err)}, status_code=422)
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/admin/infra/depends/accept", include_in_schema=False)
+    async def admin_depends_accept(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        return await decide_dependency(request, sess, "accepted")
+
+    @app.post("/api/admin/infra/depends/reject", include_in_schema=False)
+    async def admin_depends_reject(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        return await decide_dependency(request, sess, "rejected")
 
     @app.get("/api/admin/infra/unlinked", include_in_schema=False)
     async def admin_infra_unlinked(

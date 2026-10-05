@@ -21,6 +21,7 @@ import asyncio
 import logging
 import random
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from .alerts import Alerter
@@ -56,6 +57,9 @@ class Scheduler:
         self._sem = asyncio.Semaphore(config.server.max_concurrency)
         self._tasks: list[asyncio.Task[None]] = []
         self._pending_alerts: set[asyncio.Task[None]] = set()
+        # Coroutine functions run once a minute, for example the infrastructure map's
+        # dependency refresh, so that ageing and new links reach the rollup without a request.
+        self.hooks: list[Callable[[], Awaitable[Any]]] = []
 
     # ---------------------------------------------------------------- polling
 
@@ -184,6 +188,15 @@ class Scheduler:
             elapsed = asyncio.get_running_loop().time() - started
             await asyncio.sleep(max(1.0, interval - elapsed))
 
+    async def _hook_loop(self) -> None:
+        while True:
+            for hook in list(self.hooks):
+                try:
+                    await hook()
+                except Exception:  # noqa: BLE001
+                    log.exception("scheduler hook failed")
+            await asyncio.sleep(60)
+
     async def _maintenance(self) -> None:
         await asyncio.sleep(30)  # let the first poll wave land before forecasting
         while True:
@@ -200,6 +213,7 @@ class Scheduler:
     def start(self) -> None:
         self._tasks = [asyncio.create_task(self._loop(m), name=m.slug) for m in self.monitors]
         self._tasks.append(asyncio.create_task(self._maintenance(), name="maintenance"))
+        self._tasks.append(asyncio.create_task(self._hook_loop(), name="hooks"))
 
     async def stop(self) -> None:
         for t in self._tasks:

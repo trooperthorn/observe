@@ -491,6 +491,16 @@ conflicts between field results and live state: speed above live, VLAN mismatch,
 but no power, and re-patched. Findings are computed on request, are for the dashboard only,
 and never send alerts. The map and port pages are later slices.
 
+`GET /api/infra/map` returns nodes and edges with live state from the matched monitors and
+can be filtered by `site` and `building`. A link nobody has confirmed for `map.stale_days`
+(default 90) is stale, after twice that it is hidden, and a report that moves a jack or an
+uplink closes the old link at once. Dependencies are inferred from the links: when
+`map.auto_depends` is true (the default), an edge confirmed by LLDP or CDP within
+`stale_days` is applied and feeds the rollup, so everything behind a DOWN switch shows
+UNREACHABLE and only the switch alerts. Weaker edges are listed at `GET /api/infra/dependencies`
+until an admin accepts or rejects them (`POST /api/admin/infra/depends/accept` and `/reject`,
+audited). An edge that would create a cycle is refused and listed.
+
 ## Not implemented
 
 Network discovery, automated remediation actions, the map and port pages, native DCOM WMI,

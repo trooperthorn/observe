@@ -159,6 +159,15 @@ INFRA_TABLES = (
     "CREATE INDEX IF NOT EXISTS port_properties_lookup ON port_properties(switch_id, port_key, name, id)",
 )
 
+# Admin decisions about inferred dependencies between monitors (docs/FIELD-DATA.md). The
+# proposals themselves are computed from the links on each read; only the decision is stored.
+MAP_DEPENDENCY_TABLES = (
+    """CREATE TABLE IF NOT EXISTS infra_dependencies (
+  child TEXT NOT NULL, parent TEXT NOT NULL, decision TEXT NOT NULL,
+  decided_by TEXT NOT NULL, decided_at REAL NOT NULL, PRIMARY KEY (child, parent)
+)""",
+)
+
 # Stored as the reason when an agent says a source does not exist on the host.
 ABSENT_REASON = "not present on this host"
 
@@ -174,6 +183,7 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     4: BATCH_TABLES,
     5: PLUGIN_TABLES,
     6: INFRA_TABLES,
+    7: MAP_DEPENDENCY_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

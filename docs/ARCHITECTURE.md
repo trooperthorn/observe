@@ -310,7 +310,7 @@ with the key scope slice; until then every plugin route needs a session.
 
 ## Infrastructure map core
 
-Schema version 6 adds `infra_switches`, `infra_ports`, `infra_jacks`, `infra_links`,
+Schema version 6 (and 7, below) adds `infra_switches`, `infra_ports`, `infra_jacks`, `infra_links`,
 `infra_endpoints` and `port_properties`, as described in `docs/FIELD-DATA.md`. Nothing
 existing changes. The `scope` column on `ingest_keys` belongs to the key scope slice and is
 not part of this step.
@@ -358,6 +358,21 @@ An unknown live value never produces a finding. The kinds are `speed_above_live`
 moved to another port). Findings are not stored and never reach the alerter. Routes:
 `GET /api/admin/infra/unlinked` (admin session), `POST /api/admin/infra/link` (admin session and
 CSRF token) and `GET /api/infra/findings` (session).
+
+`watchpost/infra_map.py` (`MapService`) builds the map and the effective dependency set.
+Schema version 7 adds `infra_dependencies` (child slug, parent slug, accepted or rejected, who
+and when); proposals are never stored. `link_state` ages a link from `last_seen` and the clock
+(stale after `map.stale_days`, hidden after twice that, closed when `closed_at` is set), and
+`InfraService.upsert_link` sets `closed_at` on a link that a newer report contradicts. `plan`
+derives proposals from open links and the monitor matches, marks strong ones (LLDP, CDP or
+SNMP LLDP, confirmed within `stale_days`), orders admin acceptances before automatic edges, and
+refuses any edge that would close a cycle with the YAML plus the edges applied so far.
+`refresh` hands the applied edges to `Config.set_applied_dependencies`; `Config.parents` then
+returns the YAML parents plus those edges, so `Rollup` and the scheduler need no change. The
+web layer refreshes on each map or dependency read and registers `refresh` as a scheduler
+hook that runs once a minute. `decide` records an admin decision and audits it. Routes:
+`GET /api/infra/map` and `GET /api/infra/dependencies` (session), and
+`POST /api/admin/infra/depends/accept` and `/reject` (admin session and CSRF token).
 
 ## Phase 2 (planned): control
 

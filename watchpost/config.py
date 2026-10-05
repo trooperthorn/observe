@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 _REF = re.compile(r"\$\{([^}]+)\}")
 
@@ -671,6 +671,13 @@ class ForecastSettings(Strict):
     min_r2: float = 0.5  # below this the projection is labelled low confidence
 
 
+class MapSettings(Strict):
+    """The infrastructure map (docs/FIELD-DATA.md)."""
+
+    stale_days: int = Field(default=90, ge=1, le=3650)  # unconfirmed links fade, then hide at 2x
+    auto_depends: bool = True  # apply LLDP or CDP confirmed dependencies without review
+
+
 class DirectorySettings(Strict):
     """Pull computer accounts from Active Directory over LDAPS."""
 
@@ -743,6 +750,7 @@ class Config(Strict):
     defaults: Defaults = Field(default_factory=Defaults)
     forecast: ForecastSettings = Field(default_factory=ForecastSettings)
     discovery: DiscoverySettings = Field(default_factory=DiscoverySettings)
+    map: MapSettings = Field(default_factory=MapSettings)
     credentials: dict[str, Credential] = Field(default_factory=dict)
     alerts: list[Alert] = Field(default_factory=list)
     monitors: list[Monitor] = Field(default_factory=list)
@@ -750,6 +758,7 @@ class Config(Strict):
     # not listed here are never imported. Each one's settings sit under plugin_settings.<name>.
     plugins: list[str] = Field(default_factory=list)
     plugin_settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    _applied: dict[str, list[str]] = PrivateAttr(default_factory=dict)
 
     @field_validator("plugins")
     @classmethod
@@ -828,8 +837,23 @@ class Config(Strict):
                 return mon
         return None
 
-    def parents(self, mon: Any) -> list[Any]:
+    def configured_parents(self, mon: Any) -> list[Any]:
+        """Parents named in the YAML only."""
         return [p for p in (self.resolve_monitor(r) for r in mon.depends_on) if p is not None]
+
+    def parents(self, mon: Any) -> list[Any]:
+        """The effective parents: the YAML plus the edges the infrastructure map applied."""
+        out = self.configured_parents(mon)
+        for slug in self._applied.get(mon.slug, ()):
+            extra = self.resolve_monitor(slug)
+            if extra is not None and extra not in out:
+                out.append(extra)
+        return out
+
+    def set_applied_dependencies(self, edges: dict[str, list[str]]) -> None:
+        """Replace the applied map edges, child slug to parent slugs. They are never written to
+        the YAML and are recomputed from the map, so removing an edge here removes it for good."""
+        self._applied = {k: list(v) for k, v in edges.items()}
 
     def _check_dependencies(self) -> None:
         for mon in self.monitors:
@@ -849,7 +873,7 @@ class Config(Strict):
             if c == 2:
                 return
             colour[mon.slug] = 1
-            for parent in self.parents(mon):
+            for parent in self.configured_parents(mon):
                 visit(parent, path + [mon.slug])
             colour[mon.slug] = 2
 
