@@ -24,8 +24,8 @@ def _sshd_up():
         return False
 
 
-if os.environ.get("WATCHPOST_REQUIRE_SERVICES") == "1":
-    assert _sshd_up(), "WATCHPOST_REQUIRE_SERVICES=1 but test sshd is not running"
+if os.environ.get("OBSERVE_REQUIRE_SERVICES") == "1":
+    assert _sshd_up(), "OBSERVE_REQUIRE_SERVICES=1 but test sshd is not running"
 pytestmark = pytest.mark.skipif(not _sshd_up(), reason="test sshd not running")
 
 CREDS = {

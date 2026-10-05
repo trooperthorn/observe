@@ -57,7 +57,7 @@ This section is a contract shared with the hostwatch-control daemon. Change it o
 
 - **Canonical JSON:** the command object serialised with keys sorted at every level, separators `,` and `:` with no spaces, and UTF-8 with non-ASCII characters written as themselves, not as unicode escapes. NaN and infinity are not allowed.
 - **Signature:** Ed25519 over those bytes, sent as standard base64 (with padding) of the 64 raw bytes. A pulled command is `{"command": {...}, "signature": "<base64>"}`, and the daemon verifies the signature over its own canonical form of `command`, never over the received text.
-- **Public key:** `ed25519:<standard base64 of the 32 raw bytes>`, pinned in each host's `control.toml` as `watchpost_public_key`.
+- **Public key:** `ed25519:<standard base64 of the 32 raw bytes>`, pinned in each host's `control.toml` as `watchpost_public_key` (a legacy key name kept for compatibility with the host daemon).
 - **Private key:** an unencrypted PKCS8 PEM file at `plugin_settings.control.signing_key_file` (default `/run/secrets/observe_control_key`). On POSIX the plugin refuses to start when the file is readable by group or others, and also when it is missing or is not an Ed25519 key. It is never served, logged or audited.
 - **Creating a key:** `python -m observe --control-keygen PATH` writes a new key at PATH with mode 0600, refuses to overwrite an existing file, and prints only the public key.
 - **Control keys:** a host's daemon pulls with a `wpc_` key bound to its host name. Admins create and revoke these in the key screen or with `--ingest-key-create HOST --ingest-key-scope wpc` and `--ingest-key-revoke ID`. A `wpc_` key is refused by host ingest and by field reports, and `wpi_` and `wpf_` keys are refused by the control routes. A `wpc_` key may pull only for its own host: another `host` value gets 403.
@@ -97,10 +97,10 @@ These routes need an admin session, and every POST needs the CSRF token (`X-CSRF
 
 1. Install the plugin into the Observe image (`pip install ./plugins/control`) and list it as `plugins: [control]` in the Observe config.
 2. Create the signing key: `python -m observe --control-keygen /run/secrets/observe_control_key`. The command prints only the public key. Keep the file readable by the Observe user alone.
-3. Put the printed `ed25519:...` public key in each host's `control.toml` as `watchpost_public_key`, together with that host's allowlist.
+3. Put the printed `ed25519:...` public key in each host's `control.toml` as `watchpost_public_key` (the legacy key name), together with that host's allowlist.
 4. Create one control key per host: `python -m observe --config CONFIG --ingest-key-create HOST --ingest-key-scope wpc`. The `wpc_` key is shown once. Store it in the daemon's root-owned config on that host.
 5. Start the hostwatch-control daemon on the host. It pulls every 5 seconds and refuses anything its own allowlist does not permit.
-6. To rotate the signing key, run keygen with a new path, update `watchpost_public_key` on every host, then point `signing_key_file` at the new file. To revoke a host key, use `--ingest-key-revoke ID`.
+6. To rotate the signing key, run keygen with a new path, update the legacy `watchpost_public_key` setting on every host, then point `signing_key_file` at the new file. To revoke a host key, use `--ingest-key-revoke ID`.
 
 ### Test vector
 
@@ -129,7 +129,7 @@ Changing any field of the command must make verification fail.
 The allowlist is `/etc/hostwatch/control.toml` on Linux and `C:\ProgramData\hostwatch\control.toml` on Windows. Only root, or SYSTEM and Administrators, can write it.
 
 ```toml
-watchpost_public_key = "ed25519:..."
+watchpost_public_key = "ed25519:..."   # legacy key name, kept for compatibility
 host = "MediaIn-SVR"
 
 [fan]

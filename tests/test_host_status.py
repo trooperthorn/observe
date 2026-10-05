@@ -219,11 +219,11 @@ async def test_metrics_lines():
     await env.poll()
     client = TestClient(create_app(env.cfg, env.store, env.sched, env.sched.alerter))
     text = client.get("/metrics").text
-    assert 'watchpost_state{monitor="nas01",group="storage",type="pushed_host"} 1' in text
-    assert 'watchpost_group_state{group="storage"} 1' in text
-    assert ('watchpost_host_component_state{monitor="nas01",group="storage",host="nas01",'
+    assert 'observe_state{monitor="nas01",group="storage",type="pushed_host"} 1' in text
+    assert 'observe_group_state{group="storage"} 1' in text
+    assert ('observe_host_component_state{monitor="nas01",group="storage",host="nas01",'
             'component="hwmon.cpu_temp_c"} 1') in text
-    assert 'watchpost_host_age_seconds{monitor="nas01",group="storage",host="nas01"} 0' in text
+    assert 'observe_host_age_seconds{monitor="nas01",group="storage",host="nas01"} 0' in text
 
 
 async def test_future_dated_sample_does_not_mask_later_reading():

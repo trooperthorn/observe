@@ -158,7 +158,7 @@ def test_no_secret_reaches_the_log(env):
     env.user("root", admin=True)
     bad = env.login("root", "not the password")
     r = env.login("root")
-    token = env.client.cookies.get("watchpost_session")
+    token = env.client.cookies.get("observe_session")
     key, _ = asyncio.run(create_key(env.store, "nas01"))
     env.client.post("/api/admin/users", json={"username": "bob", "password": "Sup3r secret pw!"},
                     headers=env.csrf(r))

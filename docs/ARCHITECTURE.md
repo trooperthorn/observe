@@ -176,7 +176,7 @@ confirmation applies before a host is DOWN or pages. No batch within
 `stale_after` seconds (default three intervals), or none ever, is FAIL. A component whose newest sample is older than `stale_after` is graded stale and is also FAIL, so an outbox replay or a lagging agent clock can not read as healthy.
 Because the result is an ordinary check result, `group`, `depends_on`,
 `critical`, rollup, alerts and `/metrics` work unchanged, and `/metrics` adds
-`watchpost_host_age_seconds` and `watchpost_host_component_state`. The grouped
+`observe_host_age_seconds` and `observe_host_component_state`. The grouped
 summary adapted from hostwatch's `integrations/summary.py` is the host views section below.
 
 ## Host views

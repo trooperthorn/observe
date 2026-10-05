@@ -48,7 +48,7 @@ async def test_poll_records_history_and_metrics():
     hist = c.get("/api/monitors/loop-back/history").json()
     assert hist["availability"] == 0 and hist["events"][0]["current"] == "down"
     metrics = c.get("/metrics").text
-    assert 'watchpost_state{monitor="loop-back",group="lab\\"core",type="tcp"} 2' in metrics
+    assert 'observe_state{monitor="loop-back",group="lab\\"core",type="tcp"} 2' in metrics
     assert c.get("/api/monitors/nope/history").status_code == 404
 
 
@@ -109,6 +109,6 @@ async def test_rollup_and_forecast_exposed_in_api_and_metrics():
     # the minute the test runs, so allow for that around the true 7.0 days.
     assert fc["status"] == "projected" and 6.9 < (fc["warn_at"] - now) / 86400 < 7.6
     m = c.get("/metrics").text
-    assert 'watchpost_effective_state{monitor="srv",group="net",type="tcp"} 3' in m
-    assert 'watchpost_forecast_seconds{monitor="disk",group="default",type="tcp",level="warn"}' in m
-    assert 'watchpost_group_state{group="net"} 2' in m
+    assert 'observe_effective_state{monitor="srv",group="net",type="tcp"} 3' in m
+    assert 'observe_forecast_seconds{monitor="disk",group="default",type="tcp",level="warn"}' in m
+    assert 'observe_group_state{group="net"} 2' in m

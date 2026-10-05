@@ -46,7 +46,7 @@ def leaf_cert(tmp_path, cn="localhost", ca=False):
 
 # ------------------------------------------------------------------ Proxmox
 
-PVE_TOKEN = "PVEAPIToken=watchpost@pve!monitor=11111111-2222-3333-4444-555555555555"
+PVE_TOKEN = "PVEAPIToken=observe@pve!monitor=11111111-2222-3333-4444-555555555555"
 PVE_RESOURCES = [
     {"id": "node/pve1", "type": "node", "node": "pve1", "status": "online", "cpu": 0.123,
      "maxcpu": 8, "mem": 12 * 2**30, "maxmem": 32 * 2**30, "uptime": 864000, "level": ""},
@@ -117,7 +117,7 @@ TN_ALERTS = [
 
 
 class TrueNASFake:
-    def __init__(self, cert, key, username="watchpost", api_key="1-abcdef",
+    def __init__(self, cert, key, username="observe", api_key="1-abcdef",
                  pools=None, alerts=None):
         self.cert, self.key = cert, key
         self.username, self.api_key = username, api_key

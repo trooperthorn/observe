@@ -278,7 +278,7 @@ def test_create_admin_cli(tmp_path, monkeypatch):
         f"  db_path: {db.as_posix()}\n"
         "  argon2_time_cost: 1\n  argon2_memory_kib: 8\n  argon2_parallelism: 1\n"
         "monitors:\n  - {name: p, type: ping, host: 127.0.0.1}\n", encoding="utf-8")
-    monkeypatch.setenv("WATCHPOST_ADMIN_PASSWORD", PASSWORD)
+    monkeypatch.setenv("OBSERVE_ADMIN_PASSWORD", PASSWORD)
     monkeypatch.setattr("sys.argv", ["observe", "--config", str(cfg), "--create-admin", "root"])
     assert main() == 0
     assert main() == 2  # the name is taken

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Stand-in for the docker CLI in SSH tests. Emits the shapes watchpost parses.
+# Stand-in for the docker CLI in SSH tests. Emits the shapes observe parses.
 # Containers: web (running, healthy), db (running, unhealthy),
 #             worker (exited, restart=unless-stopped), oneshot (exited, restart=no)
 dir="$(dirname "$0")"

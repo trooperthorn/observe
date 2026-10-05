@@ -33,12 +33,12 @@ from fastapi import HTTPException, Request
 from .config import Config
 from .store import Store
 
-COOKIE = "watchpost_session"
+COOKIE = "observe_session"
 CSRF_HEADER = "x-csrf-token"
 MIN_PASSWORD = 12
 MAX_PASSWORD = 256
 MAX_USERNAME = 64
-_CSRF_CONTEXT = b"watchpost-csrf-v1"
+_CSRF_CONTEXT = b"observe-csrf-v1"
 
 
 class AuthError(ValueError):
@@ -65,7 +65,7 @@ def verify_password(cfg: Config, stored: str, password: str) -> bool:
 
 @lru_cache(maxsize=8)
 def _dummy_hash(t: int, m: int, p: int) -> str:
-    return PasswordHasher(time_cost=t, memory_cost=m, parallelism=p).hash("watchpost-dummy")
+    return PasswordHasher(time_cost=t, memory_cost=m, parallelism=p).hash("observe-dummy")
 
 
 def _burn(cfg: Config, password: str) -> None:

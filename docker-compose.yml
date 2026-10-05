@@ -1,8 +1,8 @@
 services:
-  watchpost:
+  observe:
     build: .
-    image: watchpost:local
-    container_name: watchpost
+    image: observe:local
+    container_name: observe
     restart: unless-stopped
     env_file: .env
     ports:

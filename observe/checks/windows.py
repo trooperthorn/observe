@@ -70,7 +70,7 @@ _KRB_CALL_LOCK = threading.Lock()
 
 def _krb_ccache_path(principal: str, keytab_path: str) -> str:
     safe = "".join(c if c.isalnum() else "_" for c in f"{principal}_{keytab_path}")
-    return f"/tmp/watchpost-krb5cc-{safe}"
+    return f"/tmp/observe-krb5cc-{safe}"
 
 
 def _kinit(principal: str, keytab_path: str) -> str:

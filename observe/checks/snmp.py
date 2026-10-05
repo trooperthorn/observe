@@ -78,7 +78,7 @@ class SnmpCheck(Check):
         argv = [tool, "-m", "", "-On", "-OqetU", "-t", str(self.timeout), "-r", "0", *auth,
                 f"udp:{self.monitor.host}:{self.monitor.port}", *oids]
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-               "SNMP_PERSISTENT_DIR": "/tmp/watchpost-snmp", "HOME": "/tmp"}
+               "SNMP_PERSISTENT_DIR": "/tmp/observe-snmp", "HOME": "/tmp"}
         proc = await asyncio.create_subprocess_exec(
             *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
         )

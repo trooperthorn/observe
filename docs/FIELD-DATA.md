@@ -127,7 +127,7 @@ Observe gains a plugin system, and this design is split between the core and the
 - **Core.**
   - Switches, ports and port properties with history, the infrastructure map, monitor matching, conflict findings and inferred dependencies.
   - SNMP, UniFi and pushed hosts feed the same map, so none of it is specific to Pockethernet.
-- **Plugin host (core).** Plugins are found through Python entry points (group `observe.plugins`, with the legacy group `watchpost.plugins` still read and warned about for compatibility) and loaded only when listed under `plugins:` in `watchpost.yaml`. A plugin declares the core versions it supports, and a mismatch refuses to start. Through fixed hooks a plugin can register:
+- **Plugin host (core).** Plugins are found through Python entry points (group `observe.plugins`, with the legacy group `watchpost.plugins` still read and warned about for compatibility) and loaded only when listed under `plugins:` in `observe.yaml`. A plugin declares the core versions it supports, and a mismatch refuses to start. Through fixed hooks a plugin can register:
   - routers;
   - a key scope;
   - its own migrations, with a version number per plugin;

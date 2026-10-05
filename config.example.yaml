@@ -1,4 +1,4 @@
-# watchpost example configuration.
+# observe example configuration.
 # Addresses use the RFC 5737 documentation ranges and *.lab.example names.
 # Secrets are references, never literals:
 #   ${NAME}              environment variable (startup fails if unset)
@@ -7,7 +7,7 @@
 server:
   listen: 0.0.0.0
   port: 8080
-  db_path: /data/watchpost.db
+  db_path: /data/observe.db
   retention_days: 30
   # The audit log has its own retention, separate from polls and host samples.
   audit_retention_days: 365
@@ -24,7 +24,7 @@ server:
   # proxy in front if you enable this, basic auth over plain HTTP is not
   # confidential.
   basic_auth_user: ops
-  basic_auth_password: ${WATCHPOST_UI_PASSWORD}
+  basic_auth_password: ${OBSERVE_UI_PASSWORD}
 
 # Infrastructure map (docs/FIELD-DATA.md). Links not confirmed for stale_days are drawn faded,
 # and hidden after twice that. With auto_depends, a dependency confirmed by LLDP or CDP within
@@ -78,7 +78,7 @@ credentials:
     community: ${SNMP_COMMUNITY}
   snmp-v3-core:
     type: snmpv3
-    username: watchpost
+    username: observe
     level: authPriv
     auth_protocol: SHA-256
     auth_password: ${SNMP_AUTH}
@@ -87,7 +87,7 @@ credentials:
   win-monitor:
     type: winrm
     transport: ntlm
-    username: LAB\svc-watchpost
+    username: LAB\svc-observe
     password: ${WINRM_PASSWORD}
   # Certificate-mapped WinRM (no password on the wire or on disk here).
   win-monitor-cert:
@@ -100,30 +100,30 @@ credentials:
   win-monitor-krb:
     type: winrm
     transport: kerberos
-    principal: watchpost@LAB.EXAMPLE.COM
-    keytab_path: /run/secrets/watchpost.keytab
+    principal: observe@LAB.EXAMPLE.COM
+    keytab_path: /run/secrets/observe.keytab
     # Only set this if the target's SPN host differs from the monitor's
     # `host:` (for example, a CNAME or load-balanced name).
     # kerberos_hostname_override: winsrv01.lab.example.com
   linux-key:
     type: ssh
-    username: watchpost
-    private_key: /run/secrets/watchpost_ed25519   # key-based; no password needed
+    username: observe
+    private_key: /run/secrets/observe_ed25519   # key-based; no password needed
   ad-reader:
     type: ldap
-    bind_user: svc-watchpost@lab.example
+    bind_user: svc-observe@lab.example
     password: ${AD_PASSWORD}
   truenas-ro:
     type: truenas
-    username: watchpost              # a user with the READONLY_ADMIN role
+    username: observe              # a user with the READONLY_ADMIN role
     api_key: ${TRUENAS_API_KEY}
   pve-audit:
     type: proxmox
-    token_id: watchpost@pve!monitor  # token on a user with PVEAuditor
+    token_id: observe@pve!monitor  # token on a user with PVEAuditor
     secret: ${PROXMOX_TOKEN_SECRET}
   esxi-ro:
     type: vsphere
-    username: watchpost@lab.example  # a read-only role on the host or vCenter
+    username: observe@lab.example  # a read-only role on the host or vCenter
     password: ${VSPHERE_PASSWORD}
   ha-token:
     type: homeassistant
@@ -136,7 +136,7 @@ credentials:
     token: ${TECHNITIUM_TOKEN}       # user with only Dashboard: View
   mqtt-monitor:
     type: mqtt
-    username: watchpost
+    username: observe
     password: ${MQTT_PASSWORD}
 
 alerts:
@@ -152,7 +152,7 @@ alerts:
     tls: true
     ca_bundle: /config/lab-root-ca.pem
     credential: mqtt-monitor
-    topic_prefix: watchpost
+    topic_prefix: observe
     notify_on: [down, warn, up]
 
 monitors:

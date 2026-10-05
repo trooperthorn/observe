@@ -152,7 +152,7 @@ function render(data) {
   const summary = document.getElementById("summary");
   summary.replaceChildren(...Object.entries(counts).filter(([, n]) => n)
     .map(([s, n]) => el("span", `pill ${s}`, `${n} ${s}`)));
-  document.title = counts.down ? `(${counts.down} down) watchpost` : "watchpost";
+  document.title = counts.down ? `(${counts.down} down) observe` : "observe";
 
   const frag = document.createDocumentFragment();
   for (const [name, mons] of [...groups.entries()].sort()) {
@@ -195,7 +195,7 @@ function render(data) {
 
   const bad = Object.entries(data.alerts).filter(([, a]) => a.last_error);
   document.getElementById("footer").textContent =
-    `watchpost ${data.version} · refreshed ${new Date().toLocaleTimeString()}` +
+    `observe ${data.version} · refreshed ${new Date().toLocaleTimeString()}` +
     (bad.length ? ` · alert delivery failing: ${bad.map(([n, a]) => `${n} (${a.last_error})`).join("; ")}` : "");
 }
 
@@ -232,7 +232,7 @@ async function refresh() {
     await renderEvents();
     await renderFindings();
   } catch (_) {
-    document.getElementById("footer").textContent = "watchpost unreachable, retrying";
+    document.getElementById("footer").textContent = "observe unreachable, retrying";
   }
 }
 

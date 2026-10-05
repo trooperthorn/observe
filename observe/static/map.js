@@ -201,7 +201,7 @@ async function refresh() {
     document.getElementById("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;
   } catch (e) {
     if (e.message !== "not signed in") {
-      document.getElementById("footer").textContent = "watchpost unreachable, retrying";
+      document.getElementById("footer").textContent = "observe unreachable, retrying";
     }
   }
 }

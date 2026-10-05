@@ -768,50 +768,50 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     @app.get("/metrics", dependencies=guarded, response_class=PlainTextResponse)
     async def metrics() -> str:
         lines = [
-            "# HELP watchpost_state Own monitor state: -1 pending, 0 up, 1 warn, 2 down.",
-            "# TYPE watchpost_state gauge",
+            "# HELP observe_state Own monitor state: -1 pending, 0 up, 1 warn, 2 down.",
+            "# TYPE observe_state gauge",
         ]
-        values = ["# HELP watchpost_value Last numeric value of the check.",
-                  "# TYPE watchpost_value gauge"]
+        values = ["# HELP observe_value Last numeric value of the check.",
+                  "# TYPE observe_value gauge"]
         for m in scheduler.monitors:
             st = scheduler.states[m.slug]
             labels = f'monitor="{m.slug}",group="{_label(m.group)}",type="{m.type}"'
-            lines.append(f"watchpost_state{{{labels}}} {_STATE_NUM[st.state.value]}")
+            lines.append(f"observe_state{{{labels}}} {_STATE_NUM[st.state.value]}")
             if st.last and st.last.value is not None:
-                values.append(f"watchpost_value{{{labels}}} {st.last.value}")
-        eff = ["# HELP watchpost_effective_state After dependency rollup: -1 pending, 0 up, "
-               "1 warn, 2 down, 3 unreachable.", "# TYPE watchpost_effective_state gauge"]
-        fcl = ["# HELP watchpost_forecast_seconds Seconds until the trend crosses a threshold "
+                values.append(f"observe_value{{{labels}}} {st.last.value}")
+        eff = ["# HELP observe_effective_state After dependency rollup: -1 pending, 0 up, "
+               "1 warn, 2 down, 3 unreachable.", "# TYPE observe_effective_state gauge"]
+        fcl = ["# HELP observe_forecast_seconds Seconds until the trend crosses a threshold "
                "(0 = already crossed; absent = no projection).",
-               "# TYPE watchpost_forecast_seconds gauge"]
+               "# TYPE observe_forecast_seconds gauge"]
         now = time.time()
         for m in scheduler.monitors:
             labels = f'monitor="{m.slug}",group="{_label(m.group)}",type="{m.type}"'
             e, _ = scheduler.rollup.effective(m.slug)
-            eff.append(f"watchpost_effective_state{{{labels}}} {_EFF_NUM[e]}")
+            eff.append(f"observe_effective_state{{{labels}}} {_EFF_NUM[e]}")
             f = scheduler.forecasts.get(m.slug)
             for level in ("warn", "crit"):
                 at = getattr(f, f"{level}_at", None) if f else None
                 if at is not None:
-                    fcl.append(f'watchpost_forecast_seconds{{{labels},level="{level}"}} '
+                    fcl.append(f'observe_forecast_seconds{{{labels},level="{level}"}} '
                                f"{max(0.0, at - now):.0f}")
-        grp = ["# HELP watchpost_group_state Group rollup state, same scale as effective_state.",
-               "# TYPE watchpost_group_state gauge"]
+        grp = ["# HELP observe_group_state Group rollup state, same scale as effective_state.",
+               "# TYPE observe_group_state gauge"]
         for g, info in sorted(scheduler.rollup.group_states().items()):
-            grp.append(f'watchpost_group_state{{group="{_label(g)}"}} {_EFF_NUM[info["state"]]}')
-        age = ["# HELP watchpost_host_age_seconds Seconds since the last batch from a pushed host.",
-               "# TYPE watchpost_host_age_seconds gauge"]
-        comp = ["# HELP watchpost_host_component_state Pushed host component: 0 good, "
-                "1 warning, 2 critical.", "# TYPE watchpost_host_component_state gauge"]
+            grp.append(f'observe_group_state{{group="{_label(g)}"}} {_EFF_NUM[info["state"]]}')
+        age = ["# HELP observe_host_age_seconds Seconds since the last batch from a pushed host.",
+               "# TYPE observe_host_age_seconds gauge"]
+        comp = ["# HELP observe_host_component_state Pushed host component: 0 good, "
+                "1 warning, 2 critical.", "# TYPE observe_host_component_state gauge"]
         for m in scheduler.monitors:
             last = scheduler.states[m.slug].last
             if m.type != "pushed_host" or last is None:
                 continue
             labels = f'monitor="{m.slug}",group="{_label(m.group)}",host="{_label(m.host)}"'
             if "age_seconds" in last.detail:
-                age.append(f"watchpost_host_age_seconds{{{labels}}} {last.detail['age_seconds']:.0f}")
+                age.append(f"observe_host_age_seconds{{{labels}}} {last.detail['age_seconds']:.0f}")
             for name, level in sorted(last.detail.get("components", {}).items()):
-                comp.append(f'watchpost_host_component_state{{{labels},component="{_label(name)}"}} '
+                comp.append(f'observe_host_component_state{{{labels},component="{_label(name)}"}} '
                             f"{_COMPONENT_NUM[level]}")
         return "\n".join(lines + values + eff + fcl + grp + age + comp) + "\n"
 

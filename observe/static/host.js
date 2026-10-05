@@ -111,7 +111,7 @@ function sourcesTable(sources) {
 }
 
 function render(h) {
-  document.title = `${h.host} - watchpost`;
+  document.title = `${h.host} - observe`;
   document.getElementById("summary").replaceChildren(
     el("span", `pill ${h.status}`, `${h.host}: ${h.status}`));
   const frag = document.createDocumentFragment();
@@ -148,7 +148,7 @@ async function refresh() {
     if (r.status === 404) { page.replaceChildren(el("p", null, "Unknown host.")); return; }
     if (r.ok) render(await r.json());
   } catch (_) {
-    document.getElementById("footer").textContent = "watchpost unreachable, retrying";
+    document.getElementById("footer").textContent = "observe unreachable, retrying";
   }
 }
 

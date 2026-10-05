@@ -1,7 +1,7 @@
 """TrueNAS, Proxmox, and vSphere.
 
 vSphere runs against vcsim, VMware's govmomi simulator, which speaks the real
-vSphere SOAP API; the test starts it itself. Set WATCHPOST_VCSIM to its path
+vSphere SOAP API; the test starts it itself. Set OBSERVE_VCSIM to its path
 if it is not on PATH. Proxmox and TrueNAS run against the fakes in
 tests/fakes/servers.py.
 """
@@ -23,11 +23,11 @@ from observe.discovery import discover
 from .fakes.servers import TrueNASFake, leaf_cert, proxmox_server
 
 CREDS = {
-    "pve": {"type": "proxmox", "token_id": "watchpost@pve!monitor",
+    "pve": {"type": "proxmox", "token_id": "observe@pve!monitor",
             "secret": "11111111-2222-3333-4444-555555555555"},
-    "pvebad": {"type": "proxmox", "token_id": "watchpost@pve!monitor", "secret": "nope"},
-    "tn": {"type": "truenas", "username": "watchpost", "api_key": "1-abcdef"},
-    "tnbad": {"type": "truenas", "username": "watchpost", "api_key": "wrong"},
+    "pvebad": {"type": "proxmox", "token_id": "observe@pve!monitor", "secret": "nope"},
+    "tn": {"type": "truenas", "username": "observe", "api_key": "1-abcdef"},
+    "tnbad": {"type": "truenas", "username": "observe", "api_key": "wrong"},
     "vs": {"type": "vsphere", "username": "watch", "password": "good"},
     "vsbad": {"type": "vsphere", "username": "watch", "password": "bad"},
 }
@@ -157,7 +157,7 @@ def tcheck(fake, ca, **kw):
 async def test_truenas_login_uses_login_ex_api_key_plain(truenas):
     fake, ca = truenas
     await tcheck(fake, ca, mode="pools").run()
-    assert fake.logins[0] == {"mechanism": "API_KEY_PLAIN", "username": "watchpost",
+    assert fake.logins[0] == {"mechanism": "API_KEY_PLAIN", "username": "observe",
                               "api_key": "1-abcdef"}
 
 
@@ -197,10 +197,10 @@ async def test_truenas_discovery(truenas):
 
 # ------------------------------------------------------------------ vSphere
 
-VCSIM = os.environ.get("WATCHPOST_VCSIM") or shutil.which("vcsim") or \
+VCSIM = os.environ.get("OBSERVE_VCSIM") or shutil.which("vcsim") or \
     ("/tmp/vcsim" if os.path.exists("/tmp/vcsim") else None)
-if os.environ.get("WATCHPOST_REQUIRE_SERVICES") == "1":
-    assert VCSIM, "WATCHPOST_REQUIRE_SERVICES=1 but vcsim was not found"
+if os.environ.get("OBSERVE_REQUIRE_SERVICES") == "1":
+    assert VCSIM, "OBSERVE_REQUIRE_SERVICES=1 but vcsim was not found"
 needs_vcsim = pytest.mark.skipif(not VCSIM, reason="vcsim not available")
 
 

@@ -1,6 +1,6 @@
 """Entry point.
 
-  python -m observe --config /config/watchpost.yaml          run the service
+  python -m observe --config /config/observe.yaml          run the service
   python -m observe --config ... --validate                  check config and exit
   python -m observe --config ... --once [--only SLUG]        poll once, print, exit
   python -m observe --config ... --discover [--target 192.0.2.0/24 ...]
@@ -23,7 +23,7 @@ import time
 
 import uvicorn
 
-from . import __version__
+from . import __version__, compat
 from .alerts import Alerter
 from .config import ConfigError, load_config
 from .plugins import PluginError, load_plugins
@@ -175,15 +175,14 @@ def _ingest_keys(config, args) -> int:  # type: ignore[no-untyped-def]
 
 
 def _create_admin(config, args) -> int:  # type: ignore[no-untyped-def]
-    """Create an admin user. The password comes from WATCHPOST_ADMIN_PASSWORD or a prompt,
+    """Create an admin user. The password comes from OBSERVE_ADMIN_PASSWORD or a prompt,
     never from the command line, so it does not land in shell history or the process list."""
     import getpass
-    import os
 
     from . import audit
     from .auth import AuthError, create_user
 
-    password = os.environ.get("WATCHPOST_ADMIN_PASSWORD")
+    password = compat.getenv("OBSERVE_ADMIN_PASSWORD")
     if password is None:
         password = getpass.getpass("Password: ")
         if getpass.getpass("Repeat password: ") != password:
@@ -240,7 +239,8 @@ def _plugins(config):  # type: ignore[no-untyped-def]
 
 def main() -> int:
     ap = argparse.ArgumentParser(prog="observe")
-    ap.add_argument("--config", default="/config/watchpost.yaml")
+    ap.add_argument("--config", default=None,
+                    help="config file (default /config/observe.yaml, or the legacy name)")
     ap.add_argument("--validate", action="store_true", help="validate config and exit")
     ap.add_argument("--once", action="store_true", help="poll every monitor once and exit")
     ap.add_argument("--only", help="with --once, poll only this monitor slug")
@@ -271,7 +271,7 @@ def main() -> int:
     ap.add_argument("--ingest-key-list", action="store_true",
                     help="list ingest keys with host, state and last use, and exit")
     ap.add_argument("--create-admin", metavar="USERNAME",
-                    help="create an admin user (password from WATCHPOST_ADMIN_PASSWORD or a "
+                    help="create an admin user (password from OBSERVE_ADMIN_PASSWORD or a "
                          "prompt) and exit")
     ap.add_argument("--control-keygen", metavar="PATH",
                     help="write a new control signing key pair at PATH (mode 0600, never "
@@ -284,7 +284,8 @@ def main() -> int:
     if args.control_keygen:
         return _control_keygen(args.control_keygen)  # needs no config file
     try:
-        config = load_config(args.config)
+        config = load_config(compat.resolve_config_path(args.config))
+        config.server.db_path = compat.resolve_db_path(config.server.db_path)
     except ConfigError as err:
         print(f"config error: {err}", file=sys.stderr)
         return 2

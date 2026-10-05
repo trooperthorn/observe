@@ -47,13 +47,17 @@ alerted.
 ```sh
 git clone <this repo> observe && cd observe
 mkdir -p config data secrets
-cp config.example.yaml config/watchpost.yaml   # then edit it
+cp config.example.yaml config/observe.yaml   # then edit it
 cp .env.example .env                            # then fill in secrets
 sudo chown 10001:10001 data                     # the container runs as UID 10001
-docker compose run --rm watchpost --config /config/watchpost.yaml --validate
-docker compose run --rm watchpost --config /config/watchpost.yaml --once
+docker compose run --rm observe --config /config/observe.yaml --validate
+docker compose run --rm observe --config /config/observe.yaml --once
 docker compose up -d
 ```
+
+Upgrading a deployment that still uses the old name watchpost: see
+`docs/UPGRADING-FROM-WATCHPOST.md`. The legacy environment variables, config path and
+database path are still read with a warning.
 
 `--validate` checks the config and every secret reference, then exits.
 `--once` polls every monitor a single time and prints the result, which is the
@@ -92,13 +96,13 @@ way to be, so there is no such thing as "Observe running as a gMSA".
 
 1. On a DC, create the service account and its keytab, e.g.:
    ```powershell
-   ktpass -princ watchpost/monitor@LAB.EXAMPLE.COM -mapuser LAB\svc-watchpost `
-     -crypto AES256-SHA1 -ptype KRB5_NT_PRINCIPAL -out watchpost.keytab
+   ktpass -princ observe/monitor@LAB.EXAMPLE.COM -mapuser LAB\svc-observe `
+     -crypto AES256-SHA1 -ptype KRB5_NT_PRINCIPAL -out observe.keytab
    ```
    (`msktutil` is the equivalent tool if you manage the account from Linux.)
    Use AES256, not RC4 — modern DCs support it and RC4 is what's actually
    being deprecated alongside NTLM.
-2. Put `watchpost.keytab` under `./secrets` (never in `./config`, which the
+2. Put `observe.keytab` under `./secrets` (never in `./config`, which the
    container mounts read-only for config, not secrets, and which you may put
    in git).
 3. Write a `krb5.conf` for your realm (`[libdefaults] default_realm =
@@ -107,7 +111,7 @@ way to be, so there is no such thing as "Observe running as a gMSA".
    `docker-compose.yml`).
 4. In the credential, set `principal` to the keytab's principal and
    `keytab_path` to where the keytab lands inside the container
-   (`/run/secrets/watchpost.keytab`), and reference it from a monitor as
+   (`/run/secrets/observe.keytab`), and reference it from a monitor as
    usual.
 5. `kinit -kt` runs automatically before each poll (a ticket is cached for a
    few hours, not re-acquired every time); nothing needs to be pre-authenticated
@@ -206,7 +210,7 @@ or LWT topic with `expect: online`.
 ## Discovery
 
 ```sh
-docker compose run --rm watchpost --config /config/watchpost.yaml --discover \
+docker compose run --rm observe --config /config/observe.yaml --discover \
   --target 192.0.2.0/24 --target 198.51.100.10-40 --target dc01.lab.example \
   --credential snmp-v3-core --credential win-monitor \
   --out /data/proposals.yaml --report /data/discovery.json
@@ -216,7 +220,7 @@ Targets can be CIDRs, ranges (`192.0.2.10-40` or `192.0.2.10-192.0.2.40`),
 single IPs, or hostnames, on the command line or under `discovery.targets`.
 Credentials are names from `credentials:` and are tried in order; nothing
 else is ever sent. Discovery writes a proposal file and changes nothing: you
-copy what you want into `watchpost.yaml`, then `--validate`, `--once`, restart.
+copy what you want into `observe.yaml`, then `--validate`, `--once`, restart.
 
 **From Active Directory.** With `discovery.directory` configured, discovery
 first queries a domain controller over LDAPS for computer accounts, then
@@ -305,7 +309,7 @@ own are alerted then. An UP alert is sent only if its problem alert was.
 **Groups.** Each `group` shows the worst effective state of its members.
 `critical: false` lets a member degrade its group to WARN but not DOWN.
 Group state is on the dashboard, in `/api/groups`, and in `/metrics` as
-`watchpost_group_state`.
+`observe_group_state`.
 
 ## Capacity forecasting
 
@@ -315,7 +319,7 @@ demand at `/api/forecasts?refresh=true`, Observe averages the last
 `lookback_days` of values into hourly buckets, fits a least-squares line, and
 projects when it crosses the warn and crit thresholds. Results appear on
 each monitor card, in a "Capacity outlook" list sorted by soonest crossing,
-and in `/metrics` as `watchpost_forecast_seconds{level="warn|crit"}`.
+and in `/metrics` as `observe_forecast_seconds{level="warn|crit"}`.
 
 Every projection carries its r-squared. Below `min_r2` it is labelled low
 confidence rather than hidden. Flat or receding trends, too little history,
@@ -328,8 +332,8 @@ The methods and their public sources are recorded in `docs/PRIOR-ART.md`.
 ## Alerts
 
 `ntfy`, `webhook` (JSON POST), `smtp`, and `mqtt`. The MQTT target publishes a
-retained `watchpost/<slug>/state` (`up`, `warn`, `down`) and a non-retained
-JSON `watchpost/<slug>/event`, which Home Assistant can consume with an MQTT
+retained `observe/<slug>/state` (`up`, `warn`, `down`) and a non-retained
+JSON `observe/<slug>/event`, which Home Assistant can consume with an MQTT
 binary sensor. Each target has `notify_on` (default `[down, up]`) and each
 monitor can restrict itself to named targets with `alerts:`. Failed deliveries
 are retried once, then shown in the dashboard footer.
@@ -396,7 +400,7 @@ arrives within `stale_after` seconds (default three intervals), or none ever
 arrived, the check fails like an unreachable host. A component whose newest reading is older than `stale_after` is graded stale and also fails, even when a recent batch arrived. Timestamps more than 300 seconds ahead of receive time are clamped to receive time, and a replayed batch older than the stored one (by `sent_at`) does not overwrite the host row or source status. `group`, `depends_on` and
 `critical` work as for any monitor, so a host appears in its group's rollup,
 is suppressed when a parent switch is down, and raises alerts. `/metrics` gains
-`watchpost_host_age_seconds` and `watchpost_host_component_state` (0 good, 1
+`observe_host_age_seconds` and `observe_host_component_state` (0 good, 1
 warning, 2 critical) for pushed hosts, alongside the usual state, effective
 state and group lines.
 
@@ -416,7 +420,7 @@ has stopped pushing is Critical. These routes need a login session; basic auth
 does not open them. They only read; no action that changes a host exists.
 
 Ingest keys are managed on the admin screen (below) or from the command line.
-`python -m observe --config watchpost.yaml --ingest-key-create HOST` prints a
+`python -m observe --config observe.yaml --ingest-key-create HOST` prints a
 new key once and stores only a hash; the key works for ingest and only for
 that host name. `--ingest-key-list` shows each key's id, host, state and last
 use, and `--ingest-key-revoke ID` revokes one. The keys are accepted only
@@ -451,8 +455,8 @@ requires the host name typed exactly. The same section lists the host's command 
 Cancel button while a reboot is scheduled. The admin routes need an admin session and the CSRF token. The signing format and a test vector are in `docs/CONTROL.md`. Setup in short: install the plugin, run `--control-keygen`, pin the printed public key in each host's `control.toml`, and create one `wpc` key per host with `--ingest-key-create HOST --ingest-key-scope wpc`. The endpoints, setup steps and threat notes are in `docs/CONTROL.md` and `THREAT-MODEL.md`.
 
 Logins use Argon2id password hashes and server-side sessions. Create the first
-admin with `python -m observe --config watchpost.yaml --create-admin NAME`; it
-reads the password (12 characters or more) from `WATCHPOST_ADMIN_PASSWORD` or a
+admin with `python -m observe --config observe.yaml --create-admin NAME`; it
+reads the password (12 characters or more) from `OBSERVE_ADMIN_PASSWORD` or a
 prompt, never from an argument. Sign in at `/login`. The session cookie is
 HttpOnly, Secure and SameSite=Strict, and expires after 30 idle minutes or 12
 hours in all (`server.session_idle_s`, `session_absolute_s`). Set
@@ -592,5 +596,5 @@ tests/services.sh        # loopback snmpd and mosquitto for integration tests
 python -m pytest -q -rs
 ```
 
-Set `WATCHPOST_REQUIRE_SERVICES=1` to make missing test services a failure
+Set `OBSERVE_REQUIRE_SERVICES=1` to make missing test services a failure
 rather than a skip; CI does this.

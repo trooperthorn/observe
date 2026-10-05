@@ -72,7 +72,7 @@ def test_duplicate_slugs_rejected():
 def test_example_config_validates(monkeypatch):
     import pathlib
     for var in ("SNMP_COMMUNITY", "SNMP_AUTH", "SNMP_PRIV", "WINRM_PASSWORD",
-                "MQTT_PASSWORD", "NTFY_TOKEN", "WATCHPOST_UI_PASSWORD", "AD_PASSWORD", "TRUENAS_API_KEY", "PROXMOX_TOKEN_SECRET",
+                "MQTT_PASSWORD", "NTFY_TOKEN", "OBSERVE_UI_PASSWORD", "AD_PASSWORD", "TRUENAS_API_KEY", "PROXMOX_TOKEN_SECRET",
                 "VSPHERE_PASSWORD", "HA_TOKEN", "UNIFI_API_KEY", "TECHNITIUM_TOKEN"):
         monkeypatch.setenv(var, "x")
     cfg = load_config(pathlib.Path(__file__).parent.parent / "config.example.yaml")

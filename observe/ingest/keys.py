@@ -39,7 +39,7 @@ MARKER = "wpi"
 _SCOPE = re.compile(r"^[a-z]{3,8}$")
 PREFIX_BYTES = 6
 SECRET_BYTES = 32
-_DUMMY_DIGEST = hashlib.sha256(b"watchpost-no-such-key").hexdigest()
+_DUMMY_DIGEST = hashlib.sha256(b"observe-no-such-key").hexdigest()
 
 
 class IngestKeyError(ValueError):

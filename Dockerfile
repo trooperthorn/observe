@@ -24,8 +24,8 @@ COPY plugins ./plugins
 RUN pip install --no-cache-dir --no-deps ./plugins/pockethernet ./plugins/control  && rm -rf ./plugins
 
 # Fixed non-root UID/GID so volume ownership is predictable on the host.
-RUN groupadd --gid 10001 watchpost \
- && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin watchpost \
+RUN groupadd --gid 10001 observe \
+ && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin observe \
  && mkdir -p /data && chown 10001:10001 /data
 USER 10001:10001
 
@@ -34,4 +34,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3).status == 200 else 1)"
 ENTRYPOINT ["python", "-m", "observe"]
-CMD ["--config", "/config/watchpost.yaml"]
+CMD ["--config", "/config/observe.yaml"]

@@ -506,5 +506,5 @@ def test_control_doc_carries_the_test_vector_and_follows_the_writing_rules():
     for value in (base64.b64encode(VECTOR_SEED).decode(), VECTOR_PUBLIC, VECTOR_CANONICAL,
                   VECTOR_SIGNATURE, json.dumps(VECTOR_COMMAND, separators=(",", ":"))):
         assert value in doc
-    for step in ("--control-keygen", "--ingest-key-scope wpc", "watchpost_public_key"):
+    for step in ("--control-keygen", "--ingest-key-scope wpc", "watchpost_public_key"  # legacy name):
         assert step in doc

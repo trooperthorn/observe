@@ -22,8 +22,8 @@ import pytest
 
 from observe.config import Config
 
-SNMP_PORT = int(os.environ.get("WATCHPOST_TEST_SNMP_PORT", "1161"))
-MQTT_PORT = int(os.environ.get("WATCHPOST_TEST_MQTT_PORT", "18830"))
+SNMP_PORT = int(os.environ.get("OBSERVE_TEST_SNMP_PORT", "1161"))
+MQTT_PORT = int(os.environ.get("OBSERVE_TEST_MQTT_PORT", "18830"))
 
 
 def make_config(monitors: list[dict[str, Any]], **extra: Any) -> Config:
@@ -61,11 +61,11 @@ def _mqtt_up() -> bool:
         return False
 
 
-# In CI, WATCHPOST_REQUIRE_SERVICES=1 turns a missing service into a hard
+# In CI, OBSERVE_REQUIRE_SERVICES=1 turns a missing service into a hard
 # failure, so a green run can not silently mean "integration tests skipped".
-if os.environ.get("WATCHPOST_REQUIRE_SERVICES") == "1":
-    assert _snmpd_up(), "WATCHPOST_REQUIRE_SERVICES=1 but test snmpd is not reachable"
-    assert _mqtt_up(), "WATCHPOST_REQUIRE_SERVICES=1 but test mosquitto is not reachable"
+if os.environ.get("OBSERVE_REQUIRE_SERVICES") == "1":
+    assert _snmpd_up(), "OBSERVE_REQUIRE_SERVICES=1 but test snmpd is not reachable"
+    assert _mqtt_up(), "OBSERVE_REQUIRE_SERVICES=1 but test mosquitto is not reachable"
 
 needs_snmpd = pytest.mark.skipif(not _snmpd_up(), reason="test snmpd not running")
 needs_mqtt = pytest.mark.skipif(not _mqtt_up(), reason="test mosquitto not running")

@@ -9,13 +9,14 @@ An unresolved reference is a startup error, never a silent empty string.
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Annotated, Any, Literal, Union
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+
+from . import compat
 
 _REF = re.compile(r"\$\{([^}]+)\}")
 
@@ -41,9 +42,10 @@ def _resolve_refs(value: Any, path: str = "") -> Any:
                 return file_path.read_text(encoding="utf-8").strip()
             except OSError as err:
                 raise ConfigError(f"{path}: cannot read secret file {file_path}: {err}") from err
-        if ref not in os.environ:
+        value = compat.getenv(ref)
+        if value is None:
             raise ConfigError(f"{path}: environment variable {ref} is not set")
-        return os.environ[ref]
+        return value
 
     return _REF.sub(repl, value)
 
@@ -89,7 +91,7 @@ class WinRMCredential(Strict):
     cert_key_pem: str | None = None  # path to its private key
     # kerberos transport: a service ticket is acquired with `kinit -kt` before
     # each session (see observe/checks/windows.py), never a stored password.
-    principal: str | None = None  # e.g. watchpost@LAB.EXAMPLE.COM
+    principal: str | None = None  # e.g. observe@LAB.EXAMPLE.COM
     keytab_path: str | None = None  # path to the keytab, mounted read-only
     kerberos_hostname_override: str | None = None  # SPN host if it differs from the monitor's host
 
@@ -148,7 +150,7 @@ class TrueNASCredential(Strict):
 
 
 class ProxmoxCredential(Strict):
-    """An API token, e.g. token_id "watchpost@pve!monitor". Grant PVEAuditor."""
+    """An API token, e.g. token_id "observe@pve!monitor". Grant PVEAuditor."""
 
     type: Literal["proxmox"]
     token_id: str = Field(pattern=r"^[^@\s]+@[^!\s]+![A-Za-z0-9_.\-]+$")
@@ -629,7 +631,7 @@ class MqttAlert(AlertBase):
     credential: str | None = None
     tls: bool = False
     ca_bundle: str | None = None
-    topic_prefix: str = "watchpost"
+    topic_prefix: str = "observe"
 
 
 Alert = Annotated[
@@ -642,7 +644,7 @@ Alert = Annotated[
 class ServerConfig(Strict):
     listen: str = "0.0.0.0"
     port: int = 8080
-    db_path: str = "/data/watchpost.db"
+    db_path: str = "/data/observe.db"
     retention_days: int = Field(default=30, ge=1)
     audit_retention_days: int = Field(default=365, ge=1)
     ingest_rate_per_minute: int = Field(default=120, ge=1)

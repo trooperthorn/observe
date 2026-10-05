@@ -2,7 +2,7 @@
 
 Discovery writes a proposal file. It never changes the running
 configuration: you review the proposals and paste the ones you want into
-watchpost.yaml, which stays the single source of truth.
+observe.yaml, which stays the single source of truth.
 
 Per host, in order:
   1. ICMP echo, a TCP connect sweep of `tcp_ports`, and a PTR lookup.
@@ -1390,13 +1390,13 @@ def render(findings: list[HostFinding], config: Config, targets: list[str],
 
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     header = [
-        f"# watchpost discovery {now}",
+        f"# observe discovery {now}",
         f"# targets: {', '.join(targets[:8])}{' ...' if len(targets) > 8 else ''}",
         f"# scanned {stats['scanned']} addresses, {stats['responded']} responded, "
         f"{proposed} monitors proposed, {skipped} skipped as already configured",
         "#",
         "# Review before use. Names, groups, and thresholds are suggestions; depends_on is",
-        "# not inferred. Copy the monitors you want under `monitors:` in watchpost.yaml,",
+        "# not inferred. Copy the monitors you want under `monitors:` in observe.yaml,",
         "# then run --validate and --once before restarting the service.",
         "",
         "monitors:" if proposed else "monitors: []",

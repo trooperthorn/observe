@@ -216,6 +216,6 @@ async function jackView() {
     await (view === "report" ? reportView : view === "jack" ? jackView : listView)();
     footer.textContent = `refreshed ${new Date().toLocaleTimeString()}`;
   } catch (_) {
-    if (footer.textContent === "") footer.textContent = "watchpost unreachable";
+    if (footer.textContent === "") footer.textContent = "observe unreachable";
   }
 })();
