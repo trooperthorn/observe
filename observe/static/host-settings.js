@@ -9,7 +9,10 @@ import { statusChip } from "/static/js/chips.js";
 import { confirmDialog, typedConfirm } from "/static/js/dialog.js";
 import { toast } from "/static/js/toast.js";
 import { notAdmin, showError, copyText } from "/static/js/admin-ui.js";
-import { validHeader, validService, progressChip, reportChip } from "/static/js/wizard-logic.js";
+import { NEEDS_URL, askPublicUrl } from "/static/js/public-url.js";
+import {
+  validHeader, validService, progressChip, reportChip, noticeFor, guardText,
+} from "/static/js/wizard-logic.js";
 import {
   hostFromPath, draftFromAllowlist, allowlistFromDraft, diffAllowlist, allowlistChip,
   allowlistHelp, taskChip, taskTitle, shouldPoll,
@@ -28,6 +31,9 @@ let draft = null;        // the editable allowlist
 let shown = null;        // { kind: "update" | "cleanup" | "install", made } the command on screen
 let install = null;      // the last enrolment progress while an install command is being watched
 let pollGen = 0;
+
+// The confirm-the-address box: the install command never uses the address this page was reached at.
+const urlParts = { box: $("public-url-box"), form: $("public-url-form"), input: $("public-url"), status: $("public-url-status") };
 
 // ---- identity ----
 function drawIdentity() {
@@ -238,8 +244,25 @@ $("copy").addEventListener("click", () => { if (shown && shown.made) copyText(sh
 function drawInstallCard() {
   const s = settings;
   $("install-card").hidden = !s.enrolled;
+  drawTokenState();
   $("cleanup").hidden = !s.can_cleanup || !s.installed;
   $("pool-field").hidden = s.platform !== "truenas";
+}
+
+// The install command's own state: waiting, already used or expired (each with Regenerate below),
+// and why the script refused to run on a machine, which leaves the command valid.
+function drawTokenState() {
+  const e = settings.enrolment;
+  const line = $("token-state");
+  const guard = $("guard-note");
+  if (!e) { line.textContent = ""; guard.hidden = true; return; }
+  const notice = noticeFor({ ready: settings.reporting && e.token_state === "used", expired: e.token_state === "expired", token_state: e.token_state });
+  if (notice) line.textContent = `${notice.title}. ${notice.text}`;
+  else if (e.token_state === "valid") line.textContent = `The install command has not been run yet. It works once and expires at ${when(e.expires_at)}.`;
+  else line.textContent = "";
+  const refused = guardText({ guard: e.guard });
+  guard.hidden = !refused;
+  guard.textContent = refused ? `${refused} The command is still valid; run it on ${host}.` : "";
 }
 
 $("regen").addEventListener("click", async () => {
@@ -249,6 +272,7 @@ $("regen").addEventListener("click", async () => {
   const ok = await confirmDialog({ title: `Regenerate the install command for ${host}?`, body, confirmText: "Regenerate", danger: true });
   if (!ok) return;
   $("regen").disabled = true;
+  let needsUrl = false;
   try {
     const path = settings.installed ? "/enrolment/reissue" : "/enrolment/regenerate";
     const made = await api("POST", hostUrl(path), csrf, { confirmed: true, pool: $("pool").value.trim() });
@@ -256,10 +280,13 @@ $("regen").addEventListener("click", async () => {
     install = null;
     await reload(true);
   } catch (err) {
-    if (err.message !== "not signed in") showError(msg, err.message);
+    if (err.code === NEEDS_URL) needsUrl = true;
+    else if (err.message !== "not signed in") showError(msg, err.message);
   } finally {
     $("regen").disabled = false;
   }
+  // No Observe address is configured or saved yet: ask once, then make the command.
+  if (needsUrl) { await askPublicUrl(urlParts, csrf); $("regen").click(); }
 });
 
 $("cleanup").addEventListener("click", async () => {

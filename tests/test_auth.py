@@ -34,8 +34,10 @@ class Env:
     def __init__(self, tmp_path, basic: bool = True, **server) -> None:
         self.path = str(tmp_path / "w.db")
         self.store = Store(self.path)
+        # Install commands carry a configured address, never the Host header. Pass
+        # public_url=None to test an Observe that has none.
         srv = {"db_path": self.path, "argon2_time_cost": 1, "argon2_memory_kib": 8,
-               "argon2_parallelism": 1, **server}
+               "argon2_parallelism": 1, "public_url": "https://testserver", **server}
         if basic:
             srv.update(basic_auth_user="ui", basic_auth_password="uipass")
         self.cfg = make_config([{"name": "p", "type": "ping", "host": "127.0.0.1"}], server=srv)

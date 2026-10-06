@@ -66,4 +66,6 @@ test("polling goes on only while something can still change", () => {
   assert.ok(!shouldPoll({ task: { state: "done" } }, false));
   assert.ok(!shouldPoll({ task: null }, false));
   assert.ok(shouldPoll({ task: null }, true));
+  assert.ok(shouldPoll({ task: null, enrolment: { token_state: "valid" } }, false));
+  assert.ok(!shouldPoll({ task: null, enrolment: { token_state: "used" } }, false));
 });

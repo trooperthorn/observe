@@ -24,6 +24,7 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
@@ -782,14 +783,62 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
 
     @app.get("/api/hosts", include_in_schema=False)
     async def hosts(_: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
-        """Every pushed host, with the status of each hardware section. Session only."""
+        """Every pushed host, with the status of each hardware section, and under `waiting` the
+        hosts that were enrolled in the console but have not sent a batch yet, each with a link
+        to its enrolment page. Session only."""
         rows = {r["host"]: r for r in await store.host_rows()}
         out = []
         for name in sorted({*rows, *pushed}):
             view = await host_view(name, rows.get(name))
             if view is not None:
                 out.append(hostview.summarize(view))
-        return {"hosts": out}
+        listed = {h["host"] for h in out}
+        waiting = [w for w in await enrol.waiting_hosts(store, auth_clock())
+                   if w["host"] not in listed]
+        return {"hosts": out, "waiting": waiting}
+
+    # The address install commands carry. Never the request's Host header, which the sender
+    # controls: `server.public_url`, or the address an admin confirmed and saved.
+    async def public_url() -> str:
+        return (await enrol.get_public_url(store, config.server.public_url))[0]
+
+    URL_NEEDED = {"detail": "Observe does not know the address hosts should use to reach it. "
+                            "Confirm it, then try again.", "code": "public_url_required"}
+
+    @app.get("/api/enrol/public-url", include_in_schema=False)
+    async def get_public_url(_: authmod.Session = Depends(guards.admin)) -> dict[str, Any]:
+        """The Observe address install commands use and where it came from: "config" (set in the
+        file, so it cannot be changed here), "saved" (confirmed in the wizard) or "" (not set).
+        Admin session."""
+        url, source = await enrol.get_public_url(store, config.server.public_url)
+        return {"url": url, "source": source}
+
+    @app.put("/api/enrol/public-url", include_in_schema=False)
+    async def put_public_url(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Save the address an admin confirmed. It must be http(s)://host[:port] with no path and
+        no loopback name. Refused with 409 when `server.public_url` is set, because the file
+        wins. Admin session and CSRF."""
+        remote = request.client.host if request.client else ""
+        body = await body_of(request)
+
+        async def refused(status: int, reason: str) -> JSONResponse:
+            await audit.record(store, "enrol_public_url_failed", actor=sess.username, method="PUT",
+                               path="/api/enrol/public-url", status=status, remote=remote,
+                               detail={"reason": reason})
+            return JSONResponse({"detail": reason}, status_code=status)
+
+        if config.server.public_url:
+            return await refused(409, "the address is set in the Observe config as "
+                                      "server.public_url, so it is changed there")
+        try:
+            url = await enrol.set_public_url(store, body.get("url"), auth_clock())
+        except enrol.EnrolError as err:
+            return await refused(err.status, err.reason)
+        await audit.record(store, "enrol_public_url_set", actor=sess.username, method="PUT",
+                           path="/api/enrol/public-url", status=200, remote=remote,
+                           detail={"url": url})
+        return JSONResponse({"url": url, "source": "saved"})
 
     @app.post("/api/hosts", include_in_schema=False)
     async def create_host(
@@ -804,11 +853,11 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             body = None
         shown = {"host": str(body.get("name"))[:MAX_NAME] if isinstance(body, dict) else ""}
 
-        async def refused(status: int, reason: str) -> JSONResponse:
+        async def refused(status: int, reason: str, **extra: str) -> JSONResponse:
             await audit.record(store, "enrol_create_failed", actor=sess.username, method="POST",
                                path="/api/hosts", status=status, remote=remote,
                                detail={**shown, "reason": reason})
-            return JSONResponse({"detail": reason}, status_code=status)
+            return JSONResponse({"detail": reason, **extra}, status_code=status)
 
         try:
             spec = enrol.parse_spec(body)
@@ -816,6 +865,10 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             now = auth_clock()
             if spec.name in pushed:
                 raise enrol.EnrolError("a host with this name already exists", 409)
+            base = await public_url()
+            if not base:
+                # Before the token is made, so a missing address costs nothing.
+                return await refused(409, URL_NEEDED["detail"], code=URL_NEEDED["code"])
             token = await enrol.create_enrolment(store, spec, sess.username, now)
         except enrol.EnrolError as err:
             return await refused(err.status, err.reason)
@@ -829,8 +882,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             "host": spec.name, "platform": spec.platform,
             "platform_label": enrol.PLATFORMS[spec.platform],
             "expires_at": now + enrol.TOKEN_TTL_S, "ttl_s": enrol.TOKEN_TTL_S,
-            "command": enrol.command_text(spec.name, spec.platform, str(request.base_url),
-                                          token, pool)})
+            "command": enrol.command_text(spec.name, spec.platform, base, token, pool)})
 
     @app.get("/api/hosts/{host}/enrolment", include_in_schema=False)
     async def host_enrolment(host: str, request: Request,
@@ -862,6 +914,9 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             body = None
         raw_pool = body.get("pool") if isinstance(body, dict) else None
         now = auth_clock()
+        base = await public_url()
+        if not base:
+            return JSONResponse(URL_NEEDED, status_code=409)
         made = await enrol.regenerate_enrolment(store, host, now)
         if made is None:
             await audit.record(store, "enrol_regenerate_failed", actor=sess.username,
@@ -880,8 +935,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             "host": spec.name, "platform": spec.platform,
             "platform_label": enrol.PLATFORMS[spec.platform],
             "expires_at": now + enrol.TOKEN_TTL_S, "ttl_s": enrol.TOKEN_TTL_S,
-            "command": enrol.command_text(spec.name, spec.platform, str(request.base_url),
-                                          token, pool)})
+            "command": enrol.command_text(spec.name, spec.platform, base, token, pool)})
 
     enrol_limiter = RateLimiter(config.server.plugin_rate_per_minute, ingest_clock)
     app.state.observe_machine_id = scripts_machine_id()
@@ -892,58 +946,86 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
 
     @app.get("/i/{token}", include_in_schema=False)
     async def install_script(token: str, request: Request) -> Response:
-        """The install script for one enrolment. No session: the single-use token in the path is
-        the credential. It is spent by this fetch, so a second fetch is 410. A platform with no
-        script yet, or control without a loaded control plugin, is refused before the token is
-        spent. The response is `no-store` and the token is never logged."""
+        """The install script for one enrolment. No session: the token in the path is the
+        credential. This only serves the script. It holds no key and it does not spend the token,
+        so a command pasted on the wrong machine, or fetched twice, costs nothing. The script runs
+        its guards and only then posts the token to POST /api/enrol/redeem. A platform with no
+        script yet, or control without a loaded control plugin, is refused here. The response is
+        `no-store` and the token is never logged."""
         remote = request.client.host if request.client else ""
         if not enrol_limiter.allow(remote or "unknown"):
             raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": "60"})
         now = auth_clock()
-        known = await enrol.peek(store, token, now)
-        platform_of = known[0] if known is not None else ""
-        if known is not None:
-            platform, wants_control = known
-            if platform not in scripts.SCRIPT_PLATFORMS:
-                raise HTTPException(501, "no install script for this platform yet")
-            if wants_control and platform in scripts.AGENT_ONLY_PLATFORMS:
-                raise HTTPException(409, "control is not available for this platform yet")
-            if wants_control and not control_public_key():
-                raise HTTPException(409, "control is not set up on this Observe server")
-            if platform == "truenas" and not scripts.valid_pool(request.query_params.get("pool", "")):
-                raise HTTPException(400, "the pool name has characters that are not allowed")
-        listen = scripts.usable_address(config.server.listen)
-        addrs = [a for a in (listen, scripts.usable_address(request.url.hostname or ""))
-                 if a is not None]
-        pool = request.query_params.get("pool", "")
-        ctx = scripts.Context(str(request.base_url).rstrip("/"),
-                              app.state.observe_machine_id, tuple(dict.fromkeys(addrs)),
-                              control_public_key())
-        if known is not None:
-            # Dry run with placeholder values: a bad Host header or listen address is found
-            # before the token is spent and the keys are minted.
-            dummy = enrol.Redeemed("dry-run", platform, "wpi_" + "x" * 20,
-                                   "wpc_" + "x" * 20 if wants_control else None,
-                                   {"fans": [], "services": [], "reboot": False}, "wps_" + "x" * 20)
-            try:
-                scripts.render(dummy, ctx, pool)
-            except scripts.ScriptError as err:
-                await audit.record(store, "enrol_script_failed", method="GET", path="/i/[token]",
-                                   status=500, remote=remote,
-                                   detail={"reason": str(err), "token_spent": False})
-                return PlainTextResponse(scripts.error_body(platform_of), status_code=500)
-        red = await enrol.redeem(store, token, now, remote)
-        if red is None:
+        plan = await enrol.preview(store, token, now)
+        if plan is None:
+            await audit.record(store, "enrol_fetch_failed", method="GET", path="/i/[token]",
+                               status=410, remote=remote,
+                               detail={"reason": "unknown, used or expired token"})
             return PlainTextResponse("This install command was already used or has expired. "
                                      "Make a new one in the Observe console.\n", status_code=410)
+        platform, wants_control = plan.platform, plan.control_key is not None
+        if platform not in scripts.SCRIPT_PLATFORMS:
+            raise HTTPException(501, "no install script for this platform yet")
+        if wants_control and platform in scripts.AGENT_ONLY_PLATFORMS:
+            raise HTTPException(409, "control is not available for this platform yet")
+        if wants_control and not control_public_key():
+            raise HTTPException(409, "control is not set up on this Observe server")
+        if platform == "truenas" and not scripts.valid_pool(request.query_params.get("pool", "")):
+            raise HTTPException(400, "the pool name has characters that are not allowed")
+        ctx = await script_context()
+        if ctx is None:
+            return PlainTextResponse(
+                scripts.error_body(platform, "Observe has no confirmed address yet. "
+                                             "Confirm it in the Observe console and make a new command"),
+                status_code=409)
         try:
-            body = scripts.render(red, ctx, pool)
+            body = scripts.render(plan, ctx, request.query_params.get("pool", ""))
         except scripts.ScriptError as err:
             await audit.record(store, "enrol_script_failed", method="GET", path="/i/[token]",
                                status=500, remote=remote,
-                               detail={"host": red.host, "reason": str(err)})
-            return PlainTextResponse(scripts.error_body(platform_of), status_code=500)
-        return PlainTextResponse(body, media_type=scripts.media_type(red.platform))
+                               detail={"host": plan.host, "reason": str(err), "token_spent": False})
+            return PlainTextResponse(scripts.error_body(platform), status_code=500)
+        return PlainTextResponse(body, media_type=scripts.media_type(platform))
+
+    @app.post("/api/enrol/guard", include_in_schema=False)
+    async def install_guard(request: Request) -> Response:
+        """A guard of the install script refused to run (wrong machine, not root, the Observe host
+        itself). The body is {"token", "step", "found"}. The reason is kept for the wizard and the
+        settings page and the token stays valid, so the same command works on the right machine.
+        The token is the credential. `found` is the name the machine gave itself, cut to the
+        characters a host name has."""
+        remote = request.client.host if request.client else ""
+        if not enrol_limiter.allow(remote or "unknown"):
+            raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": "60"})
+        body = await body_of(request)
+        step = body.get("step") if isinstance(body.get("step"), str) else ""
+        host = await enrol.record_guard_failure(
+            store, body.get("token", ""), step, body.get("found", ""), auth_clock())
+        if host is None:
+            raise HTTPException(404, "unknown, used or expired token")
+        await audit.record(store, "enrol_guard_refused", actor=host, method="POST",
+                           path="/api/enrol/guard", status=200, remote=remote,
+                           detail={"host": host, "step": step})
+        return Response(status_code=204)
+
+    @app.post("/api/enrol/redeem", include_in_schema=False)
+    async def install_redeem(request: Request) -> Response:
+        """Spend the token and return the keys, to the install script after its guards passed.
+        The body is {"token"}. One call succeeds per token; a second, or an expired token, is
+        410. The reply is sent with Cache-Control: no-store and never logged or audited."""
+        remote = request.client.host if request.client else ""
+        if not enrol_limiter.allow(remote or "unknown"):
+            raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": "60"})
+        body = await body_of(request)
+        token = body.get("token", "")
+        red = await enrol.redeem(store, token if isinstance(token, str) else "", auth_clock(),
+                                 remote)
+        if red is None:
+            return JSONResponse({"detail": "This install command was already used or has "
+                                           "expired. Make a new one in the Observe console."},
+                                status_code=410)
+        return JSONResponse({"host": red.host, "agent_key": red.agent_key,
+                             "control_key": red.control_key, "step_key": red.step_key})
 
     @app.post("/api/enrol/step", include_in_schema=False)
     async def install_step(request: Request) -> Response:
@@ -989,11 +1071,17 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         return Response(status_code=204)
 
     # ---- Host settings (docs/GUI-DESIGN.md section 3.11) ----
-    def script_context(request: Request) -> scripts.Context:
+    async def script_context() -> scripts.Context | None:
+        """What the server knows that the enrolment row does not, or None when no Observe address
+        is configured or confirmed. The address is never the request's Host header; its host part
+        feeds the Observe-host guard when it is an IP address."""
+        base = await public_url()
+        if not base:
+            return None
         listen = scripts.usable_address(config.server.listen)
-        addrs = [a for a in (listen, scripts.usable_address(request.url.hostname or ""))
+        addrs = [a for a in (listen, scripts.usable_address(urlsplit(base).hostname or ""))
                  if a is not None]
-        return scripts.Context(str(request.base_url).rstrip("/"), app.state.observe_machine_id,
+        return scripts.Context(base, app.state.observe_machine_id,
                                tuple(dict.fromkeys(addrs)), control_public_key())
 
     async def body_of(request: Request) -> dict[str, Any]:
@@ -1010,12 +1098,12 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         return rows[0] if rows else None
 
     async def settings_refused(sess: authmod.Session, request: Request, kind: str, host: str,
-                               status: int, reason: str) -> JSONResponse:
+                               status: int, reason: str, **extra: str) -> JSONResponse:
         await audit.record(store, kind, actor=sess.username, method=request.method,
                            path="/api/hosts/[host]/" + request.url.path.rsplit("/", 1)[-1],
                            status=status, remote=request.client.host if request.client else "",
                            detail={"host": host[:MAX_NAME], "reason": reason})
-        return JSONResponse({"detail": reason}, status_code=status)
+        return JSONResponse({"detail": reason, **extra}, status_code=status)
 
     async def make_task(request: Request, sess: authmod.Session, host: str, kind: str,
                         row: tuple[Any, ...], now: float) -> JSONResponse:
@@ -1030,12 +1118,15 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         if kind == "update" and not control_public_key():
             return await settings_refused(sess, request, "host_task_failed", host, 409,
                                           "control is not set up on this Observe server")
-        # Dry run with a placeholder step key: a bad Host header or listen address is found
-        # before anything is stored.
+        ctx = await script_context()
+        if ctx is None:
+            return await settings_refused(sess, request, "host_task_failed", host, 409,
+                                          URL_NEEDED["detail"], code=URL_NEEDED["code"])
+        # Dry run with a placeholder step key: a bad listen address is found before anything is
+        # stored.
         try:
             taskscripts.render_task(hosttasks.RedeemedTask(
-                host, kind, platform, json.loads(allowlist), rev, "wps_" + "x" * 20),
-                script_context(request))
+                host, kind, platform, json.loads(allowlist), rev, "wps_" + "x" * 20), ctx)
         except scripts.ScriptError as err:
             return await settings_refused(sess, request, "host_task_failed", host, 500,
                                           f"Observe could not build the script: {err}")
@@ -1050,7 +1141,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             "host": host, "kind": kind, "platform": platform,
             "platform_label": enrol.PLATFORMS[platform],
             "expires_at": now + enrol.TOKEN_TTL_S, "ttl_s": enrol.TOKEN_TTL_S,
-            "command": hosttasks.task_command_text(host, platform, kind, str(request.base_url),
+            "command": hosttasks.task_command_text(host, platform, kind, ctx.observe_url,
                                                    token)})
 
     @app.get("/hosts/{host}/settings", include_in_schema=False)
@@ -1078,7 +1169,10 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             "control_ready": bool(control_public_key()), "ttl_s": enrol.TOKEN_TTL_S,
             "platform": "", "platform_label": "", "agent": False, "control": False,
             "created": None, "created_by": "", "installed": False, "allowlist": None,
-            "allowlist_status": None, "can_update": False, "can_cleanup": False, "task": None}
+            "allowlist_status": None, "can_update": False, "can_cleanup": False, "task": None,
+            "enrolment": None}
+        url, source = await enrol.get_public_url(store, config.server.public_url)
+        out["public_url"] = {"url": url, "source": source}
         if row is not None:
             platform, agent, control, allowlist, created, created_by, fetched_at, _rev = row
             out.update(
@@ -1089,6 +1183,12 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                 allowlist_status=await hosttasks.allowlist_status(store, host),
                 can_update=bool(control) and taskscripts.task_supported("update", platform),
                 can_cleanup=taskscripts.task_supported("cleanup", platform))
+            prog = await enrol.progress(store, host, now)
+            if prog is not None:
+                # The state of the install command itself, so the page can say "already used or
+                # expired" and offer Regenerate, or show why the script refused to run.
+                out["enrolment"] = {"token_state": prog["token_state"], "guard": prog["guard"],
+                                    "expires_at": prog["expires_at"], "state": prog["state"]}
             task = await hosttasks.latest(store, host, now)
             if task is not None and task["state"] == "expired" \
                     and await hosttasks.claim_expiry_audit(store, task["id"], now):
@@ -1201,6 +1301,9 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             return await settings_refused(sess, request, "enrol_reissue_failed", host, 400,
                                           "the request was not confirmed")
         now = auth_clock()
+        base = await public_url()
+        if not base:
+            return JSONResponse(URL_NEEDED, status_code=409)
         row = await store._run("SELECT platform FROM enrolments WHERE host=?", (host,))
         if not row:
             return await settings_refused(sess, request, "enrol_reissue_failed", host, 404,
@@ -1226,8 +1329,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             "host": spec.name, "platform": spec.platform,
             "platform_label": enrol.PLATFORMS[spec.platform], "keys_revoked": revoked,
             "expires_at": now + enrol.TOKEN_TTL_S, "ttl_s": enrol.TOKEN_TTL_S,
-            "command": enrol.command_text(spec.name, spec.platform, str(request.base_url),
-                                          token, pool)})
+            "command": enrol.command_text(spec.name, spec.platform, base, token, pool)})
 
     @app.post("/api/hosts/{host}/keys/revoke", include_in_schema=False)
     async def revoke_host_keys(
@@ -1284,7 +1386,9 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         now = auth_clock()
         known = await hosttasks.peek(store, token, now)
         platform_of = known[1] if known is not None else ""
-        ctx = script_context(request)
+        ctx = await script_context()
+        if ctx is None:
+            raise HTTPException(409, "Observe has no confirmed address yet")
         if known is not None:
             kind, platform, host, allowlist = known
             if not taskscripts.task_supported(kind, platform):

@@ -83,11 +83,25 @@
       <input id="pool" name="pool" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Apps">
       <span class="field-hint">Use the pool the host was installed on. Files left on another pool keep the old key until they are removed (use Clean up this machine).</span>
     </label>
+    <p class="admin-note" id="token-state" aria-live="polite"></p>
+    <p class="admin-note" id="guard-note" role="alert" hidden></p>
     <div class="row-actions">
       <button type="button" class="btn" id="regen">Regenerate command</button>
       <button type="button" class="btn" id="cleanup">Clean up this machine</button>
     </div>
     <p class="admin-note">Clean up undoes an install that went onto the wrong machine. Run its command on that machine: it removes only an install made for this host and refuses any other machine.</p>
+  </section>
+
+  <section class="card notice" id="public-url-box" aria-labelledby="public-url-h" hidden>
+    <h3 id="public-url-h">Confirm the Observe address</h3>
+    <p>The install command tells a host where to reach Observe. Observe does not trust the address your browser used for this page, so confirm the address hosts should call. Write the scheme (http or https), then ://, then the host name or IP address and an optional :port, for example the host observe.example.com on port 8443. It is saved once and used for every command. Setting server.public_url in the Observe config does the same.</p>
+    <form id="public-url-form" class="wiz-form" novalidate>
+      <label class="wiz-field">Observe address
+        <input id="public-url" name="public-url" type="text" maxlength="260" autocomplete="off" autocapitalize="none" spellcheck="false">
+      </label>
+      <p class="admin-note" id="public-url-status" role="alert"></p>
+      <div class="row-actions"><button type="submit" class="btn primary" id="public-url-save">Save address</button></div>
+    </form>
   </section>
 
   <details class="card danger-zone" id="danger" aria-labelledby="danger-h">

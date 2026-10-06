@@ -5,9 +5,12 @@ import { el, clear } from "/static/js/dom.js";
 import { api, whoami } from "/static/js/api.js";
 import { statusChip } from "/static/js/chips.js";
 import { notAdmin, showError, copyText } from "/static/js/admin-ui.js";
+import { confirmDialog } from "/static/js/dialog.js";
+import { NEEDS_URL, askPublicUrl } from "/static/js/public-url.js";
 import {
   STEPS, controlBlock, defaultFans, defaultServices, platformNote, validName,
   validHeader, validService, buildBody, stepFromHash, progressChip, reportChip, hostHref,
+  noticeFor, guardText,
 } from "/static/js/wizard-logic.js";
 
 const POLL_MS = 3000;
@@ -20,7 +23,11 @@ let known = new Set();
 let created = null;   // { host, platform, platform_label, expires_at, command }
 let latest = null;    // the last progress response
 let pollGen = 0;
+let current = "host";
 let state = fresh();
+
+// The confirm-the-address box: the install command never uses the address this page was reached at.
+const urlParts = { box: $("public-url-box"), form: $("public-url-form"), input: $("public-url"), status: $("public-url-status") };
 
 function fresh() {
   return { name: "", platform: "linux", pool: "", control: false, reboot: false,
@@ -29,6 +36,7 @@ function fresh() {
 
 // ---- step display ----
 function show(step) {
+  current = step;
   for (const s of STEPS) $(`step-${s}`).hidden = s !== step;
   const at = STEPS.indexOf(step);
   for (const li of $("steps").children) {
@@ -40,8 +48,23 @@ function show(step) {
   if (step === "install") drawInstall();
   if (step === "live") drawLive();
   if (step === "install" || step === "live") poll(); else stopPoll();
-  const bad = !(latest && latest.expired) || (step !== "install" && step !== "live");
-  if (bad) $("expired").hidden = true;
+  drawNotice();
+}
+
+// The command's own state on the install and live steps: expired, already used, or refused by the
+// script's guard on the machine it ran on (the command stays valid then).
+function drawNotice() {
+  const watching = !!created && (current === "install" || current === "live");
+  const notice = watching ? noticeFor(latest) : null;
+  $("expired").hidden = !notice;
+  if (notice) {
+    $("expired-h").textContent = notice.title;
+    $("expired-text").textContent = notice.text;
+    $("regen").textContent = notice.button;
+  }
+  const refused = watching ? guardText(latest) : "";
+  $("guard").hidden = !refused;
+  if (refused) $("guard-text").textContent = `${refused} This command was made for ${created.host}.`;
 }
 
 function go(step) {
@@ -152,16 +175,20 @@ async function create() {
   const built = buildBody(state);
   if (built.error) { showError(msg, built.error); return; }
   for (const id of ["create", "agent-next"]) $(id).disabled = true;
+  let needsUrl = false;
   try {
     created = await api("POST", "/api/hosts", csrf, built.body);
     latest = null;
     known.add(created.host);
     go("install");
   } catch (e) {
-    if (e.message !== "not signed in") showError(msg, e.message);
+    if (e.code === NEEDS_URL) needsUrl = true;
+    else if (e.message !== "not signed in") showError(msg, e.message);
   } finally {
     for (const id of ["create", "agent-next"]) $(id).disabled = false;
   }
+  // No Observe address is configured or saved yet: ask once, then make the host.
+  if (needsUrl) { await askPublicUrl(urlParts, csrf); create(); }
 }
 
 // ---- step 4: install ----
@@ -170,27 +197,42 @@ function drawInstall() {
   $("install-sub").textContent = `${created.host} · ${created.platform_label}`;
   $("cmd").textContent = created.command;
   $("expiry").textContent = `Expires at ${when(created.expires_at)} (${Math.round(created.ttl_s / 60)} minutes) and works once.`;
-  $("expired").hidden = !(latest && latest.expired);
+  drawNotice();
 }
 
 $("copy").addEventListener("click", () => { if (created) copyText(created.command); });
 $("ran").addEventListener("click", () => go("live"));
 
+// Regenerate: before the command was used it replaces the token; after, the old keys are revoked
+// as well, so that asks first.
 $("regen").addEventListener("click", async () => {
   if (!created) return;
+  const used = !!latest && latest.token_state === "used";
+  if (used) {
+    const ok = await confirmDialog({
+      title: `Regenerate the install command for ${created.host}?`,
+      body: "The old command, and the agent and control keys it made, stop working at once. The agent on the machine is not accepted until the new command is run there. The host's stored data is kept.",
+      confirmText: "Regenerate", danger: true,
+    });
+    if (!ok) return;
+  }
   $("regen").disabled = true;
+  let needsUrl = false;
   try {
-    const made = await api("POST", `/api/hosts/${encodeURIComponent(created.host)}/enrolment/regenerate`,
-                           csrf, { pool: state.pool });
+    const path = used ? "reissue" : "regenerate";
+    const made = await api("POST", `/api/hosts/${encodeURIComponent(created.host)}/enrolment/${path}`,
+                           csrf, { pool: state.pool, confirmed: true });
     created = made;
     latest = null;
     $("expired").hidden = true;
     go("install");
   } catch (e) {
-    if (e.message !== "not signed in") showError(msg, e.message);
+    if (e.code === NEEDS_URL) needsUrl = true;
+    else if (e.message !== "not signed in") showError(msg, e.message);
   } finally {
     $("regen").disabled = false;
   }
+  if (needsUrl) { await askPublicUrl(urlParts, csrf); $("regen").click(); }
 });
 
 // ---- step 5: live ----
@@ -221,7 +263,7 @@ function drawProgress() {
     reports.append(li);
   }
   $("done").hidden = !latest.ready;
-  $("expired").hidden = !latest.expired;
+  drawNotice();
 }
 
 // Poll while step 4 or 5 is showing, and stop when the host is ready or the command expired.

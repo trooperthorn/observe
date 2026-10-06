@@ -124,13 +124,14 @@ def test_polling_is_every_three_seconds_stops_when_done_and_ignores_stale_replie
     assert "const POLL_MS = 3000" in js and "setTimeout(tick, POLL_MS)" in js
     assert "if (next.ready || next.expired) return;" in js
     assert js.count("if (gen !== pollGen) return;") == 2
-    assert "/enrolment`" in js and "enrolment/regenerate" in js
+    assert "/enrolment`" in js and 'const path = used ? "reissue" : "regenerate"' in js
     assert not re.search(r"setTimeout\(\s*[\"'`]", js)
 
 
 def test_regenerate_is_offered_on_expiry_and_controls_follow_the_platform():
     js = _read("hosts-new.js")
-    assert "latest.expired" in js and "$(\"regen\")" in js
+    assert "noticeFor(latest)" in js and "$(\"regen\")" in js
+    assert "p.expired" in _read("js/wizard-logic.js") or "progress.expired" in _read("js/wizard-logic.js")
     logic = _read("js/wizard-logic.js")
     assert 'platform === "windows"' in logic and 'platform === "truenas"' in logic
     assert 'pwm-fan' in logic

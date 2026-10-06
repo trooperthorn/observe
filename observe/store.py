@@ -255,6 +255,23 @@ LAYOUT_TABLES = (
 )""",
 )
 
+# Enrolment survives the wrong machine (observe/enrol.py). The install script is served without
+# keys, so a refused guard leaves the token valid; the refusal is kept on the enrolment row for
+# the wizard and the settings page. app_settings holds the Observe address an admin confirmed.
+def _add_guard_columns(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(enrolments)")}
+    for name, kind in (("guard_step", "TEXT"), ("guard_reason", "TEXT"), ("guard_at", "REAL")):
+        if name not in columns:
+            db.execute(f"ALTER TABLE enrolments ADD COLUMN {name} {kind}")
+
+
+ENROLMENT_GUARD_TABLES = (
+    _add_guard_columns,
+    """CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY, value TEXT NOT NULL, updated REAL NOT NULL
+)""",
+)
+
 MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = {
     1: BASELINE,
     2: HOST_TABLES,
@@ -269,6 +286,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     11: ENROLMENT_REPORT_TABLES,
     12: HOST_TASK_TABLES,
     13: LAYOUT_TABLES,
+    14: ENROLMENT_GUARD_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

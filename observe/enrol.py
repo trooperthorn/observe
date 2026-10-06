@@ -11,6 +11,17 @@ Progress is derived, not stored twice. The enrolment row records when the script
 First data is the host's row in `hosts`, which only a batch from the agent creates. The first
 control pull is the wpc key's last use, which only an authenticated pull records. The token and
 the keys never go into the audit log or a log line. The audit rows name the host and the actor.
+
+Fetching the script and redeeming the token are two steps. GET /i/{token} serves the install
+script without a key and without spending the token. The script runs its guards (root, the
+machine's host name, not the Observe host) and only then calls the redeem endpoint, which spends
+the token and returns the keys. A guard that refuses reports the reason with the token, through
+`record_guard_failure`, and the token stays valid, so a command pasted on the wrong machine does
+not cost the admin a new one.
+
+The address in the command is never taken from the request's Host header, which the sender
+controls. It is `server.public_url`, or an address an admin confirmed in the wizard and saved
+(`set_public_url`), and never a loopback name.
 """
 
 from __future__ import annotations
@@ -25,6 +36,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import audit
+from .config import normalise_public_url
 from .ingest.keys import create_key
 from .store import Store
 
@@ -212,7 +224,8 @@ async def regenerate_enrolment(store: Store, host: str, now: float) -> tuple[str
     """
     token = new_token()
     rows = await store._run(
-        "UPDATE enrolments SET token_hash=?, created=?, expires_at=?, expiry_audited=0 "
+        "UPDATE enrolments SET token_hash=?, created=?, expires_at=?, expiry_audited=0, "
+        "guard_step=NULL, guard_reason=NULL, guard_at=NULL "
         "WHERE host=? AND fetched_at IS NULL RETURNING platform, agent, control, allowlist",
         (_digest(token), now, now + TOKEN_TTL_S, host))
     if not rows:
@@ -244,7 +257,8 @@ async def reissue_enrolment(store: Store, host: str, now: float) -> tuple[str, S
             store._db.execute(
                 "UPDATE enrolments SET token_hash=?, created=?, expires_at=?, expiry_audited=0, "
                 "fetched_at=NULL, step_hash=NULL, reports='[]', agent_prefix=NULL, "
-                "control_prefix=NULL, reissued_at=? WHERE host=?",
+                "control_prefix=NULL, reissued_at=?, guard_step=NULL, guard_reason=NULL, "
+                "guard_at=NULL WHERE host=?",
                 (_digest(token), now, now + TOKEN_TTL_S, now, host))
             # An update command made for the old install is dead in the same transaction.
             store._db.execute("DELETE FROM host_tasks WHERE host=? AND fetched_at IS NULL", (host,))
@@ -274,6 +288,9 @@ class Redeemed:
     control_key: str | None
     allowlist: dict[str, Any]
     step_key: str = ""
+    # When set, the script is served without keys and posts this token to the redeem endpoint
+    # after its guards pass. The key fields then only say which keys the install wants.
+    redeem_token: str = ""
 
 
 async def peek(store: Store, token: str, now: float) -> tuple[str, bool] | None:
@@ -290,6 +307,27 @@ async def peek(store: Store, token: str, now: float) -> tuple[str, bool] | None:
     return (rows[0][0], bool(rows[0][1])) if rows else None
 
 
+async def preview(store: Store, token: str, now: float) -> Redeemed | None:
+    """What the install script is built from, without spending the token or making a key.
+
+    The key fields hold placeholders that only say which keys the install wants: the script
+    fetches the real keys from the redeem endpoint once its guards pass. None for a malformed,
+    unknown, used or expired token.
+    """
+    if not isinstance(token, str) or not token.startswith(TOKEN_MARKER + "_"):
+        return None
+    rows = await store._run(
+        "SELECT host, platform, agent, control, allowlist FROM enrolments WHERE token_hash=? "
+        "AND fetched_at IS NULL AND expires_at>?", (_digest(token), now))
+    if not rows:
+        return None
+    host, platform, agent, control, allowlist = rows[0]
+    placeholder = "x" * 20
+    return Redeemed(host, platform, "wpi_" + placeholder if agent else None,
+                    "wpc_" + placeholder if control else None, json.loads(allowlist),
+                    "wps_" + placeholder, redeem_token=token)
+
+
 async def redeem(store: Store, token: str, now: float, remote: str = "") -> Redeemed | None:
     """Spend a token. None for an unknown, used or expired token (the caller answers 404).
 
@@ -297,13 +335,14 @@ async def redeem(store: Store, token: str, now: float, remote: str = "") -> Rede
     both succeed. The keys are minted after the claim and bound to the host. Both outcomes are
     audited, with the host name and never the token.
     """
-    path = "/i/[token]"
+    path = "/api/enrol/redeem"
     if not isinstance(token, str) or not token.startswith(TOKEN_MARKER + "_"):
         await audit.record(store, "enrol_fetch_failed", method="GET", path=path, status=404,
                            remote=remote, detail={"reason": "not a token"})
         return None
     rows = await store._run(
-        "UPDATE enrolments SET fetched_at=? WHERE token_hash=? AND fetched_at IS NULL "
+        "UPDATE enrolments SET fetched_at=?, guard_step=NULL, guard_reason=NULL, guard_at=NULL "
+        "WHERE token_hash=? AND fetched_at IS NULL "
         "AND expires_at>? RETURNING host, platform, agent, control, allowlist, created_by",
         (now, _digest(token), now))
     if not rows:
@@ -327,6 +366,93 @@ async def redeem(store: Store, token: str, now: float, remote: str = "") -> Rede
                        remote=remote, detail={"host": host, "platform": platform,
                                               "agent": bool(agent), "control": bool(control)})
     return Redeemed(host, platform, agent_key, control_key, json.loads(allowlist), step_key)
+
+
+GUARD_REASONS = {"root": "the command was not run as root or an administrator",
+                 "hostname": "the host name does not match",
+                 "observe_host": "it was run on the Observe host itself"}
+_FOUND = re.compile(r"[^A-Za-z0-9._-]")
+
+
+async def record_guard_failure(store: Store, token: str, step: str, found: str,
+                               now: float) -> str | None:
+    """Keep why the script refused to run, for the wizard and the settings page. Returns the host,
+    or None when the token is not a live one (unknown, used or expired) or the step is not a guard.
+
+    The token is not spent: the script was refused before it asked for keys, and the same
+    command works on the right machine. `found` is the name the machine gave itself. It is cut
+    to the characters a host name has and to 64 of them, so nothing but a name is stored. Only the
+    newest refusal is kept.
+    """
+    if step not in GUARD_REASONS or not isinstance(token, str) \
+            or not token.startswith(TOKEN_MARKER + "_"):
+        return None
+    found = _FOUND.sub("", found if isinstance(found, str) else "")[:64]
+    rows = await store._run(
+        "SELECT host FROM enrolments WHERE token_hash=? AND fetched_at IS NULL AND expires_at>?",
+        (_digest(token), now))
+    if not rows:
+        return None
+    host = rows[0][0]
+    reason = (f"ran on {found}, expected {host}" if step == "hostname" and found
+              else f"{GUARD_REASONS[step]} (expected {host})")
+    await store._run(
+        "UPDATE enrolments SET guard_step=?, guard_reason=?, guard_at=? WHERE host=? "
+        "AND fetched_at IS NULL", (step, reason, now, host))
+    return host
+
+
+async def get_public_url(store: Store, configured: str | None) -> tuple[str, str]:
+    """(address, source) for install commands: `server.public_url` first ("config"), then the
+    address an admin saved from the wizard ("saved"). ("", "") when neither is set."""
+    if configured:
+        return configured, "config"
+    rows = await store._run("SELECT value FROM app_settings WHERE key='public_url'")
+    if rows:
+        try:
+            return normalise_public_url(rows[0][0]), "saved"
+        except ValueError:
+            return "", ""  # a stored value that no longer validates is as good as none
+    return "", ""
+
+
+async def set_public_url(store: Store, raw: Any, now: float) -> str:
+    """Validate and save the address an admin confirmed. Raises EnrolError(422) with a message
+    safe to show. Returns the canonical address."""
+    try:
+        url = normalise_public_url(raw)
+    except ValueError as err:
+        raise EnrolError(str(err)) from err
+    await store._run(
+        "INSERT INTO app_settings (key, value, updated) VALUES ('public_url', ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+        (url, now))
+    return url
+
+
+async def waiting_hosts(store: Store, now: float) -> list[dict[str, Any]]:
+    """Enrolled hosts that have not reported yet: the agent was chosen and no batch has ever
+    arrived, so the host has no row in `hosts`. Each row names the host and how far the enrolment
+    is, so the hosts list and the dashboard can say "waiting for first data" and link to the
+    enrolment page. A host that reported once is an ordinary host from then on."""
+    rows = await store._run(
+        "SELECT e.host, e.platform, e.control, e.created, e.expires_at, e.fetched_at, "
+        "e.guard_reason FROM enrolments e LEFT JOIN hosts h ON h.host=e.host "
+        "WHERE e.agent=1 AND h.host IS NULL ORDER BY e.created, e.host")
+    out = []
+    for host, platform, control, created, expires_at, fetched_at, guard in rows:
+        if fetched_at is not None:
+            note = "install started, waiting for first data"
+        elif now >= expires_at:
+            note = "command expired, regenerate it"
+        elif guard:
+            note = f"refused: {guard}"
+        else:
+            note = "command not run yet"
+        out.append({"host": host, "platform": platform, "control": bool(control),
+                    "created": created, "state": "waiting", "note": note,
+                    "enrolment_url": f"/hosts/{host}/settings"})
+    return out
 
 
 async def record_step(store: Store, step_key: str, step: str, status: str, note: str,
@@ -373,11 +499,11 @@ async def progress(store: Store, host: str, now: float) -> dict[str, Any] | None
     """
     rows = await store._run(
         "SELECT platform, agent, control, created, expires_at, fetched_at, control_prefix, reports, "
-        "reissued_at FROM enrolments WHERE host=?", (host,))
+        "reissued_at, guard_step, guard_reason, guard_at FROM enrolments WHERE host=?", (host,))
     if not rows:
         return None
     (platform, agent, control, created, expires_at, fetched_at, control_prefix, reports,
-     reissued_at) = rows[0]
+     reissued_at, guard_step, guard_reason, guard_at) = rows[0]
     first = await store._run("SELECT first_seen, last_seen FROM hosts WHERE host=?", (host,))
     data_at = first[0][0] if fetched_at is not None and first else None
     if reissued_at is not None and data_at is not None:
@@ -419,8 +545,14 @@ async def progress(store: Store, host: str, now: float) -> dict[str, Any] | None
         state = "script_fetched"
     else:
         state = "waiting"
+    # The command's own state: valid until it is redeemed or runs out; "used" once redeemed, which
+    # is when a second run of it gets 410 and the way out is a regenerated command.
+    token_state = "expired" if expired else "used" if fetched_at is not None else "valid"
+    guard = ({"step": guard_step, "reason": guard_reason, "at": guard_at}
+             if fetched_at is None and guard_reason else None)
     return {"host": host, "platform": platform, "agent": bool(agent), "control": bool(control),
-            "state": state, "ready": ready, "expired": expired, "created": created,
+            "state": state, "ready": ready, "expired": expired, "token_state": token_state,
+            "guard": guard, "created": created,
             "expires_at": expires_at, "steps": steps,
             "install": [{"step": r["step"], "status": r["status"], "note": r["note"],
                          "at": r["at"]} for r in json.loads(reports)]}

@@ -16,7 +16,10 @@ export async function api(method, path, csrf, body) {
   let data = null;
   try { data = await r.json(); } catch (_) { data = null; }
   if (!r.ok) {
-    throw new Error(data && typeof data.detail === "string" ? data.detail : `request failed (${r.status})`);
+    const err = new Error(data && typeof data.detail === "string" ? data.detail : `request failed (${r.status})`);
+    // A machine-readable reason, such as public_url_required, so a page can ask for what is missing.
+    if (data && typeof data.code === "string") err.code = data.code;
+    throw err;
   }
   return data;
 }

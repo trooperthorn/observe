@@ -306,7 +306,7 @@ def test_phase5_database_migrates_keeping_rows(tmp_path):
     assert counts == {"results": 1, "hosts": 1, "audit": 1, "plugin_schema": 1,
                       **{t: 0 for t in INFRA}}
     assert INFRA <= tables(path)
-    assert SCHEMA_VERSION == 13  # 13 is the S14 dashboard layout step
+    assert SCHEMA_VERSION == 14  # 14 is the enrolment guard step
     assert "infra_dependencies" in tables(path)
 
 
@@ -357,5 +357,5 @@ def test_version_10_database_with_enrolments_survives_the_reports_migration(tmp_
     assert [tuple(r) for r in rows] == [("fetched1", 2.0, None, "[]"),
                                         ("pending1", None, None, "[]")]
     db = sqlite3.connect(path)
-    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 13
+    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 14
     db.close()

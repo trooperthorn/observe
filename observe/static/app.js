@@ -283,12 +283,33 @@ async function renderFindings() {
   }));
 }
 
+// Hosts enrolled in the console that have not sent a batch yet. The list needs a session, so a
+// viewer on basic auth or an open dashboard simply sees no panel.
+async function renderWaiting() {
+  const panel = document.getElementById("waiting-panel");
+  let list = [];
+  try {
+    const r = await fetch("/api/hosts");
+    if (r.ok) list = (await r.json()).waiting || [];
+  } catch (_) { list = []; }
+  panel.hidden = list.length === 0;
+  document.getElementById("waiting").replaceChildren(...list.map((w) => {
+    const li = el("li", "finding");
+    li.append(statusChip("pending", "Waiting for first data"), " ");
+    const a = el("a", null, w.host);
+    a.href = `/hosts/${encodeURIComponent(w.host)}/settings`;
+    li.append(a, ` ${w.note}`);
+    return li;
+  }));
+}
+
 async function refresh() {
   try {
     const r = await fetch("/api/monitors");
     if (r.ok) { lastData = await r.json(); render(lastData); }
     await renderEvents();
     await renderFindings();
+    await renderWaiting();
   } catch (_) {
     document.getElementById("footer").textContent = "observe unreachable, retrying";
   }

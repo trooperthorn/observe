@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import shutil
 import subprocess
@@ -10,7 +11,7 @@ import pytest
 
 from observe import enrol, scripts
 
-from .test_enrol_api import admin, audit_kinds, create, token_of
+from .test_enrol_api import admin, audit_kinds, create, run_install, token_of
 from .test_install_script import (AGENT_KEY, CONTROL_KEY, CTX, MACHINE_ID, NO_ALLOW, PUBLIC,
                                   STEP_KEY, Served, check_syntax, env)  # noqa: F401
 
@@ -137,7 +138,9 @@ def test_truenas_keys_are_never_echoed_or_sent_in_a_report():
     for key in (AGENT_KEY, STEP_KEY):
         assert script.count(key) == 1
     assert "set -x" not in script
-    for line in script.splitlines():
+    # redeem() alone receives the keys, and only reads them from curl's reply with sed.
+    redeem_fn = script[script.index("redeem() {"):script.index("main() {")]
+    for line in script.replace(redeem_fn, "").splitlines():
         if "_KEY" in line and "$" in line:
             assert line.lstrip().startswith(("printf", "[ -n"))
         if line.lstrip().startswith(("say ", "report ", "fail ", "refuse ")):
@@ -279,7 +282,7 @@ def test_create_validates_the_pool(env):
     assert env.rows("SELECT COUNT(*) FROM enrolments") == [(0,)]
 
 
-def test_windows_fetch_serves_the_powershell_script_once(env):
+def test_windows_fetch_serves_a_keyless_powershell_script_and_redeem_spends_once(env):
     hdr = admin(env)
     made = agent_only(env, hdr, "win01", "windows")
     assert made.json()["command"].splitlines()[1].startswith("irm 'https://192.0.2.50:8443/i/wpe_")
@@ -290,7 +293,11 @@ def test_windows_fetch_serves_the_powershell_script_once(env):
     assert first.text.startswith("# Observe install for win01 (Windows). Run on win01 only.")
     assert "$ObserveUrl = 'https://192.0.2.50:8443'" in first.text
     assert f"$ObserveMachineId = '{MACHINE_ID}'" in first.text
-    assert "wpi_" in first.text and "wpc_" not in first.text
+    assert "wpi_" not in first.text and "wpc_" not in first.text
+    assert f"$RedeemToken = '{token}'" in first.text and "$StepKey = ''" in first.text
+    assert env.client.get(f"/i/{token}").status_code == 200  # fetching spends nothing
+    assert env.client.post("/api/enrol/redeem", json={"token": token}).json()[
+        "agent_key"].startswith("wpi_")
     second = env.client.get(f"/i/{token}")
     assert second.status_code == 410 and "wpi_" not in second.text
     assert audit_kinds(env).count("enrol_fetched") == 1
@@ -308,17 +315,24 @@ def test_truenas_with_control_is_409_and_keeps_the_token(env):
     assert env.rows("SELECT COUNT(*) FROM ingest_keys") == [(0,)]
 
 
-def test_a_bad_host_header_gets_a_body_that_is_safe_in_powershell(env):
-    token = token_of(agent_only(env, admin(env), "win01", "windows"))
-    bad = env.client.get(f"/i/{token}", headers={"Host": "bad_host.lan"})
-    assert bad.status_code == 500 and bad.text.startswith("Write-Host") and "exit" not in bad.text
-    assert env.client.get(f"/i/{token}").status_code == 200
+def test_a_missing_address_gets_a_body_that_is_safe_in_powershell(tmp_path):
+    e = Served(tmp_path, public_url=None)
+    try:
+        token = asyncio.run(enrol.create_enrolment(
+            e.store, enrol.parse_spec({"name": "win01", "platform": "windows", "agent": True}),
+            "root", e.clock()))
+        bad = e.client.get(f"/i/{token}")
+        assert bad.status_code == 409 and bad.text.startswith("Write-Host") and "exit" not in bad.text
+        assert e.rows("SELECT fetched_at FROM enrolments") == [(None,)]
+    finally:
+        e.client.close()
+        e.store.close()
 
 
 def test_progress_steps_from_the_new_scripts_are_accepted(env):
     hdr = admin(env)
     token = token_of(agent_only(env, hdr, "tn01", "truenas"))
-    text = env.client.get(f"/i/{token}").text
+    text = run_install(env, token).text
     step = re.search(r"STEP_KEY='(wps_[^']+)'", text).group(1)
     for name, status in (("pool", "ok"), ("compose", "ok"), ("app", "skipped"),
                          ("download", "ok")):

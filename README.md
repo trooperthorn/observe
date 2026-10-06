@@ -362,9 +362,17 @@ control allowlist. It returns an install command headed with the host name and
 platform, backed by a single-use token that lasts 30 minutes and is stored only
 as a digest. The host's `wpi` and `wpc` keys are created when the token is
 redeemed. `GET /api/hosts/{name}/enrolment` reports progress: script fetched,
-first data, control first pull, ready or expired. Control is not offered for
+first data, control first pull, ready or expired, plus `token_state` (valid, used or
+expired) and `guard`, the reason the script last refused to run on a machine. Control is not offered for
 Windows yet, and not for TrueNAS. `GET /i/{token}` serves a guarded install script
-for every platform: a shell script for `linux` and `raspberry-pi` hosts (S11b) that
+that holds no key and does not spend the token. The script runs its checks first and only
+then calls `POST /api/enrol/redeem`, which spends the token and returns the keys, so a
+command run on the wrong machine is refused, the reason is shown in the wizard and on the
+host settings page (for example "ran on ai-pi, expected MediaIn-SVR"), and the same
+command still works on the right machine. The command's address is never taken from the
+request's Host header: set `server.public_url` in the config (`http(s)://host[:port]`, never
+a localhost name), or the wizard asks an admin to confirm the address once and saves it.
+The script for every platform: a shell script for `linux` and `raspberry-pi` hosts (S11b) that
 installs the agent container and, if chosen, the control daemon, a shell script for
 TrueNAS SCALE that writes `agent.env` and the compose file on the chosen pool (default
 `Apps`) and prints the one step you do in the TrueNAS web UI, and a PowerShell script
@@ -372,10 +380,14 @@ for Windows that runs hostwatch's own installer with the key as a secure string 
 Each refuses to run on the wrong machine or on the Observe host before it changes
 anything, and reports each step back. The command block is headed with the host name and
 platform, so it cannot be mistaken for another machine's. If the token expires before
-the script is fetched, the wizard offers Regenerate command, which calls
-`POST /api/hosts/{name}/enrolment/regenerate` (admin session and CSRF) and replaces the
-token, so the old command stops working. Once the script has been fetched the token is
-spent and regenerate is refused. See `docs/ARCHITECTURE.md`, "Host enrolment".
+the script is redeemed, the wizard shows "Command expired" with a Regenerate command
+button, which calls `POST /api/hosts/{name}/enrolment/regenerate` (admin session and CSRF)
+and replaces the token, so the old command stops working. Once the token has been redeemed
+the wizard and the host settings page show "Command already used" with the same button,
+which then calls reissue (it asks first, because it revokes the keys the old command made).
+A host that has been enrolled but has not reported yet is listed under `waiting` in
+`GET /api/hosts` and in a "Waiting for first data" card on the dashboard, with a link to its
+enrolment page. See `docs/ARCHITECTURE.md`, "Host enrolment".
 
 ## Host settings
 

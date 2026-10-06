@@ -13,6 +13,10 @@ server:
   audit_retention_days: 365
   ingest_rate_per_minute: 120  # POST /api/ingest requests per peer per minute
   # plugin_rate_per_minute: 300  # requests per peer to /api/plugins/* routes
+  # The address install commands tell hosts to call, http(s)://host[:port] with no path and never
+  # localhost. When unset, an admin confirms one in the Add host wizard. The request's Host
+  # header is never used.
+  # public_url: https://observe.lab.example:8443
   # Logins (create the first admin with --create-admin). Defaults shown.
   # session_idle_s: 1800
   # session_absolute_s: 43200

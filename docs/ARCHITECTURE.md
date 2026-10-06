@@ -95,7 +95,8 @@ infrastructure tables (see "Infrastructure map core"). Version 9 adds the
 `scope` column to `ingest_keys`; existing keys get `wpi`. Version 10 adds
 `enrolments` (see "Host enrolment") and version 11 adds its `step_hash` and `reports` columns. Version 12 adds
 the `allowlist_rev`, `allowlist_saved_at` and `reissued_at` columns of `enrolments` and the `host_tasks` table (see "Host
-settings"). Version 13 adds `ui_layouts` (see "Dashboard layout"). A migration step may
+settings"). Version 13 adds `ui_layouts` (see "Dashboard layout"). Version 14 adds the `guard_step`, `guard_reason` and
+`guard_at` columns of `enrolments` and the `app_settings` table (see "Host enrolment"). A migration step may
 be a function as well as a statement, so an `ALTER TABLE` can check first and
 stay safe to run again. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
@@ -299,20 +300,41 @@ that names the host and platform, for example `# Observe install for nas01
 (TrueNAS). Run this on nas01 only.`, followed by a `curl ... | sudo sh` line
 (a PowerShell `irm ... | iex` line for Windows) with the token in the path
 (Q9). The token is `wpe_` plus 256 random bits, valid for 30 minutes and one
-redemption (Q8). Only its SHA-256 digest is stored. Redeeming it, which is the
-install script fetch, claims the row with one conditional `UPDATE`, so two
-fetches cannot both win, and then mints the host-bound keys: a `wpi` key for
-the agent and a `wpc` key for control. Until then no key exists. The function
-is `enrol.redeem`, called by `GET /i/{token}`. That route needs no session: the token
-is the credential. For `linux` and `raspberry-pi` it answers with the POSIX sh script
+redemption (Q8). Only its SHA-256 digest is stored. Redeeming it claims the
+row with one conditional `UPDATE`, so two redemptions cannot both win, and then
+mints the host-bound keys: a `wpi` key for the agent and a `wpc` key for control.
+Until then no key exists. The function is `enrol.redeem`, called by
+`POST /api/enrol/redeem` (body `{"token"}`, no session, rate limited per peer, the
+token is the credential), which the install script calls only after its guards
+pass. `GET /i/{token}` does not redeem: it serves the script with no key in it
+(`enrol.preview` builds it from placeholders that only say which keys are wanted)
+and leaves the token valid, so a fetch, or a run that a guard refuses, costs the
+admin nothing. The route needs no session: the token is the credential. For
+`linux` and `raspberry-pi` it answers with the POSIX sh script
 rendered by `observe/scripts.py`; `truenas` gets a POSIX sh script and `windows` a
 PowerShell script (agent only, `text/plain`); a second fetch, an expired token or
 garbage is 410. Control on TrueNAS or Windows, and control when no control plugin is
-loaded, is 409, and a bad `pool` query is 400, all before the token is spent. A
+loaded, is 409, a missing Observe address is 409, and a bad `pool` query is 400, all
+at the fetch. A
 TrueNAS command carries the pool as `?pool=NAME` (the create body's optional `pool`,
-TrueNAS only, a ZFS-style name; default `Apps`). The fetch also
+TrueNAS only, a ZFS-style name; default `Apps`). The redemption also
 mints a step key (`wps_`), stored as a digest, which authenticates the script's progress
 reports.
+
+The address in every command, and the `OBSERVE_URL` in every script, is never taken from the
+request's Host header, which the sender controls. It is `server.public_url`, or the address an
+admin confirmed in the wizard and saved in `app_settings` (`GET` and `PUT /api/enrol/public-url`,
+admin, CSRF; the file wins and a `PUT` is then 409). `config.normalise_public_url` accepts only
+`http(s)://host[:port]` with no path or shell metacharacters and never a loopback or wildcard
+name. With no address, create, regenerate, reissue and the task commands answer 409 with
+`code: public_url_required` before a token is made or a key revoked, and the wizard asks once.
+A guard that refuses reports to `POST /api/enrol/guard` (token, guard step, the name the machine
+gave itself, cut to host name characters). `enrol.record_guard_failure` keeps a fixed-text reason
+such as `ran on ai-pi, expected MediaIn-SVR` on the enrolment row without spending the token;
+progress returns it as `guard`, with `token_state` (`valid`, `used` or `expired`). `GET /api/hosts`
+also returns `waiting`: enrolled hosts with the agent chosen that have no `hosts` row yet
+(`enrol.waiting_hosts`), which the dashboard lists as "waiting for first data" with a link to
+the host's enrolment page.
 
 The script (see `docs/GUI-DESIGN.md`, "S11b notes") checks that it runs as root, that
 the machine's short or fully qualified hostname equals the host name (printing both when
@@ -361,7 +383,8 @@ host is ready or the command has expired.
 
 Audit kinds: `enrol_created`, `enrol_create_failed`, `enrol_regenerated`, `enrol_regenerate_failed`, `enrol_fetched`,
 `enrol_fetch_failed`, `enrol_expired` (one row per enrolment, written when
-the expiry is first observed), `enrol_script_failed`, `enrol_step_refused` and
+the expiry is first observed), `enrol_script_failed`, `enrol_guard_refused`, `enrol_public_url_set`,
+`enrol_public_url_failed`, `enrol_step_refused` and
 `enrol_install_problem` (a step reported failed or refused). The rows name the host, the actor and the
 choices, never the token or a key. The audit redactor also recognises `wpc_`,
 `wpe_`, `wps_` and `wpt_` shapes.
@@ -390,7 +413,8 @@ back the host settings page (`GET /hosts/{name}/settings`, the static `host-sett
   (admin and CSRF, `kind` and `confirmed: true`) makes one, which is how an expired update command
   is made again and how a cleanup command is made. `GET /t/{token}` serves the script. It follows
   `GET /i/{token}`: no session, rate limited per peer, a dry render with placeholder values before
-  the token is spent, 410 for a used, expired or unknown token, `no-store`. A newer task of the
+  the token is spent, 410 for a used, expired or unknown token, `no-store`. Unlike the install fetch it
+  still spends its token at the fetch. A newer task of the
   same kind removes the older unfetched one, so only the newest command works. The scripts report
   through `POST /api/enrol/step`, which tries the install step keys first and then the task step
   keys. The task state is `waiting`, `fetched`, `done` (a `done` report), `failed` (a step failed

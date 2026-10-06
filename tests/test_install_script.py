@@ -21,7 +21,7 @@ from observe.scheduler import Scheduler
 from observe.web import create_app
 
 from .test_auth import Env
-from .test_enrol_api import admin, audit_kinds, create, token_of
+from .test_enrol_api import admin, audit_kinds, create, run_install, token_of
 
 PUBLIC = "ed25519:" + "A" * 43 + "="
 MACHINE_ID = "0123456789abcdef0123456789abcdef"
@@ -41,8 +41,9 @@ def loaded_control() -> LoadedPlugins:
 class Served(Env):
     """The standard test environment, with a control plugin loaded so control can be served."""
 
-    def __init__(self, tmp_path, plugins=None) -> None:
-        super().__init__(tmp_path)
+    def __init__(self, tmp_path, plugins=None, **server) -> None:
+        server.setdefault("public_url", "https://192.0.2.50:8443")
+        super().__init__(tmp_path, **server)
         self.client.close()
         alerter = Alerter(self.cfg)
         sched = Scheduler(self.cfg, self.store, alerter)
@@ -143,9 +144,16 @@ def test_keys_are_never_echoed_or_sent_in_a_report():
     assert "set -x" not in script
     for note in re.findall(r"^\s*(?:report|fail|refuse) \S+ (?:\S+ )?(\".*)$", script, flags=re.M):
         assert "KEY" not in note
-    for line in script.splitlines():
+    # redeem() is the one function that receives keys. It reads them from curl's reply with sed
+    # and checks them; nothing in it prints or sends one.
+    redeem_fn = script[script.index("redeem() {"):script.index("main() {")]
+    for line in script.replace(redeem_fn, "").splitlines():
         if "_KEY" in line and "$" in line:
             assert line.lstrip().startswith(("printf", "[ -n"))
+    for line in redeem_fn.splitlines():
+        if "_KEY" in line:
+            assert not re.search(r"\b(?:say|printf|echo|curl)\b.*\$(?:\{)?(?:STEP|AGENT|CONTROL)_KEY",
+                                 line), line
     assert "-K -" in script and "Bearer %s" in script
 
 
@@ -195,29 +203,81 @@ def test_service_names_must_match_the_control_daemon_at_create_time(env):
         assert r.status_code == 422, bad
 
 
-def test_fetch_serves_the_script_once_then_410(env):
+def test_fetch_serves_a_keyless_script_and_does_not_spend_the_token(env):
     hdr = admin(env)
     token = token_of(create(env, hdr, platform="linux"))
-    first = env.client.get(f"/i/{token}")
+    for _ in range(3):
+        got = env.client.get(f"/i/{token}")
+        assert got.status_code == 200 and got.headers["cache-control"] == "no-store"
+        assert got.headers["content-type"].startswith("text/x-shellscript")
+        assert got.text.startswith("#!/bin/sh\n# Observe install for nas01 (Linux server)")
+        # No key is in the script: it carries the token and asks for keys after its guards.
+        assert "wpi_" not in got.text and "wpc_" not in got.text and "wps_" not in got.text
+        assert f"REDEEM_TOKEN='{token}'" in got.text and "STEP_KEY=''" in got.text
+        assert "AGENT_KEY=''" in got.text and "CONTROL_KEY=''" in got.text
+        assert "WANT_AGENT=1" in got.text and "WANT_CONTROL=1" in got.text
+    assert env.rows("SELECT COUNT(*) FROM ingest_keys") == [(0,)]
+    assert env.rows("SELECT fetched_at FROM enrolments") == [(None,)]
+    assert "enrol_fetched" not in audit_kinds(env)
+
+
+def test_redeem_spends_the_token_once_and_a_later_fetch_is_410(env):
+    hdr = admin(env)
+    token = token_of(create(env, hdr, platform="linux"))
+    first = env.client.post("/api/enrol/redeem", json={"token": token})
     assert first.status_code == 200 and first.headers["cache-control"] == "no-store"
-    assert first.headers["content-type"].startswith("text/x-shellscript")
-    assert first.text.startswith("#!/bin/sh\n# Observe install for nas01 (Linux server)")
-    keys = env.rows("SELECT COUNT(*) FROM ingest_keys")
-    second = env.client.get(f"/i/{token}")
+    keys = first.json()
+    assert keys["host"] == "nas01"
+    assert keys["agent_key"].startswith("wpi_") and keys["control_key"].startswith("wpc_")
+    assert keys["step_key"].startswith("wps_")
+    minted = env.rows("SELECT COUNT(*) FROM ingest_keys")
+    assert minted == [(2,)]
+    second = env.client.post("/api/enrol/redeem", json={"token": token})
     assert second.status_code == 410 and "wpi_" not in second.text
-    assert env.rows("SELECT COUNT(*) FROM ingest_keys") == keys
+    assert env.client.get(f"/i/{token}").status_code == 410
+    assert env.rows("SELECT COUNT(*) FROM ingest_keys") == minted
     assert audit_kinds(env).count("enrol_fetched") == 1
-    assert audit_kinds(env).count("enrol_fetch_failed") == 1
+    assert audit_kinds(env).count("enrol_fetch_failed") == 2
+    dump = repr(env.rows("SELECT * FROM audit")) + repr(env.rows("SELECT * FROM enrolments"))
+    assert token not in dump and keys["agent_key"] not in dump and keys["step_key"] not in dump
 
 
-def test_a_bad_host_header_is_refused_before_the_token_is_spent(env):
+@pytest.mark.parametrize("body", [{}, {"token": 5}, {"token": "garbage"}, {"token": "wpe_nonsense"},
+                                  {"token": None}])
+def test_redeem_refuses_an_unknown_or_malformed_token(env, body):
+    assert env.client.post("/api/enrol/redeem", json=body).status_code == 410
+    assert env.client.post("/api/enrol/redeem", content=b"{").status_code == 410
+    assert env.rows("SELECT COUNT(*) FROM ingest_keys") == [(0,)]
+
+
+def test_redeem_refuses_an_expired_token(env):
     hdr = admin(env)
     token = token_of(create(env, hdr, platform="linux"))
-    keys = env.rows("SELECT COUNT(*) FROM ingest_keys")
-    bad = env.client.get(f"/i/{token}", headers={"Host": "bad_host.lan"})
-    assert bad.status_code == 500 and "wpi_" not in bad.text
-    assert env.rows("SELECT COUNT(*) FROM ingest_keys") == keys
-    assert env.client.get(f"/i/{token}").status_code == 200
+    asyncio.run(env.store._run("UPDATE enrolments SET expires_at=?", (env.clock() - 1,)))
+    assert env.client.post("/api/enrol/redeem", json={"token": token}).status_code == 410
+    assert env.rows("SELECT COUNT(*) FROM ingest_keys") == [(0,)]
+
+
+def test_a_hostile_host_header_never_reaches_the_command_or_the_script(env):
+    hdr = admin(env)
+    hostile = {"Host": "evil.example:9;curl x|sh"}
+    made = env.client.post("/api/hosts", json={"name": "nas01", "platform": "linux",
+                                               "agent": True, "control": False},
+                           headers={**hdr, **hostile})
+    assert made.status_code == 200
+    command = made.json()["command"]
+    assert "evil" not in command and "curl x" not in command
+    assert command.splitlines()[1].startswith("curl -fsSL 'https://192.0.2.50:8443/i/wpe_")
+    token = token_of(made)
+    got = env.client.get(f"/i/{token}", headers=hostile)
+    assert got.status_code == 200 and "evil" not in got.text
+    assert "OBSERVE_URL='https://192.0.2.50:8443'" in got.text
+    assert "OBSERVE_ADDRS='192.0.2.50'" in got.text
+    regen = env.client.post("/api/hosts/nas01/enrolment/regenerate", json={},
+                            headers={**hdr, **hostile})
+    assert regen.status_code == 200 and "evil" not in regen.json()["command"]
+    # The token was never spent by any of this.
+    assert env.rows("SELECT fetched_at FROM enrolments") == [(None,)]
 
 
 def test_fetched_script_carries_this_servers_guard_values(env):
@@ -264,7 +324,7 @@ def test_control_without_a_control_plugin_does_not_burn_the_token(tmp_path):
 
 def fetched_keys(env, platform="raspberry-pi"):
     hdr = admin(env)
-    text = env.client.get(f"/i/{token_of(create(env, hdr, platform=platform))}").text
+    text = run_install(env, token_of(create(env, hdr, platform=platform))).text
     return (re.search(r"STEP_KEY='(wps_[^']+)'", text).group(1),
             re.search(r"AGENT_KEY='(wpi_[^']+)'", text).group(1))
 

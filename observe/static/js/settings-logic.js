@@ -110,10 +110,12 @@ export function taskTitle(kind) {
   return kind === "cleanup" ? "Clean up this machine" : "Update the host's allowlist";
 }
 
-// Whether a poll should go on: an update or cleanup that is not finished, or an allowlist
-// that has not been applied yet while a command exists to apply it.
+// Whether a poll should go on: an update or cleanup that is not finished, an allowlist
+// that has not been applied yet while a command exists to apply it, or an install command that
+// has not been run yet (so a refusal on the wrong machine shows without a reload).
 export function shouldPoll(settings, watchingInstall) {
   if (watchingInstall) return true;
+  if (settings && settings.enrolment && settings.enrolment.token_state === "valid") return true;
   const task = settings && settings.task;
   return !!task && (task.state === "waiting" || task.state === "fetched");
 }

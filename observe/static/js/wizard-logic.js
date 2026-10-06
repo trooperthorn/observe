@@ -123,6 +123,44 @@ export function reportChip(status) {
   return REPORT_CHIPS[status] || ["pending", "Unknown"];
 }
 
+// The Observe address install commands carry: http(s)://host[:port], no path, never a loopback
+// name. The server checks the same rules (observe/config.py normalise_public_url) and is the gate.
+export function validPublicUrl(text) {
+  const t = String(text ?? "").trim();
+  if (!/^https?:\/\/[A-Za-z0-9.:[\]-]+$/.test(t)) return false;
+  let u;
+  try { u = new URL(t); } catch (_) { return false; }
+  const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost") || host === "::1" || host === "::") return false;
+  if (/^127\./.test(host) || host === "0.0.0.0") return false;
+  return true;
+}
+
+// What to tell the person about the install command's own state, from a progress reply. Null when
+// there is nothing to say: the command is waiting to be run, or the host is ready.
+export function noticeFor(progress) {
+  if (!progress || progress.ready) return null;
+  if (progress.expired) {
+    return {
+      kind: "expired", title: "Command expired", button: "Regenerate command",
+      text: "The install command was not used within its time limit and no longer works. Make a new one; the old one stays dead.",
+    };
+  }
+  if (progress.token_state === "used") {
+    return {
+      kind: "used", title: "Command already used", button: "Regenerate command",
+      text: "This install command works once and has been used, so running it again is refused as already used. If the install is still running, wait. If it stopped, make a new command: that also revokes the keys the old one made.",
+    };
+  }
+  return null;
+}
+
+// Why the script refused to run on the machine, or "" when it has not. The command stays valid.
+export function guardText(progress) {
+  if (!progress || !progress.guard || !progress.guard.reason) return "";
+  return `Refused on the machine: ${progress.guard.reason}.`;
+}
+
 // The host page address for a host name.
 export function hostHref(name) {
   return `/host?name=${encodeURIComponent(name)}`;

@@ -32,8 +32,26 @@
 
   <section class="card notice" id="expired" role="alert" aria-labelledby="expired-h" hidden>
     <h3 id="expired-h">Command expired</h3>
-    <p>The install command was not used within its time limit and no longer works. Make a new one; the old one stays dead.</p>
+    <p id="expired-text">The install command was not used within its time limit and no longer works. Make a new one; the old one stays dead.</p>
     <button type="button" class="btn primary" id="regen">Regenerate command</button>
+  </section>
+
+  <section class="card notice" id="guard" role="alert" aria-labelledby="guard-h" hidden>
+    <h3 id="guard-h">The command was refused on the machine it ran on</h3>
+    <p id="guard-text"></p>
+    <p class="admin-note">Nothing was changed on that machine and the command is still valid. Run it on the right machine.</p>
+  </section>
+
+  <section class="card notice" id="public-url-box" aria-labelledby="public-url-h" hidden>
+    <h3 id="public-url-h">Confirm the Observe address</h3>
+    <p>The install command tells a host where to reach Observe. Observe does not trust the address your browser used for this page, so confirm the address hosts should call. Write the scheme (http or https), then ://, then the host name or IP address and an optional :port, for example the host observe.example.com on port 8443. It is saved once and used for every command. Setting server.public_url in the Observe config does the same.</p>
+    <form id="public-url-form" class="wiz-form" novalidate>
+      <label class="wiz-field">Observe address
+        <input id="public-url" name="public-url" type="text" maxlength="260" autocomplete="off" autocapitalize="none" spellcheck="false">
+      </label>
+      <p class="admin-note" id="public-url-status" role="alert"></p>
+      <div class="row-actions"><button type="submit" class="btn primary" id="public-url-save">Save address</button></div>
+    </form>
   </section>
 
   <section class="card" id="step-host" aria-labelledby="step-host-h" hidden>

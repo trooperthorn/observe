@@ -7,7 +7,11 @@ is validated here against a strict pattern, whatever the caller already checked,
 written inside single quotes, so no value can carry shell syntax into the script. A value that
 fails raises ScriptError and nothing is rendered.
 
-The script is written so it cannot be run on the wrong machine. Before it changes anything it
+The script is served without keys and without spending the token (GET /i/{token}). It carries the
+token, and after every guard has passed it posts the token to the redeem endpoint, which spends it
+and returns the keys, so a guard that refuses leaves the command valid. A refusing guard reports
+the reason with the token to /api/enrol/guard. The script is written so it cannot be run on the
+wrong machine. Before it changes anything it
 checks that it runs as root, that the machine's hostname (short or fully qualified, any case)
 is the enrolled host name, and that it is not running on the Observe host itself. It reports
 each step back to Observe with the step key of the redeemed token. Keys are written to files
@@ -35,6 +39,7 @@ _NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _HEADER = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 _SERVICE = re.compile(r"^(?:docker:)?[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _URL = re.compile(r"^https?://(?:[A-Za-z0-9.-]{1,253}|\[[0-9a-fA-F:]{2,45}\])(?::[0-9]{1,5})?$")
+_TOKEN = re.compile(r"^wpe_[A-Za-z0-9_-]{10,200}$")
 _KEY = re.compile(r"^(wpi|wpc|wps)_[A-Za-z0-9_-]{10,200}$")
 _PUBLIC_KEY = re.compile(r"^ed25519:[A-Za-z0-9+/]{43}=$")
 _MACHINE_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -160,6 +165,7 @@ HOST_NAME=@@Q_NAME@@
 OBSERVE_URL=@@Q_URL@@
 OBSERVE_MACHINE_ID=@@Q_MID@@
 OBSERVE_ADDRS=@@Q_ADDRS@@
+REDEEM_TOKEN=@@Q_REDEEM@@
 STEP_KEY=@@Q_STEPKEY@@
 AGENT_KEY=@@Q_AGENTKEY@@
 CONTROL_KEY=@@Q_CONTROLKEY@@
@@ -190,11 +196,44 @@ fail() { # step, note for Observe, message for the screen
   exit 1
 }
 
+# Before the token is redeemed there is no step key, so a refusal is reported with the token. The
+# token is not spent by a refusal. FOUND is the name this machine gave itself, cut to the
+# characters a host name has; the server cuts it again.
+guard_report() { # step
+  [ -n "$REDEEM_TOKEN" ] || return 0
+  found=$(printf '%s' "${FOUND:-}" | tr -cd 'A-Za-z0-9._-' | cut -c1-64)
+  printf '{"token":"%s","step":"%s","found":"%s"}' "$REDEEM_TOKEN" "$1" "$found" |
+    curl -fsS -m 10 -X POST -H 'Content-Type: application/json' --data-binary @- \
+      "$OBSERVE_URL/api/enrol/guard" >/dev/null 2>&1 || true
+}
+
 refuse() { # step, note for Observe, message for the screen
   say "REFUSED: $3" >&2
   say "Nothing was changed." >&2
-  report "$1" refused "$2"
+  [ -n "$STEP_KEY" ] && { report "$1" refused "$2"; exit 1; }
+  guard_report "$1"
+  [ -n "$REDEEM_TOKEN" ] && say "The command was not used up. Run it on the right machine." >&2
   exit 1
+}
+
+# Spend the token and fetch the keys. It runs only after every guard passed. The token goes to
+# curl on its standard input, never on a command line, and the reply is read with sed, never run.
+redeem() {
+  [ -n "$REDEEM_TOKEN" ] || return 0
+  reply=$(printf '{"token":"%s"}' "$REDEEM_TOKEN" |
+    curl -fsS -m 20 -X POST -H 'Content-Type: application/json' --data-binary @- \
+      "$OBSERVE_URL/api/enrol/redeem" 2>/dev/null) ||
+    { say "FAILED: Observe did not accept this command. It was already used or has expired. Make a new one in the Observe console." >&2; exit 1; }
+  STEP_KEY=$(printf '%s' "$reply" | sed -n 's/.*"step_key":"\([^"]*\)".*/\1/p')
+  AGENT_KEY=$(printf '%s' "$reply" | sed -n 's/.*"agent_key":"\([^"]*\)".*/\1/p')
+  CONTROL_KEY=$(printf '%s' "$reply" | sed -n 's/.*"control_key":"\([^"]*\)".*/\1/p')
+  reply=
+  if [ -z "$STEP_KEY" ] ||
+    { [ "${WANT_AGENT:-1}" = 1 ] && [ -z "$AGENT_KEY" ]; } ||
+    { [ "${WANT_CONTROL:-0}" = 1 ] && [ -z "$CONTROL_KEY" ]; }; then
+    say "FAILED: Observe sent an incomplete reply. Nothing was changed." >&2
+    exit 1
+  fi
 }
 
 lower() { printf '%s' "$1" | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz'; }
@@ -213,7 +252,6 @@ main() {
     refuse root "not run as root" "run this as root, for example with sudo."
   fi
   say "Observe install for $HOST_NAME"
-  report root ok "running as root"
 
   want=$(lower "$HOST_NAME")
   l_plain=$(lower "$(hostname 2>/dev/null)")
@@ -222,9 +260,9 @@ main() {
   if [ "$l_plain" != "$want" ] && [ "$l_short" != "$want" ] && [ "$l_fqdn" != "$want" ]; then
     say "This command was made for the host: $HOST_NAME" >&2
     say "This machine's hostname is:          $l_fqdn (short name $l_short)" >&2
+    FOUND=$l_short
     refuse hostname "hostname does not match" "this is not $HOST_NAME. Run the command on $HOST_NAME."
   fi
-  report hostname ok "hostname matches"
 
   here_id=$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null || true)
   here_addrs=$(local_addrs)
@@ -244,6 +282,11 @@ main() {
       fi
     done
   done
+
+  # The guards passed: spend the token, then tell Observe how far this run got.
+  redeem
+  report root ok "running as root"
+  report hostname ok "hostname matches"
   report observe_host ok "not the Observe host"
 
   # 2. Rerun detection. The steps below replace what they own, so a second run updates in place.
@@ -389,6 +432,16 @@ main "$@"
 """
 
 
+def _redeem_token(red: Redeemed) -> str:
+    """The token the script posts to the redeem endpoint, or "" when the keys are in the script.
+
+    With a token, the key fields of `red` only say which keys are wanted: their text is not
+    written into the script, which fetches the real keys after its guards pass."""
+    if not red.redeem_token:
+        return ""
+    return _need(_TOKEN, red.redeem_token, "the install token")
+
+
 def render_linux(red: Redeemed, ctx: Context) -> str:
     """The install script for one redeemed enrolment. Raises ScriptError on any unsafe value."""
     if red.platform not in LINUX_PLATFORMS:
@@ -404,6 +457,7 @@ def render_linux(red: Redeemed, ctx: Context) -> str:
     step = _need(_KEY, red.step_key, "the step key") if red.step_key else ""
     agent = _need(_KEY, red.agent_key, "the agent key") if red.agent_key else ""
     control = _need(_KEY, red.control_key, "the control key") if red.control_key else ""
+    redeem = _redeem_token(red)
     if (agent and not agent.startswith("wpi_")) or (control and not control.startswith("wpc_")):
         raise ScriptError("a key has the wrong marker")
     if not agent and not control:
@@ -423,8 +477,10 @@ def render_linux(red: Redeemed, ctx: Context) -> str:
     script = _HEAD + _BODY
     fills = {"@@NAME@@": name, "@@LABEL@@": PLATFORMS[red.platform],
              "@@Q_NAME@@": _q(name), "@@Q_URL@@": _q(url), "@@Q_MID@@": _q(mid),
-             "@@Q_ADDRS@@": _q(" ".join(a for a in addrs if a)), "@@Q_STEPKEY@@": _q(step),
-             "@@Q_AGENTKEY@@": _q(agent), "@@Q_CONTROLKEY@@": _q(control),
+             "@@Q_ADDRS@@": _q(" ".join(a for a in addrs if a)), "@@Q_REDEEM@@": _q(redeem),
+             "@@Q_STEPKEY@@": _q("" if redeem else step),
+             "@@Q_AGENTKEY@@": _q("" if redeem else agent),
+             "@@Q_CONTROLKEY@@": _q("" if redeem else control),
              "@@AGENT@@": "1" if agent else "0", "@@CONTROL@@": "1" if control else "0",
              "@@Q_IMAGE@@": _q(IMAGE), "@@Q_SOURCE@@": _q(SOURCE)}
     for marker, value in fills.items():
@@ -454,12 +510,13 @@ def media_type(platform: str) -> str:
     return "text/plain; charset=utf-8" if platform == "windows" else "text/x-shellscript"
 
 
-def error_body(platform: str) -> str:
+def error_body(platform: str, message: str = "Observe could not build this script") -> str:
     """What the script URL returns when Observe could not build the script. It must be safe to
-    run in the shell that fetched it: `exit` would close a PowerShell console."""
+    run in the shell that fetched it: `exit` would close a PowerShell console. `message` is fixed
+    text from the server, never a request value."""
     if platform == "windows":
-        return "Write-Host 'Observe could not build this script. Nothing was changed.'\n"
-    return "echo 'Observe could not build this script' >&2; exit 1\n"
+        return f"Write-Host '{message}. Nothing was changed.'\n"
+    return f"echo '{message}' >&2; exit 1\n"
 
 
 def _pq(value: str) -> str:
@@ -482,6 +539,7 @@ def _agent_only(red: Redeemed, ctx: Context, platform: str) -> tuple[str, str, s
         raise ScriptError("an Observe address is not a usable IP address")
     step = _need(_KEY, red.step_key, "the step key") if red.step_key else ""
     agent = _need(_KEY, red.agent_key, "the agent key") if red.agent_key else ""
+    _redeem_token(red)
     if not agent.startswith("wpi_"):
         raise ScriptError("this platform needs an agent key")
     if red.control_key or red.allowlist.get("fans") or red.allowlist.get("services") \
@@ -504,6 +562,7 @@ HOST_NAME=@@Q_NAME@@
 OBSERVE_URL=@@Q_URL@@
 OBSERVE_MACHINE_ID=@@Q_MID@@
 OBSERVE_ADDRS=@@Q_ADDRS@@
+REDEEM_TOKEN=@@Q_REDEEM@@
 STEP_KEY=@@Q_STEPKEY@@
 AGENT_KEY=@@Q_AGENTKEY@@
 POOL=@@Q_POOL@@
@@ -627,13 +686,16 @@ main "$@"
 def render_truenas(red: Redeemed, ctx: Context, pool: str = "") -> str:
     """The install script for a TrueNAS SCALE host. Raises ScriptError on any unsafe value."""
     name, url, mid, step, agent, addrs = _agent_only(red, ctx, "truenas")
+    redeem = _redeem_token(red)
     pool = pool or DEFAULT_POOL
     if not valid_pool(pool):
         raise ScriptError("the pool name has characters that are not allowed")
     script = _TN_HEAD + _HELPERS + _TN_MAIN
     fills = {"@@NAME@@": name, "@@Q_NAME@@": _q(name), "@@Q_URL@@": _q(url), "@@Q_MID@@": _q(mid),
-             "@@Q_ADDRS@@": _q(" ".join(addrs)), "@@Q_STEPKEY@@": _q(step),
-             "@@Q_AGENTKEY@@": _q(agent), "@@Q_POOL@@": _q(pool), "@@Q_IMAGE@@": _q(IMAGE)}
+             "@@Q_ADDRS@@": _q(" ".join(addrs)), "@@Q_REDEEM@@": _q(redeem),
+             "@@Q_STEPKEY@@": _q("" if redeem else step),
+             "@@Q_AGENTKEY@@": _q("" if redeem else agent), "@@Q_POOL@@": _q(pool),
+             "@@Q_IMAGE@@": _q(IMAGE)}
     for marker, value in fills.items():
         script = script.replace(marker, value)
     return script.replace("@@GUARDS@@", _GUARDS.rstrip("\n"))
@@ -648,6 +710,7 @@ function Invoke-ObserveInstall {
   $ObserveUrl = @@P_URL@@
   $ObserveMachineId = @@P_MID@@
   $ObserveAddrs = @(@@P_ADDRS@@)
+  $RedeemToken = @@P_REDEEM@@
   $StepKey = @@P_STEPKEY@@
   $AgentKey = @@P_AGENTKEY@@
   $SourceUrl = @@P_SOURCE@@
@@ -662,10 +725,26 @@ function Invoke-ObserveInstall {
       Invoke-RestMethod -Uri "$ObserveUrl/api/enrol/step" -Method Post -ContentType 'application/json' -Headers @{ Authorization = "Bearer $StepKey" } -Body $json -TimeoutSec 10 | Out-Null
     } catch { }
   }
+  # Before the token is redeemed there is no step key, so a refusal is reported with the token.
+  # The token is not spent by a refusal. $Found is the name this machine gave itself.
+  $Found = ''
+  function Send-Guard([string]$Step) {
+    if (-not $RedeemToken -or $StepKey) { return }
+    try {
+      [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+      $seen = ([string]$Found) -replace '[^A-Za-z0-9._-]', ''
+      if ($seen.Length -gt 64) { $seen = $seen.Substring(0, 64) }
+      $json = @{ token = $RedeemToken; step = $Step; found = $seen } | ConvertTo-Json -Compress
+      Invoke-RestMethod -Uri "$ObserveUrl/api/enrol/guard" -Method Post -ContentType 'application/json' -Body $json -TimeoutSec 10 | Out-Null
+    } catch { }
+  }
   function Stop-Refuse([string]$Step, [string]$Note, [string]$Message) {
     Write-Host "REFUSED: $Message" -ForegroundColor Red
     Write-Host 'Nothing was changed.' -ForegroundColor Red
-    Send-Step $Step 'refused' $Note
+    if ($StepKey) { Send-Step $Step 'refused' $Note } else {
+      Send-Guard $Step
+      if ($RedeemToken) { Write-Host 'The command was not used up. Run it on the right machine.' -ForegroundColor Red }
+    }
     throw [System.OperationCanceledException]::new('stopped')
   }
   function Stop-Fail([string]$Step, [string]$Note, [string]$Message) {
@@ -682,7 +761,6 @@ function Invoke-ObserveInstall {
       Stop-Refuse 'root' 'not run as administrator' 'run this in an elevated PowerShell (Run as administrator).'
     }
     Write-Host "Observe install for $HostName"
-    Send-Step 'root' 'ok' 'running as administrator'
 
     $want = $HostName.ToLowerInvariant()
     $dnsName = ''
@@ -693,9 +771,9 @@ function Invoke-ObserveInstall {
     if ($mine -notcontains $want) {
       Write-Host "This command was made for the host: $HostName" -ForegroundColor Red
       Write-Host "This machine's name is:             $($env:COMPUTERNAME) (full name $fqdn)" -ForegroundColor Red
+      $Found = $env:COMPUTERNAME
       Stop-Refuse 'hostname' 'hostname does not match' "this is not $HostName. Run the command on $HostName."
     }
-    Send-Step 'hostname' 'ok' 'hostname matches'
 
     $hereId = ''
     try { $hereId = ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid).MachineGuid -replace '-', '').ToLowerInvariant() } catch { }
@@ -715,6 +793,24 @@ function Invoke-ObserveInstall {
         Stop-Refuse 'observe_host' 'address is the Observe host' "this machine has the address of the Observe host ($addr). Install agents on the machines to be monitored, not here."
       }
     }
+
+    # The guards passed: spend the token, then tell Observe how far this run got.
+    if ($RedeemToken) {
+      $reply = $null
+      try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $body = @{ token = $RedeemToken } | ConvertTo-Json -Compress
+        $reply = Invoke-RestMethod -Uri "$ObserveUrl/api/enrol/redeem" -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 20
+      } catch { }
+      if (-not $reply -or -not $reply.step_key -or -not $reply.agent_key) {
+        Stop-Fail 'agent' 'redeem failed' 'Observe did not accept this command. It was already used or has expired. Make a new one in the Observe console.'
+      }
+      $StepKey = [string]$reply.step_key
+      $AgentKey = [string]$reply.agent_key
+      $reply = $null
+    }
+    Send-Step 'root' 'ok' 'running as administrator'
+    Send-Step 'hostname' 'ok' 'hostname matches'
     Send-Step 'observe_host' 'ok' 'not the Observe host'
 
     # 2. Checks that change nothing.
@@ -780,10 +876,12 @@ Invoke-ObserveInstall
 def render_windows(red: Redeemed, ctx: Context) -> str:
     """The PowerShell install script for a Windows host. Raises ScriptError on any unsafe value."""
     name, url, mid, step, agent, addrs = _agent_only(red, ctx, "windows")
+    redeem = _redeem_token(red)
     script = _WIN
     fills = {"@@NAME@@": name, "@@P_NAME@@": _pq(name), "@@P_URL@@": _pq(url),
              "@@P_MID@@": _pq(mid), "@@P_ADDRS@@": ", ".join(_pq(a) for a in addrs),
-             "@@P_STEPKEY@@": _pq(step), "@@P_AGENTKEY@@": _pq(agent),
+             "@@P_REDEEM@@": _pq(redeem), "@@P_STEPKEY@@": _pq("" if redeem else step),
+             "@@P_AGENTKEY@@": _pq("" if redeem else agent),
              "@@P_SOURCE@@": _pq(WINDOWS_SOURCE)}
     for marker, value in fills.items():
         script = script.replace(marker, value)

@@ -9,6 +9,7 @@ An unresolved reference is a startup error, never a silent empty string.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from pathlib import Path
 from typing import Annotated, Any, Literal, Union
@@ -52,6 +53,44 @@ def _resolve_refs(value: Any, path: str = "") -> Any:
 
 class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+# The address agents are told to call: http(s)://host[:port], nothing else. The character set
+# holds no quote, space, slash beyond the scheme, semicolon, dollar sign, backtick or pipe, so the
+# value is safe inside a shell word and a PowerShell string.
+_PUBLIC_URL = re.compile(
+    r"^(https?)://([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\[[0-9a-fA-F:]{2,45}\])"
+    r"(?::([0-9]{1,5}))?$", re.IGNORECASE)
+
+
+def normalise_public_url(value: Any) -> str:
+    """The canonical form of an Observe address for install commands, or ValueError with a
+    message safe to show. Never a loopback or wildcard name, because the command runs on another
+    machine, where that name means the machine itself."""
+    if not isinstance(value, str):
+        raise ValueError("the address must be text such as https://observe.example.com:8080")
+    text = value.strip()
+    match = _PUBLIC_URL.fullmatch(text)
+    if not match:
+        raise ValueError("the address must look like https://observe.example.com or "
+                         "http://192.0.2.10:8080: a scheme, a host name or IP address and an "
+                         "optional port, with no path or other characters")
+    scheme, host, port = match.group(1).lower(), match.group(2), match.group(3)
+    if port is not None and not 1 <= int(port) <= 65535:
+        raise ValueError("the port must be from 1 to 65535")
+    bare = host.strip("[]").lower()
+    try:
+        ip = ipaddress.ip_address(bare)
+        local = ip.is_loopback or ip.is_unspecified
+    except ValueError:
+        local = bare == "localhost" or bare.endswith(".localhost")
+        if ".." in bare or bare.endswith("-") or bare.startswith("."):
+            raise ValueError("the host name is not valid") from None
+    if local:
+        raise ValueError("the address must not be a loopback name such as localhost or "
+                         "127.0.0.1: the install command runs on another machine, where that "
+                         "name means the machine itself")
+    return f"{scheme}://{bare if ':' not in bare else '[' + bare + ']'}" + (f":{int(port)}" if port else "")
 
 
 # ----------------------------------------------------------------- credentials
@@ -663,6 +702,14 @@ class ServerConfig(Strict):
     argon2_memory_kib: int = Field(default=65536, ge=8)
     argon2_parallelism: int = Field(default=4, ge=1)
     plugin_rate_per_minute: int = Field(default=300, ge=1)  # requests per peer to plugin routes
+    # The address install commands tell hosts to call (docs/GUI-DESIGN.md section 3.10). When it
+    # is unset, an admin confirms one in the Add host wizard. The request's Host header is never used.
+    public_url: str | None = None
+
+    @field_validator("public_url")
+    @classmethod
+    def _public_url(cls, value: str | None) -> str | None:
+        return None if value is None else normalise_public_url(value)
 
 
 class ForecastSettings(Strict):

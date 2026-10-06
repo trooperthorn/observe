@@ -234,7 +234,7 @@ def test_a_version_12_database_migrates_to_13(tmp_path):
     Store(path).close()
     db = sqlite3.connect(path)
     try:
-        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 13
+        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == max(MIGRATIONS)
         assert db.execute("SELECT name FROM sqlite_master WHERE name='ui_layouts'").fetchall()
     finally:
         db.close()

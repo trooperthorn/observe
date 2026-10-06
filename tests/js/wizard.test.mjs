@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildBody, controlBlock, defaultFans, parseLimit, progressChip, stepFromHash, validHeader,
-  validName, validPool, validService, hostHref, reportChip,
+  validName, validPool, validService, hostHref, reportChip, validPublicUrl, noticeFor, guardText,
 } from "../../observe/static/js/wizard-logic.js";
 
 const base = () => ({
@@ -85,4 +85,31 @@ test("every progress and report status has an icon word, never colour alone", ()
 test("the host link encodes the name", () => {
   assert.equal(hostHref("nas01"), "/host?name=nas01");
   assert.equal(hostHref("a&b"), "/host?name=a%26b");
+});
+
+test("the Observe address must be http or https with a host, never loopback or a path", () => {
+  for (const ok of ["https://observe.lab", "http://192.0.2.10:8080", "https://Observe.Lab:8443", "http://[fe80::1]:80"]) {
+    assert.ok(validPublicUrl(ok), ok);
+  }
+  for (const bad of ["", "observe.lab", "ftp://observe.lab", "http://localhost:8080", "http://127.0.0.1",
+    "http://0.0.0.0", "http://[::1]", "http://a.localhost", "https://observe.lab/path", "https://observe.lab;id",
+    "https://a b.lab"]) {
+    assert.ok(!validPublicUrl(bad), bad);
+  }
+});
+
+test("the command notice names expired and used, and stays quiet when ready or waiting", () => {
+  assert.equal(noticeFor(null), null);
+  assert.equal(noticeFor({ ready: true, token_state: "used" }), null);
+  assert.equal(noticeFor({ token_state: "valid" }), null);
+  assert.equal(noticeFor({ expired: true, token_state: "expired" }).kind, "expired");
+  const used = noticeFor({ token_state: "used" });
+  assert.equal(used.kind, "used");
+  assert.equal(used.button, "Regenerate command");
+});
+
+test("a guard refusal is shown as text with its reason", () => {
+  assert.equal(guardText({ guard: null }), "");
+  assert.equal(guardText({ guard: { reason: "ran on ai-pi, expected MediaIn-SVR" } }),
+    "Refused on the machine: ran on ai-pi, expected MediaIn-SVR.");
 });

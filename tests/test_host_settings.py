@@ -14,7 +14,7 @@ from observe import hosttasks
 from observe.ingest.keys import verify_key
 
 from .test_auth import BASIC
-from .test_enrol_api import GOOD, admin, audit_kinds, create, ingest_for, token_of
+from .test_enrol_api import GOOD, admin, audit_kinds, create, ingest_for, run_install, token_of
 from .test_install_script import STEP_KEY, Served, check_syntax, env  # noqa: F401
 
 PUT_BODY = {"fans": [{"header": "fan1", "min_duty_limit": 20}, "fan9"], "services": ["smbd"],
@@ -36,7 +36,7 @@ def enrol_host(env, hdr, name="nas01", platform="linux", fetch=True, **over):
     resp = create(env, hdr, name=name, platform=platform, **over)
     assert resp.status_code == 200, resp.text
     token = token_of(resp)
-    return env.client.get(f"/i/{token}").text if fetch else token
+    return run_install(env, token).text if fetch else token
 
 
 def secrets_of(script):
@@ -128,7 +128,7 @@ def test_save_before_the_install_is_run_makes_no_command_and_lands_in_the_instal
     assert out["allowlist_status"]["state"] == "pending"
     assert env.rows("SELECT COUNT(*) FROM host_tasks") == [(0,)]
     env.clock.now += 10
-    script = env.client.get(f"/i/{token}").text
+    script = run_install(env, token).text
     assert "'headers = [\"fan1\", \"fan9\"]'" in script and "min_duty_floor = 20" in script
     assert "fan2" not in script and "docker:scrutiny" not in script
     # The install wrote the saved list, so the status moves on once the host has pulled.
@@ -245,14 +245,16 @@ def test_expired_unknown_and_wrong_kind_tokens_are_410(env):
     assert env.client.get(f"/i/{fresh}").status_code == 410
 
 
-def test_a_bad_host_header_is_refused_before_the_task_token_is_spent(env):
+def test_a_hostile_host_header_never_reaches_a_task_command_or_script(env):
     hdr = admin(env)
     enrol_host(env, hdr)
-    token = task_token(put(env, hdr))
-    bad = env.client.get(f"/t/{token}", headers={"Host": "bad_host.lan"})
-    assert bad.status_code == 500 and "exit 1" in bad.text
-    assert env.rows("SELECT fetched_at FROM host_tasks") == [(None,)]
-    assert env.client.get(f"/t/{token}").status_code == 200
+    hostile = {"Host": "bad_host.lan:1;id"}
+    made = put(env, {**hdr, **hostile})
+    assert made.status_code == 200 and "bad_host" not in made.json()["command"]
+    assert "'https://192.0.2.50:8443/t/wpt_" in made.json()["command"]
+    token = task_token(made)
+    got = env.client.get(f"/t/{token}", headers=hostile)
+    assert got.status_code == 200 and "bad_host" not in got.text
 
 
 def test_task_step_reports_need_the_task_step_key_and_set_the_task_state(env):
@@ -367,7 +369,7 @@ def test_reissue_revokes_the_old_token_and_keys_and_makes_a_new_command(env):
     # The unfetched update command made for the old install is dead as well.
     assert env.rows("SELECT COUNT(*) FROM host_tasks") == [(0,)]
     token = re.search(r"/i/(wpe_[A-Za-z0-9_-]+)", line).group(1)
-    fresh = env.client.get(f"/i/{token}")
+    fresh = run_install(env, token)
     assert fresh.status_code == 200
     new_keys = secrets_of(fresh.text)
     assert new_keys["AGENT_KEY"] != keys["AGENT_KEY"]
@@ -415,7 +417,7 @@ def test_regenerate_before_the_script_is_run_still_works_and_after_it_is_refused
     assert r.status_code == 200
     assert env.client.get(f"/i/{token}").status_code == 410
     new = re.search(r"/i/(wpe_[A-Za-z0-9_-]+)", r.json()["command"]).group(1)
-    assert env.client.get(f"/i/{new}").status_code == 200
+    assert run_install(env, new).status_code == 200
     assert env.client.post("/api/hosts/nas01/enrolment/regenerate", json={},
                            headers=hdr).status_code == 404
 
@@ -580,7 +582,7 @@ def test_tasks_helper_remove_host_reports_none_for_an_unknown_host(env):
 # ---------------------------------------------------------------- schema 12 from schema 11
 
 
-def test_a_version_11_database_with_enrolments_migrates_to_13(tmp_path):
+def test_a_version_11_database_with_enrolments_migrates_to_14(tmp_path):
     import sqlite3
     from observe.store import MIGRATIONS, SCHEMA_VERSION, Store, migrate
     path = str(tmp_path / "w.db")
@@ -588,7 +590,7 @@ def test_a_version_11_database_with_enrolments_migrates_to_13(tmp_path):
     db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
     db.commit()
     newer = {v: m for v, m in MIGRATIONS.items() if v > 11}
-    assert newer and SCHEMA_VERSION == 13
+    assert newer and SCHEMA_VERSION == 14
     for v in newer:
         del MIGRATIONS[v]
     try:
@@ -608,7 +610,7 @@ def test_a_version_11_database_with_enrolments_migrates_to_13(tmp_path):
         assert db.execute("SELECT allowlist_rev, allowlist_saved_at, reissued_at FROM enrolments "
                           "WHERE host='nas01'").fetchone() == (0, None, None)
         assert db.execute("SELECT COUNT(*) FROM host_tasks").fetchone() == (0,)
-        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 13
+        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 14
     finally:
         db.close()
 

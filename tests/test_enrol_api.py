@@ -8,6 +8,7 @@ import logging
 import re
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -50,6 +51,24 @@ def audit_kinds(env):
 def redeem(env, token, at=None):
     return asyncio.run(enrol.redeem(env.store, token, env.clock() if at is None else at,
                                     "127.0.0.1"))
+
+
+def run_install(env, token, params=None):
+    """What a host does once its script's guards pass: fetch the script, then redeem the token.
+
+    The response carries the script text followed by the keys the redeem reply gave, written the
+    way the script holds them (KEY='value'), so tests read them as they always did. A fetch
+    that is not a 200 is returned as it is, and nothing is redeemed."""
+    got = env.client.get(f"/i/{token}", params=params)
+    if got.status_code != 200:
+        return got
+    done = env.client.post("/api/enrol/redeem", json={"token": token})
+    assert done.status_code == 200, done.text
+    reply = done.json()
+    lines = "".join(f"{name}='{reply[field]}'\n" for name, field in (
+        ("STEP_KEY", "step_key"), ("AGENT_KEY", "agent_key"), ("CONTROL_KEY", "control_key"))
+        if reply.get(field))
+    return SimpleNamespace(status_code=200, headers=got.headers, text=got.text + "\n" + lines)
 
 
 def ingest_for(env, host, key):
