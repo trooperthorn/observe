@@ -893,3 +893,14 @@ Each metric threshold is a rule, not a single comparison of the last value. A ru
   - protocol selection and fallback in producers: hostwatch, ha_Int_soc and the Pockethernet app send OTLP only (H-3 and P-2 become OTLP-only clients);
   - old-name compatibility (old product names, old config and database paths, old env vars, the legacy plugin entry point group) may be removed.
 - Observe starts from an empty database with the new schema, and agents are re-enrolled through the Add host wizard after the redeploy.
+
+## 12. Database backends (owner decision 2026-10-06)
+
+Observe supports two backends from the start, chosen in config (`storage.backend: sqlite | postgres`, with `storage.dsn` for PostgreSQL):
+
+- **SQLite** for small installs such as the Raspberry Pi 3: one writer thread, a read-only WAL connection pool, and the incremental rollups, compaction and summary views described in sections 2 and 10.2.
+- **PostgreSQL with TimescaleDB** for larger hosts (2 GB of memory or more and an SSD): `samples` is a hypertable; the 5 minute, hourly and daily levels are continuous aggregates with refresh policies; retention and compression use TimescaleDB policies driven by the same admin retention settings; the views `metric_5m`, `metric_hourly`, `metric_daily` and `availability_history` exist with the same columns on both backends. Plain PostgreSQL without TimescaleDB is supported with the same incremental rollup code as SQLite.
+- **One storage interface.** All database access goes through a `Storage` protocol (writer units, read queries, rollup and retention operations, change sequences). The API, UI, rules, plugins and agents never see which backend is in use. Plugin tables are created through the same interface with portable DDL.
+- **Driver:** psycopg 3 with psycopg-pool (binary wheels exist for arm64 and x86_64), used only when the PostgreSQL backend is selected.
+- **Testing:** every storage contract test runs against both backends. Locally, PostgreSQL tests run when `OBSERVE_TEST_PG_DSN` is set and skip otherwise; GitHub Actions CI runs the whole suite against SQLite and against a TimescaleDB service container on every push.
+- **Deployment:** `docker-compose.yml` gains an optional `postgres` profile with the TimescaleDB image, a volume and a health check; the Pi keeps the default SQLite deployment.
