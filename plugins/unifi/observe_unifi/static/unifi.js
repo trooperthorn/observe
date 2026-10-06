@@ -79,6 +79,7 @@ function clientRow(c, index) {
   tr.setAttribute("aria-rowindex", String(index + 2));
   const state = clientState(c);
   const chip = state === "connected" ? statusChip("up", "Connected")
+    : state === "stale" ? statusChip("stale", "Stale")
     : state === "offline" ? statusChip("stale", "Offline") : statusChip("unavailable", "Unknown");
   const cells = [el("span", null, c.name || "unnamed"), chip, el("span", null, c.kind || "unknown"),
     el("span", null, c.ip), mac(c.mac), el("span", null, attachment(c)), el("span", null, c.ssid),
@@ -99,10 +100,11 @@ function spacer(height) {
 
 function clientsView(d) {
   const all = d.clients;
-  const connected = all.filter((c) => c.connected === true).length;
+  const connected = all.filter((c) => clientState(c) === "connected").length;
   const frag = document.createDocumentFragment();
   const kpis = el("div", "kpi-row");
   kpis.append(kpi(all.length, "Clients"), kpi(connected, "Connected"),
+    kpi(all.filter((c) => clientState(c) === "stale").length, "Stale"),
     kpi(all.filter((c) => c.connected === false).length, "Offline"),
     kpi(all.filter((c) => c.kind === "wireless").length, "Wireless"));
   frag.append(kpis);
@@ -117,7 +119,7 @@ function clientsView(d) {
   const state = el("select");
   state.setAttribute("aria-label", "State");
   for (const [sel, opts] of [[kind, [["all", "All kinds"], ["wired", "Wired"], ["wireless", "Wireless"]]],
-    [state, [["all", "Any state"], ["connected", "Connected"], ["offline", "Offline"], ["unknown", "Unknown"]]]]) {
+    [state, [["all", "Any state"], ["connected", "Connected"], ["stale", "Stale"], ["offline", "Offline"], ["unknown", "Unknown"]]]]) {
     for (const [v, label] of opts) { const o = el("option", null, label); o.value = v; sel.append(o); }
   }
   const count = el("span", "muted");
@@ -190,16 +192,18 @@ function protectView(d) {
   }
   const cams = d.cameras;
   const kpis = el("div", "kpi-row");
-  kpis.append(kpi(cams.length, "Cameras"), kpi(cams.filter((c) => c.connected === true).length, "Connected"),
-    kpi(cams.filter((c) => c.recording === true).length, "Recording"));
+  kpis.append(kpi(cams.length, "Cameras"), kpi(cams.filter((c) => c.connected === true && !c.stale).length, "Connected"),
+    kpi(cams.filter((c) => c.recording === true && !c.stale).length, "Recording"),
+    kpi(cams.filter((c) => c.stale).length, "Stale"));
   const columns = [
     { key: "name", label: "Name", get: (r) => r.name || r.mac, render: (r) => el("span", null, r.name || r.mac || "unnamed") },
     { key: "state", label: "State", get: (r) => r.state, render: (r) => el("span", null, r.state || "Not reported") },
     { key: "connected", label: "Connection", get: (r) => (r.connected === null ? null : Number(r.connected)),
-      render: (r) => (r.connected === true ? statusChip("up", "Connected")
+      render: (r) => (r.stale ? statusChip("stale", "Stale")
+        : r.connected === true ? statusChip("up", "Connected")
         : r.connected === false ? statusChip("down", "Disconnected") : statusChip("unavailable", "Not reported")) },
     { key: "recording", label: "Recording", get: (r) => (r.recording === null ? null : Number(r.recording)),
-      render: (r) => el("span", null, boolWord(r.recording, "Recording", "Not recording")) },
+      render: (r) => el("span", null, r.stale ? "Stale" : boolWord(r.recording, "Recording", "Not recording")) },
     { key: "model", label: "Model", get: (r) => r.model },
     { key: "mac", label: "MAC", get: (r) => r.mac, render: (r) => mac(r.mac) },
     { key: "seen", label: "Last seen", get: (r) => r.last_seen, render: (r) => el("span", null, when(r.last_seen)) },

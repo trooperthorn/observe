@@ -22,7 +22,7 @@ from .test_unifi_plugin import BASE, SITE, Console, Env, device, run
 PROTECT = "/proxy/protect/integration/v1"
 CLASSIC = "/proxy/network/api/s/default/"
 COOKIE, CSRF = "cookie-secret-token", "csrf-secret-token"
-BUDGET_S = 5.0  # the fixture takes a few tenths of a second; the budget only catches a rewrite
+BUDGET_S = 1.0  # the whole fixture runs in about 0.1 s here, so this leaves a tenfold margin
 
 
 @pytest.fixture(autouse=True)
@@ -321,3 +321,53 @@ def test_protect_refuses_a_non_list_answer(tmp_path):
     with pytest.raises(UniFiError, match="did not return a list"):
         run(env.plugin.collect_protect(env.store))
     assert json.dumps(env.rows("unifi_cameras")) == "[]"
+
+
+# ------------------------------------------------------------------ migration and staleness
+
+
+def test_schema_upgrades_from_version_1_keeping_rows():
+    from observe.store import migrate_plugins
+    from observe_unifi.records import MIGRATIONS
+    db = sqlite3.connect(":memory:")
+    migrate_plugins(db, {"unifi": MIGRATIONS[:1]})
+    db.execute("INSERT INTO unifi_clients (site_id, client_id, mac, name, first_seen, last_seen) "
+               "VALUES ('s', 'c1', 'aa', 'Old', 1.0, 2.0)")
+    db.commit()
+    assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == 1
+    migrate_plugins(db, {"unifi": MIGRATIONS})
+    assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == 2
+    cols = {r[1] for r in db.execute("PRAGMA table_info(unifi_clients)")}
+    assert {"connected", "connected_at", "ssid", "uplink_mac", "sw_port", "enriched"} <= cols
+    row = db.execute("SELECT name, connected, ssid, enriched FROM unifi_clients").fetchone()
+    assert row == ("Old", None, "", 0)  # the old row survives; connected is unknown, not false
+    assert db.execute("SELECT COUNT(*) FROM unifi_cameras").fetchone()[0] == 0
+    migrate_plugins(db, {"unifi": MIGRATIONS})  # a second run changes nothing
+    assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == 2
+
+
+def test_connected_rows_not_refreshed_lately_are_flagged_stale(tmp_path):
+    from observe_unifi.clients import read_cameras, read_clients
+    console = Full([client_row(1)])
+    console.cameras = [{"id": "cam-1", "name": "Door", "isConnected": True, "isRecording": True}]
+    env = env_with(tmp_path, console, protect=True)
+    run(env.plugin.collect_devices(env.store))
+    run(env.plugin.collect_clients(env.store))
+    run(env.plugin.collect_protect(env.store))
+    now = env.plugin.wall()
+    assert read_clients(env.store, now, 750.0)["clients"][0]["stale"] is False
+    assert read_clients(env.store, now + 751.0, 750.0)["clients"][0]["stale"] is True
+    assert read_cameras(env.store, now, 300.0)["cameras"][0]["stale"] is False
+    assert read_cameras(env.store, now + 301.0, 300.0)["cameras"][0]["stale"] is True
+    assert read_clients(env.store)["clients"][0]["stale"] is False  # no clock given
+
+
+def test_classic_note_carries_only_the_error_class(tmp_path):
+    console = Full([client_row(1)])
+    console.classic_status = 403
+    env = classic_env(tmp_path, console)
+    run(env.plugin.collect_clients(env.store))
+    note = env.plugin.classic_note
+    assert note.startswith("classic detail unavailable: ") and " " not in note.split(": ")[1]
+    for secret in ("pw-secret", COOKIE, CSRF, "key-secret-value", "HTTP 403", "/proxy"):
+        assert secret not in note

@@ -262,8 +262,8 @@ class UniFiPlugin(PluginBase):
                 snap = await self.classic_clients()
                 active, known = snap["active"], snap["offline"]
             except (UniFiError, AuthRejected) as err:
-                # The message holds no secret: classic.py never puts one in an error.
-                self.classic_note = f"classic detail unavailable: {err}"
+                # Only the error class goes to the page; the message may name a path or status.
+                self.classic_note = f"classic detail unavailable: {type(err).__name__}"
             except httpx.HTTPError as err:  # a 5xx, a timeout or a refused connection
                 self.classic_note = f"classic detail unavailable: {type(err).__name__}"
         live = enrich(live, active, await device_index(store, site_id))

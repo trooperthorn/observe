@@ -24,6 +24,8 @@ if TYPE_CHECKING:  # pragma: no cover
 
 HERE = Path(__file__).parent
 PAGE_PATH = "/plugins/unifi"
+# A row is stale when its last_seen is older than this many poll intervals.
+STALE_FACTOR = 2.5
 
 
 def page_files() -> list[PluginPage]:
@@ -40,14 +42,16 @@ def build_pages_router(plugin: UniFiPlugin) -> APIRouter:
 
     @router.get("/clients")
     async def clients(request: Request) -> dict[str, Any]:
-        got = await asyncio.to_thread(read_clients, request.app.state.plugin_store)
+        got = await asyncio.to_thread(read_clients, request.app.state.plugin_store,
+                                  plugin.wall(), STALE_FACTOR * plugin.settings.clients_interval)
         got["classic_configured"] = plugin.settings.classic_credential is not None
         got["classic_note"] = plugin.classic_note
         return got
 
     @router.get("/protect")
     async def protect(request: Request) -> dict[str, Any]:
-        got = await asyncio.to_thread(read_cameras, request.app.state.plugin_store)
+        got = await asyncio.to_thread(read_cameras, request.app.state.plugin_store,
+                                  plugin.wall(), STALE_FACTOR * plugin.settings.protect_interval)
         got["enabled"] = plugin.settings.protect
         return got
 

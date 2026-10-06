@@ -11,9 +11,9 @@ export function windowFor(scrollTop, viewportH, rowH, count, overscan = 6) {
   return { start, end, top: start * rowH, bottom: (count - end) * rowH };
 }
 
-// A client row's state word: connected, offline, or unknown when the console did not say.
+// A client row's state word: connected, stale (connected but not refreshed lately), offline, or unknown when the console did not say.
 export function clientState(c) {
-  if (c.connected === true) return "connected";
+  if (c.connected === true) return c.stale === true ? "stale" : "connected";
   if (c.connected === false) return "offline";
   return "unknown";
 }

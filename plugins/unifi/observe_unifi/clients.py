@@ -270,8 +270,17 @@ def read_devices(store: Store) -> list[dict[str, Any]]:
     return out
 
 
-def read_clients(store: Store) -> dict[str, Any]:
-    """Clients with the name of the device they sit on, connected first. Capped at MAX_ROWS."""
+def _stale(connected: bool | None, seen: float, now: float | None, after: float | None) -> bool:
+    """True when a row says connected but the collector has not refreshed it within `after`."""
+    return bool(connected) and now is not None and after is not None and now - seen > after
+
+
+def read_clients(store: Store, now: float | None = None,
+                 stale_after: float | None = None) -> dict[str, Any]:
+    """Clients with the name of the device they sit on, connected first. Capped at MAX_ROWS.
+
+    With `now` and `stale_after`, a connected row whose last_seen is older than that is flagged
+    `stale`, so a stopped collector is not shown as current."""
     with store._lock:
         db = store._db
         total = db.execute("SELECT COUNT(*) FROM unifi_clients").fetchone()[0]
@@ -290,12 +299,14 @@ def read_clients(store: Store) -> dict[str, Any]:
         out.append({"client_id": cid, "mac": mac, "name": name, "ip": ip, "kind": kind,
                     "connected": None if conn is None else bool(conn), "connected_at": cat,
                     "ssid": ssid, "sw_port": port, "enriched": bool(enr), "last_seen": seen,
+                    "stale": _stale(conn, seen, now, stale_after),
                     "uplink_device_id": up_id, "uplink_name": up_name or "",
                     "uplink_mac": up_dev_mac or up_mac})
     return {"total": total, "truncated": total > len(out), "clients": out}
 
 
-def read_cameras(store: Store) -> dict[str, Any]:
+def read_cameras(store: Store, now: float | None = None,
+                 stale_after: float | None = None) -> dict[str, Any]:
     keys = ("camera_id", "mac", "name", "model", "state", "connected", "recording", "last_seen")
     with store._lock:
         rows = store._db.execute(
@@ -306,5 +317,6 @@ def read_cameras(store: Store) -> dict[str, Any]:
         c = dict(zip(keys, r))
         for k in ("connected", "recording"):
             c[k] = None if c[k] is None else bool(c[k])
+        c["stale"] = bool(c["connected"] or c["recording"]) and now is not None             and stale_after is not None and now - c["last_seen"] > stale_after
         cams.append(c)
     return {"cameras": cams}

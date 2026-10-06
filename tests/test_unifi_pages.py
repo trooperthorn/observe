@@ -180,7 +180,7 @@ def test_window_and_filter_rules_in_node():
     script = (
         f'import {{ windowFor, filterClients, attachment }} from "{(PKG / "static" / "vlist-core.js").as_uri()}";\n'
         "const rows = Array.from({ length: 500 }, (_, i) => ({ name: 'c' + i, mac: 'm' + i, ip: '', ssid: '',"
-        " uplink_name: i % 2 ? 'AP' : 'SW', kind: i % 2 ? 'wireless' : 'wired', connected: i % 5 !== 0,"
+        " uplink_name: i % 2 ? 'AP' : 'SW', kind: i % 2 ? 'wireless' : 'wired', connected: i % 5 !== 0, stale: i === 1,"
         " sw_port: i % 2 ? null : 3 }));\n"
         "const w = windowFor(4000, 480, 40, 500);\n"
         "const top = windowFor(0, 480, 40, 500);\n"
@@ -188,6 +188,7 @@ def test_window_and_filter_rules_in_node():
         "console.log(JSON.stringify({ w, top, end, none: windowFor(0, 480, 40, 0),"
         " f: filterClients(rows, { q: 'C42' }).length, k: filterClients(rows, { kind: 'wired' }).length,"
         " s: filterClients(rows, { state: 'offline' }).length,"
+        " st: filterClients(rows, { state: 'stale' }).length,"
         " both: filterClients(rows, { kind: 'wireless', state: 'connected', q: 'ap' }).length,"
         " a: attachment(rows[0]), b: attachment(rows[1]) }));\n")
     out = subprocess.run([NODE, "--input-type=module", "-e", script], capture_output=True,
@@ -198,4 +199,5 @@ def test_window_and_filter_rules_in_node():
     assert got["end"]["end"] == 500 and got["end"]["bottom"] == 0
     assert got["none"] == {"start": 0, "end": 0, "top": 0, "bottom": 0}
     assert got["f"] == 11 and got["k"] == 250 and got["s"] == 100
-    assert got["both"] == 200 and got["a"] == "SW port 3" and got["b"] == "AP"
+    assert got["st"] == 1  # a connected row flagged stale is not counted as connected
+    assert got["both"] == 199 and got["a"] == "SW port 3" and got["b"] == "AP"
