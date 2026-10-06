@@ -561,13 +561,15 @@ class UniFiNetworkMonitor(_ApiTarget):
     port: int = 443
     base_path: str = "/proxy/network/integration/v1"  # "/integration/v1" on standalone
     site: str | None = None  # site name; the only site when omitted
-    mode: Literal["devices", "device", "device_cpu", "device_memory", "firmware"] = "devices"
+    mode: Literal["devices", "device", "device_cpu", "device_memory", "firmware",
+                  "ports"] = "devices"
     device: str | None = None  # name or MAC address
     ignore: list[str] = Field(default_factory=list)  # device names to leave out of summaries
 
     @model_validator(mode="after")
     def _mode_args(self) -> "UniFiNetworkMonitor":
-        if self.mode.startswith("device") and self.mode != "devices" and not self.device:
+        needs_device = self.mode in ("device", "device_cpu", "device_memory", "ports")
+        if needs_device and not self.device:
             raise ValueError(f"mode {self.mode} requires device")
         return self
 

@@ -223,3 +223,48 @@ async def test_discovery_withholds_token_on_plain_http_unless_allowed(tech):
     ms = [m for m in yaml.safe_load(text)["monitors"] if m["type"] == "technitium"]
     assert {m["mode"] for m in ms} == {"stats", "update"}
     assert all(m.get("https") is None for m in ms)             # default (false) not repeated
+
+
+async def test_unifi_ports_mode_feeds_live_port(unifi):
+    from observe.infra_match import LivePort
+    res = await ucheck(unifi, mode="ports", device="Core Switch").run()
+    assert res.result is Result.OK and "1/2 ports up" in res.message
+    ports = res.detail["ports"]
+    assert ports["1"]["speed_mbps"] == 1000 and ports["1"]["max_speed_mbps"] == 2500
+    assert ports["1"]["state"] == "UP" and ports["1"]["poe"]["enabled"] is True
+    assert ports["2"]["speed_mbps"] is None
+    # The same lookup web.live_port performs for a unifi match.
+    p = ports["1"]
+    live = LivePort(p.get("speed_mbps"), p.get("vlan"), p.get("poe_w"))
+    assert live.speed_mbps == 1000 and live.vlan is None and live.poe_w is None
+
+
+async def test_unifi_ports_requires_device_and_offline(unifi):
+    with pytest.raises(ValueError):
+        check(type="unifi_network", host="h", credential="unifi", mode="ports")
+    off = await ucheck(unifi, mode="ports", device="Remote Flex").run()
+    assert off.result is Result.FAIL
+
+
+async def test_unifi_ports_refuses_redirect_and_oversize(cert, monkeypatch):
+    from observe.checks import apps
+    base = "/proxy/network/integration/v1"
+    sid = "site-1"
+    routes = unifi_routes()
+    sid = [r for r in routes if r.endswith("/devices")][0].split("/")[-2]
+    dev = f"{base}/sites/{sid}/devices/dev-2"
+    srv = json_server({**routes, dev: lambda q, h: (302, {"location": "http://127.0.0.1:1/x"})},
+                      ("X-API-KEY", UNIFI_KEY), cert)
+    try:
+        res = await ucheck((srv, cert[0]), mode="ports", device="Core Switch").run()
+        assert res.result is Result.FAIL and "redirect" in res.message
+        assert not any(p.startswith("/x") for p, _ in srv.seen)
+    finally:
+        srv.shutdown()
+    monkeypatch.setattr(apps, "UNIFI_DETAIL_MAX_BYTES", 50)
+    srv = json_server(routes, ("X-API-KEY", UNIFI_KEY), cert)
+    try:
+        res = await ucheck((srv, cert[0]), mode="ports", device="Core Switch").run()
+        assert res.result is Result.FAIL and "larger than 50 bytes" in res.message
+    finally:
+        srv.shutdown()

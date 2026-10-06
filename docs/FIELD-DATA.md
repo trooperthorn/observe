@@ -295,3 +295,5 @@ The package `observe_pockethernet` in `plugins/pockethernet` (entry point `pocke
 4. Persistent outbox.
 5. UI: preview, send now, upload status.
 6. Optional automatic queueing.
+
+- **UniFi ports mode.** The `unifi_network` check in mode `ports` reads one device detail and reports `detail.ports` keyed by port index, which feeds the live-port lookup for the map. Speed comes from `speedMbps`; VLAN and PoE watts are unknown (shown as unknown, never zero) because the Integration API does not provide them. The `interfaces.ports` field names are unverified against a live console.

@@ -141,3 +141,7 @@ matters.
   computer accounts, which a container is not.
 - MQTT: an account with ACLs limited to subscribing to the topics you check
   and publishing under the alert `topic_prefix`.
+
+## UniFi ports mode
+
+The `ports` mode of `unifi_network` sends only GET requests with the existing API key. It does not follow redirects, so a hostile or misconfigured console cannot send the key to another host, and it refuses a device detail body larger than 1 MB so a response cannot exhaust memory.

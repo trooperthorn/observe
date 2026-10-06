@@ -255,6 +255,13 @@ UNIFI_DEVICES = [
     ], start=1)]
 UNIFI_STATS = {"uptimeSec": 172800, "cpuUtilizationPct": 23.4, "memoryUtilizationPct": 61.0,
                "loadAverage1Min": 0.5}
+# Port list shape (interfaces.ports with idx, state, speedMbps, maxSpeedMbps, poe) is
+# unverified against a live console.
+UNIFI_PORTS = [
+    {"idx": 1, "state": "UP", "connector": "RJ45", "speedMbps": 1000, "maxSpeedMbps": 2500,
+     "poe": {"standard": "802.3at", "type": 2, "enabled": True, "state": "UP"}},
+    {"idx": 2, "state": "DOWN", "connector": "RJ45", "maxSpeedMbps": 2500},
+]
 PROTECT_CAMERAS = [
     {"id": "c1", "name": "Driveway", "modelKey": "camera", "state": "CONNECTED",
      "mac": "AABBCC000011"},
@@ -283,6 +290,8 @@ def unifi_routes(page_size=2):
     for d in UNIFI_DEVICES:
         routes[f"{base}/sites/{UNIFI_SITE['id']}/devices/{d['id']}/statistics/latest"] = \
             UNIFI_STATS
+        routes[f"{base}/sites/{UNIFI_SITE['id']}/devices/{d['id']}"] = \
+            {**d, "interfaces": {"ports": UNIFI_PORTS}}
     return routes
 
 

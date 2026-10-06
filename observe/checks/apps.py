@@ -20,6 +20,7 @@ response carries "status"; anything but "ok" is a failure with its message.
 from __future__ import annotations
 
 import fnmatch
+import json
 from typing import Any
 
 import httpx
@@ -160,6 +161,9 @@ async def unifi_list_all(client: httpx.AsyncClient, url: str,
         offset += len(page)
 
 
+UNIFI_DETAIL_MAX_BYTES = 1_000_000  # a device detail body larger than this is refused
+
+
 class _UniFiCheck(_HttpApiCheck):
     def headers(self) -> dict[str, str]:
         return {"X-API-KEY": self.credential().api_key, "Accept": "application/json"}
@@ -169,6 +173,30 @@ class _UniFiCheck(_HttpApiCheck):
         verify: Any = api_ssl_context(m.verify_tls, m.ca_bundle)
         async with httpx.AsyncClient(verify=verify, timeout=self.timeout) as c:
             return await unifi_list_all(c, self.base_url() + m.base_path + path, self.headers())
+
+    async def get_capped(self, path: str, limit: int | None = None) -> Any:
+        """GET one JSON object, never following a redirect and refusing to read
+        more than `limit` bytes."""
+        limit = UNIFI_DETAIL_MAX_BYTES if limit is None else limit
+        m = self.monitor
+        verify: Any = api_ssl_context(m.verify_tls, m.ca_bundle)
+        async with httpx.AsyncClient(verify=verify, timeout=self.timeout,
+                                     follow_redirects=False) as c:
+            async with c.stream("GET", self.base_url() + path, headers=self.headers()) as r:
+                if r.status_code in (401, 403):
+                    raise AuthFailed(f"HTTP {r.status_code}")
+                if r.status_code == 404:
+                    raise LookupError(f"{path} not found (404)")
+                if 300 <= r.status_code < 400:
+                    raise LookupError(f"{path} answered a redirect (HTTP {r.status_code}); "
+                                      "redirects are not followed")
+                r.raise_for_status()
+                body = bytearray()
+                async for chunk in r.aiter_bytes():
+                    body += chunk
+                    if len(body) > limit:
+                        raise LookupError(f"{path} response is larger than {limit} bytes")
+        return json.loads(bytes(body))
 
     @staticmethod
     def matches(item: dict[str, Any], want: str) -> bool:
@@ -225,6 +253,8 @@ class UniFiNetworkCheck(_UniFiCheck):
             return CheckResult.ok(f"{label} online, firmware {dev.get('firmwareVersion')}"
                                   + (" (update available)" if dev.get("firmwareUpdatable") else ""),
                                   detail={"ip": dev.get("ipAddress")})
+        if m.mode == "ports":
+            return await self._ports(sid, dev, label)
         stats = await self.get(f"{m.base_path}/sites/{sid}/devices/{dev['id']}/statistics/latest")
         key = "cpuUtilizationPct" if m.mode == "device_cpu" else "memoryUtilizationPct"
         v = stats.get(key)
@@ -234,6 +264,29 @@ class UniFiNetworkCheck(_UniFiCheck):
         days = (stats.get("uptimeSec") or 0) / 86400
         return CheckResult.ok(f"{label} {what} {float(v):g}%, up {days:.1f} days",
                               value=round(float(v), 1), unit="%")
+
+
+    async def _ports(self, sid: str, dev: dict[str, Any], label: str) -> CheckResult:
+        """Per-port state from GET /devices/{id}. The port list is read from
+        interfaces.ports with idx, state, speedMbps, maxSpeedMbps and poe; this
+        shape is unverified against a live console. VLAN and PoE watts are not
+        in this API, so they stay None (unknown, never zero)."""
+        m = self.monitor
+        body = await self.get_capped(f"{m.base_path}/sites/{sid}/devices/{dev['id']}")
+        if not isinstance(body, dict):
+            raise ValueError("device detail is not an object")
+        ifaces = body.get("interfaces")
+        raw = ifaces.get("ports") if isinstance(ifaces, dict) else None
+        ports: dict[str, dict[str, Any]] = {}
+        for p in raw if isinstance(raw, list) else []:
+            if not isinstance(p, dict) or not isinstance(p.get("idx"), int)                     or isinstance(p.get("idx"), bool):
+                continue
+            ports[str(p["idx"])] = {
+                "speed_mbps": p.get("speedMbps"), "max_speed_mbps": p.get("maxSpeedMbps"),
+                "state": p.get("state"), "poe": p.get("poe"), "vlan": None, "poe_w": None}
+        up = sum(1 for v in ports.values() if v["state"] == "UP")
+        return CheckResult.ok(f"{label} {up}/{len(ports)} ports up", value=float(up),
+                              detail={"ports": ports})
 
 
 class UniFiProtectCheck(_UniFiCheck):

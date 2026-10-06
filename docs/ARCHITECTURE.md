@@ -769,3 +769,7 @@ ControlAction
 Other seams left open: a `signing_key` slot in settings that is unused in
 phase 1, an `actions` section on the host view that stays empty, and an
 audit action namespace (`control.*`) reserved for phase 2.
+
+### UniFi ports mode
+
+The `unifi_network` check has a `ports` mode that issues one GET for a device detail with redirects disabled and a 1 MB body cap. It returns `detail.ports` keyed by the string port index, with `speed_mbps`, `max_speed_mbps`, `state`, `poe`, and `vlan` and `poe_w` fixed at None. `live_port` in `web.py` reads that detail for a matched UniFi port. The field names under `interfaces.ports` are unverified against a live console.

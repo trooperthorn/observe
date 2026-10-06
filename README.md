@@ -27,7 +27,7 @@ The source lives at https://github.com/trooperthorn/observe.
 | `proxmox` | REST API with a token: `node`, `node_cpu`, `node_memory`, `guest` (VM or CT), `storage` | days up, % |
 | `vsphere` | ESXi or vCenter via pyVmomi: `host`, `host_cpu`, `host_memory`, `datastore`, `vm` | days up, % |
 | `homeassistant` | REST API: `api`, one `entity` (state or number), `unavailable` entity count, pending `updates` | entity value, counts |
-| `unifi_network` | Integration API: `devices` online summary, one `device`, `device_cpu`, `device_memory`, `firmware` updates | %, counts |
+| `unifi_network` | Integration API: `devices` online summary, one `device`, `device_cpu`, `device_memory`, `firmware` updates, `ports` per-port speed, state and PoE state of one switch | %, counts |
 | `unifi_protect` | Integration API: `cameras` connected summary, one `camera`, `info` | not-connected count |
 | `technitium` | HTTP API: `stats` (SERVFAIL rate over the last hour or day), `update` available | % SERVFAIL |
 | `pushed_host` | No poll: reads the newest batch a hostwatch agent pushed; Good, Warning or Critical per component, plus staleness | seconds since last batch |
@@ -194,7 +194,10 @@ an `X-API-KEY` header from Settings > Control Plane > Integrations; one key
 serves both. Network list endpoints are paged, and every page is read.
 `devices` fails when any adopted device is not ONLINE (use `ignore` for
 stale records); `device_cpu` and `device_memory` read
-`/statistics/latest`. For a standalone (non-UniFi OS) controller set
+`/statistics/latest`. `ports` reads `GET /devices/{id}` (body capped at 1 MB, redirects
+not followed) and reports `detail.ports` keyed by port index with `speed_mbps`,
+`max_speed_mbps`, `state` and `poe`; VLAN and PoE watts are not in this API and stay
+unknown. The port list shape is unverified against a live console. For a standalone (non-UniFi OS) controller set
 `base_path: /integration/v1`. Protect's Integration API reports whether a
 camera is connected, not whether it is recording, so these checks do not
 claim anything about recording.
