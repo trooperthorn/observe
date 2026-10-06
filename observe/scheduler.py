@@ -244,8 +244,13 @@ class Scheduler:
                         self.config.server.retention_days, self.config.server.audit_retention_days)
                     if removed:
                         log.info("pruned %d result rows", removed)
-            except Exception:  # noqa: BLE001
+                    await self.store.note_maintenance(removed)
+            except Exception as err:  # noqa: BLE001
                 log.exception("maintenance failed")
+                try:
+                    await self.store.note_maintenance(0, f"{type(err).__name__}: {err}")
+                except Exception:  # noqa: BLE001
+                    log.exception("could not record the maintenance error")
             passes += 1
             await asyncio.sleep(300)
 

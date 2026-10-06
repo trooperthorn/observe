@@ -144,6 +144,14 @@ retention, so the policy keeps the longest of the global level and the overrides
 metric kept for less are deleted by row, but a continuous aggregate cannot be deleted from, so
 its metrics keep the longest level (a known difference from SQLite).
 
+The admin retention page `GET /admin/retention` (admin session, in the Admin menu) is written by
+the server (`observe/retention_page.py`) so the CSRF token and the last-run table are in the first
+response; `admin-retention.js` saves the form with `PUT /api/admin/retention`. The table reads
+`rollup_state`: one row per rollup level (`5m`, `1h`, `1d`) with the time and rows of its last
+fold, and one `compaction` row that the maintenance loop writes after each pass (poll rows
+removed, and the error text, cut to 200 characters, when the pass failed). The page names the
+storage backend and never the DSN or its password.
+
 With the TimescaleDB extension (`storage.timescaledb: auto` uses it when the database offers it,
 `on` requires it, `off` never uses it) `host_samples` is a hypertable chunked by day on `ts_s`
 (whole seconds, kept by a trigger because `ts` is a REAL), and `rollup_5m`, `rollup_1h` and

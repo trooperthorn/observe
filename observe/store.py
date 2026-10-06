@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from .checks.base import CheckResult
 from .ingest.schema import Batch, normalize_severity
 from .state import Transition
-from .storage import Conn, Storage, open_storage
+from .storage import Conn, Storage, open_storage, rollups
 
 if TYPE_CHECKING:
     from .plugins import LoadedPlugins
@@ -320,6 +320,11 @@ class Store:
                 "INSERT INTO audit (ts, actor, kind, method, path, status, remote, detail) "
                 "VALUES (?,?,?,?,?,?,?,?)", row),
             touches=("audit",))
+
+    async def note_maintenance(self, rows: int, error: str = "") -> None:
+        """Record the outcome of a compaction pass for the admin retention page."""
+        now = time.time()
+        await self.storage.write(lambda db: rollups.note_maintenance(db, now, rows, error))
 
     async def prune(self, retention_days: int, audit_retention_days: int = 365) -> int:
         """Drop poll rows and host samples past retention. Transitions and host

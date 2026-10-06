@@ -618,7 +618,7 @@ fails partway, such as a refused user, a login that cannot create a session, a
 failed key action or a batch the store could not write, a separate `*_failed`
 or `*_error` row says so. Passwords, tokens and keys are never written, paths
 are sanitized, and `GET /api/audit` (admin session only; parameters `limit`,
-`kind` and `before`) returns the rows newest first. The audit page at `/audit` (Admin menu,
+`kind` and `before`) returns the rows newest first. The retention page at `/admin/retention` (Admin menu, admins only) edits the global and per-metric retention settings and shows the last compaction and rollup run with its row counts and any error, and the storage backend name but never the DSN. The audit page at `/audit` (Admin menu,
 admin only) shows the newest 500 rows in a sortable table with filters for actor, kind, status
 (OK, Refused, Failed) and time range, and pages of 25 or 100.
 

@@ -33,11 +33,12 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from . import audit
 from . import auth as authmod
-from . import enrol, hosttasks, layout, retention, scripts, taskscripts
+from . import enrol, hosttasks, layout, retention, retention_page, scripts, taskscripts
 from . import hostview
 from .alerts import Alerter
 from .checks.host import LATEST_WINDOW_S
 from .config import Config
+from .storage import rollups
 from .infra import InfraError, InfraService
 from .infra_map import MapService
 from .infra_match import LivePort, Matcher, PortMatch
@@ -864,6 +865,17 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         """The effective retention, compaction and rollup settings with their bounds and the
         per-metric overrides. Admin session; an ingest key is not a session and is refused."""
         return await retention.read_settings(store, config.server.retention_days)
+
+    @app.get("/admin/retention", include_in_schema=False)
+    async def retention_admin_page(sess: authmod.Session = Depends(guards.admin)) -> Response:
+        """The retention settings and the last compaction and rollup run, written by the server
+        so the CSRF token and the run table are in the first response. Admin session only. The
+        backend name is shown; the DSN never is."""
+        described = await retention.read_settings(store, config.server.retention_days)
+        states = await store.storage.fetchall(rollups.STATE_SQL)
+        html = retention_page.render(described, states, backend=store.storage.backend,
+                                     csrf=sess.csrf)
+        return Response(html, media_type="text/html")
 
     @app.put("/api/admin/retention", include_in_schema=False)
     async def put_retention(

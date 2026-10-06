@@ -38,10 +38,28 @@ def _table(name: str) -> str:
 
 ROLLUP_TABLES = (
     _table("rollup_5m"), _table("rollup_1h"), _table("rollup_1d"),
-    # One row per level: how far it has folded, and when and how much the last fold wrote.
+    # One row per level: how far it has folded, and when and how much the last fold wrote. The
+    # row named MAINTENANCE_LEVEL is the whole compaction pass: when it last ran and its error.
     "CREATE TABLE IF NOT EXISTS rollup_state (level TEXT PRIMARY KEY, upto INTEGER NOT NULL, "
-    "last_run REAL NOT NULL DEFAULT 0, last_rows INTEGER NOT NULL DEFAULT 0)",
+    "last_run REAL NOT NULL DEFAULT 0, last_rows INTEGER NOT NULL DEFAULT 0, "
+    "last_error TEXT NOT NULL DEFAULT '')",
 )
+
+
+MAINTENANCE_LEVEL = "compaction"
+MAX_ERROR_CHARS = 200
+
+
+def note_maintenance(db: Conn, now: float, rows: int, error: str) -> None:
+    """Record one compaction pass: when it ran, the poll rows it removed and its error, if any."""
+    db.execute(
+        "INSERT INTO rollup_state (level, upto, last_run, last_rows, last_error) "
+        "VALUES (?, 0, ?, ?, ?) ON CONFLICT (level) DO UPDATE SET last_run = excluded.last_run, "
+        "last_rows = excluded.last_rows, last_error = excluded.last_error",
+        (MAINTENANCE_LEVEL, now, rows, error[:MAX_ERROR_CHARS]))
+
+
+STATE_SQL = "SELECT level, last_run, last_rows, last_error FROM rollup_state ORDER BY level"
 
 
 def _view(name: str, source: str) -> str:
