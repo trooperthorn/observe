@@ -3,7 +3,8 @@ the summary views, on every storage backend.
 
 The clock is a fake that the test moves, the probes are scripted fakes, and the reachability
 probe of a pushed host is a recording fake, so nothing here waits or touches a network. The
-`storage` fixture runs each case on SQLite and, when OBSERVE_TEST_PG_DSN is set, on PostgreSQL."""
+`storage` fixture runs each case on SQLite, on the PostgreSQL dialect fake (no server) and,
+when OBSERVE_TEST_PG_DSN is set, on PostgreSQL."""
 
 from __future__ import annotations
 
@@ -17,13 +18,26 @@ from observe.checks.base import CheckResult, Result
 from observe.checks.host import PushedHostCheck
 from observe.ingest.schema import Batch
 from observe.scheduler import Scheduler
+from observe.storage import open_storage
 from observe.state import MonitorState, State, Transition
 
 from .conftest import make_config
 from .dbq import settle
-from .test_storage import _store_on, storage  # noqa: F401  (the fixture)
+from .fakes.pg_fake import PgFakeStorage
+from .test_storage import _store_on, live_pg
 
 T0 = 1_700_000_000.0
+
+
+@pytest.fixture(params=["sqlite", "postgres-fake", "postgres"])
+def storage(request, tmp_path):
+    if request.param == "postgres":
+        with live_pg() as s:  # skipped without OBSERVE_TEST_PG_DSN
+            yield s
+        return
+    s = PgFakeStorage() if request.param == "postgres-fake" else open_storage(str(tmp_path / "s.db"))
+    yield s
+    s.close()
 
 
 class Clock:

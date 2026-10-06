@@ -99,7 +99,12 @@ same transaction and mirrored in memory after the commit. The domains are `metri
 `store._lock`, `Store._run` and `Store._exec` no longer exist, and `tests/test_storage_ban.py`
 fails the build when code under `observe/` or `plugins/` imports a driver, opens a connection
 or reaches for them. The contract tests in `tests/test_storage.py` run against every backend;
-the PostgreSQL cases run only when `OBSERVE_TEST_PG_DSN` is set and skip otherwise.
+the PostgreSQL cases run only when `OBSERVE_TEST_PG_DSN` is set and skip otherwise. The re-check
+cases in `tests/test_recheck.py` also run on a PostgreSQL dialect fake (`tests/fakes/pg_fake.py`):
+the SQLite engine behind the same rewrite the PostgreSQL connection applies, which records each
+rewritten statement and refuses any SQLite-only spelling. `tests/test_pg_summary.py` checks the
+summary-view and latest-table reads as PostgreSQL text and that the TimescaleDB step compiles. The
+fake proves the SQL text and the results callers expect, not server types, planning or locking.
 
 ### PostgreSQL and TimescaleDB backend
 

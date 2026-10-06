@@ -8,6 +8,7 @@ PostgreSQL case gets its own schema, dropped afterwards, so cases never see each
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import sqlite3
 import threading
@@ -38,13 +39,10 @@ def _pg_dsn() -> str:
     return dsn
 
 
-@pytest.fixture(params=["sqlite", "postgres"])
-def storage(request, tmp_path):
-    if request.param == "sqlite":
-        s = open_storage(str(tmp_path / "s.db"))
-        yield s
-        s.close()
-        return
+@contextlib.contextmanager
+def live_pg(timescale: str | None = None):
+    """A storage on a throwaway schema of the server in OBSERVE_TEST_PG_DSN; the case is skipped
+    when there is none."""
     import psycopg
     from psycopg.conninfo import make_conninfo
 
@@ -54,11 +52,24 @@ def storage(request, tmp_path):
         admin.execute(f"CREATE SCHEMA {schema}")
     scoped = make_conninfo(dsn, options=f"-c search_path={schema},public")
     s = open_storage("", backend="postgres", dsn=scoped,
-                     timescale=os.environ.get("OBSERVE_TEST_PG_TIMESCALE", "auto"))
-    yield s
-    s.close()
-    with psycopg.connect(dsn, autocommit=True) as admin:
-        admin.execute(f"DROP SCHEMA {schema} CASCADE")
+                     timescale=timescale or os.environ.get("OBSERVE_TEST_PG_TIMESCALE", "auto"))
+    try:
+        yield s
+    finally:
+        s.close()
+        with psycopg.connect(dsn, autocommit=True) as admin:
+            admin.execute(f"DROP SCHEMA {schema} CASCADE")
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def storage(request, tmp_path):
+    if request.param == "sqlite":
+        s = open_storage(str(tmp_path / "s.db"))
+        yield s
+        s.close()
+        return
+    with live_pg() as s:
+        yield s
 
 
 @pytest.fixture
