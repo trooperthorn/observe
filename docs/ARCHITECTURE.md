@@ -215,6 +215,22 @@ retention are the ordinary ones. Sources are `homeassistant` (run state, safe an
 versions, pending updates, entity counts, unavailable count), `hassio` (Core, Supervisor and
 add-on CPU and memory percent, host disk) and `ha_soc` (posture, open detections, users at
 risk, suspicious activity). A source with no matching sensor is reported absent, never as zero.
+
+An `snmp` monitor in mode `cpu`, `memory`, `storage` or `interface` with `host_name` set does the
+same for SNMP: after a successful poll `observe/checks/snmp.py` builds a one-source (`snmp`)
+`Batch` for that host and calls `Store.ingest_batch` in process. The host page then shows
+`cpu_pct` and per-core load under CPU, `mem_used_pct` and byte totals under Memory,
+`disk_used_pct` and byte totals per mount under Disks, and `if_up`, rates, speed and utilization
+under a Network interfaces section. Several monitors may share one host name, because each series
+is keyed by source, metric and labels. A failed poll stores nothing, so the host goes stale
+instead of showing zeros, and a watched interface that is down is stored as `if_up` 0, a Warning.
+The `storage` mode reads `hrStorageTable` fixed disks (`.1.3.6.1.2.1.25.2.1.4`) and computes
+`capacity = hrStorageAllocationUnits * hrStorageSize` and `used = hrStorageAllocationUnits *
+hrStorageUsed`, per RFC 2790 and ha_Int_soc `docs/SNMPV3.md`. The host listing and the stale
+window use the shortest interval among the SNMP monitors for that name. Use the same
+`host_name` as the Home Assistant host mode monitor to see the HA SOC Probe readings beside it.
+The hrStorage description strings and unit sizes the Probe reports are unverified against a live
+Probe; the test fixture is shaped from the contract documents.
 `hostview.py` grades the `ha` section (not running Critical; update pending, safe or recovery
 mode, and 25 or more unavailable entities Warning) and the `containers` section (CPU and memory
 percent Warning at 85, Critical at 95); `hassio` disk used percent is graded under disks. The

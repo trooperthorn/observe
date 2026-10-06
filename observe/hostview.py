@@ -110,9 +110,12 @@ _POOL_STATES = {"online": GOOD, "degraded": CRITICAL, "faulted": CRITICAL,
 RULES: dict[str, dict[tuple[str, str], Grader]] = {
     "cpu": {("cpu", "utilization_pct"): _above(90, 98), ("cpu", "load"): _info,
             ("cpu", "freq_mhz"): _info, ("cpu", "idle_residency_pct"): _info,
-            ("cpu", "core_throttle_count"): _info, ("cpu", "package_throttle_count"): _info},
+            ("cpu", "core_throttle_count"): _info, ("cpu", "package_throttle_count"): _info,
+            ("snmp", "cpu_pct"): _above(90, 98), ("snmp", "cpu_core_pct"): _info},
     "memory": {("memory", "mem_total"): _info, ("memory", "mem_available"): _info,
-               ("memory", "swap_total"): _info, ("memory", "swap_free"): _info},
+               ("memory", "swap_total"): _info, ("memory", "swap_free"): _info,
+               ("snmp", "mem_used_pct"): _above(90, 97), ("snmp", "mem_total_bytes"): _info,
+               ("snmp", "mem_used_bytes"): _info},
     "power": {("rapl", "watts"): _info, ("hwmon", "power"): _info},
     "temperatures": {("hwmon", "temp"): _above(80, 90), ("thermalctl", "zone_temp"): _above(80, 90),
                      ("rpi", "soc_temp"): _above(70, 80)},
@@ -144,7 +147,9 @@ RULES: dict[str, dict[tuple[str, str], Grader]] = {
               ("win_smartctl", "smart_passed"): lambda v, _l: (GOOD, "") if v else (CRITICAL, "SMART failed"),
               ("truenas", "disk_temp_c"): _above(50, 60),
               ("hassio", "disk_used_pct"): _above(85, 95), ("hassio", "disk_free_gb"): _info,
-              ("hassio", "disk_used_gb"): _info, ("hassio", "disk_total_gb"): _info},
+              ("hassio", "disk_used_gb"): _info, ("hassio", "disk_total_gb"): _info,
+              ("snmp", "disk_used_pct"): _above(85, 95), ("snmp", "disk_total_bytes"): _info,
+              ("snmp", "disk_used_bytes"): _info},
     "ups": {("nut", "ups_status_flag"): _ups_flag,
             ("nut", "battery_charge_pct"): _below(50, 20), ("nut", "battery_runtime_s"): _info,
             ("nut", "input_voltage_v"): _info, ("nut", "ups_load_pct"): _above(80, 95)},
@@ -163,9 +168,14 @@ RULES: dict[str, dict[tuple[str, str], Grader]] = {
            ("ha_soc", "users_at_risk"): _info, ("ha_soc", "suspicious_activity"): _info},
     "containers": {("hassio", "cpu_percent"): _above(85, 95),
                    ("hassio", "memory_percent"): _above(85, 95)},
+    # Interfaces read over SNMP. An interface the admin chose to watch that is not up is a
+    # Warning, never silently zero traffic.
+    "network": {("snmp", "if_up"): lambda v, _l: (GOOD, "") if v else (WARNING, "interface is down"),
+                ("snmp", "if_in_bps"): _info, ("snmp", "if_out_bps"): _info,
+                ("snmp", "if_speed_mbps"): _info, ("snmp", "if_util_pct"): _above(70, 90)},
 }
 SECTIONS = ("cpu", "memory", "power", "temperatures", "fans", "raid", "zfs", "disks", "ups",
-            "ha", "containers")
+            "ha", "containers", "network")
 
 
 def _sources_of(section: str) -> list[str]:

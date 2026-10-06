@@ -17,7 +17,7 @@ The source lives at https://github.com/trooperthorn/observe.
 | `http` | status code, optional body text, private CA support | response time, ms |
 | `dns` | record resolves, optional expected answers | query time, ms |
 | `tls_cert` | chain and hostname validate, days to expiry | days remaining (default WARN 21, FAIL 7) |
-| `snmp` | `oid`, `uptime`, `interface`, `cpu`, `memory` over v2c or v3 | OID value, days up, % utilization, % CPU, % RAM |
+| `snmp` | `oid`, `uptime`, `interface`, `cpu`, `memory`, `storage` over v2c or v3; with `host_name` the cpu, memory, storage and interface readings also appear on that host's page | OID value, days up, % utilization, % CPU, % RAM, % of the fullest disk |
 | `winrm` | `service` state, `cpu`, `memory`, `disk`, or a `powershell` script | %, or the script's number |
 | `wmi` | a WQL query over WinRM with `first/sum/avg/max/min/count` | the aggregate |
 | `mqtt` | broker connect/auth, or a topic's payload | payload, if `numeric: true` |
@@ -88,7 +88,13 @@ follows the user between devices, and hiding a card never deletes data. Also `/a
 HOST-RESOURCES-MIB (`hrProcessorLoad`, `hrStorageRam`). Some agents do not
 populate these; the check then says so instead of reporting zero. On Linux
 net-snmp, `hrStorageRam` "used" includes page cache, so memory reads higher
-than real pressure.
+than real pressure. The `storage` mode reads the fixed disks of `hrStorageTable` and
+computes bytes as allocation units times size (and times used), never the raw count,
+because net-snmp may raise the unit for a large filesystem; `mount` limits it to one
+`hrStorageDescr`. For the Home Assistant host, point the monitors at the HA SOC Probe
+add-on over SNMPv3 and give them the same `host_name` as the `homeassistant` host mode
+monitor (default `homeassistant`); the Probe reports the filesystems mounted into its own
+container.
 
 **Windows (WinRM and WMI).** Both use WS-Management on 5986 with TLS
 validation on by default. Point `ca_bundle` at your internal root if the

@@ -44,6 +44,8 @@ def build_check(monitor: Any, config: Config, store: Any = None) -> Check:
         return PushedHostCheck(monitor, config, store)
     if cls is HomeAssistantCheck:
         return HomeAssistantCheck(monitor, config, store)
+    if cls is SnmpCheck:
+        return SnmpCheck(monitor, config, store)
     return cls(monitor, config)
 
 

@@ -763,10 +763,19 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     ha_hosts = {m.host_name: m for m in scheduler.monitors
                 if m.type == "homeassistant" and m.mode == "host" and m.enabled}
 
+    # An SNMP monitor with host_name stores its readings under that host, so the host page shows
+    # CPU, memory, disks and interfaces from SNMP. The shortest interval sets the stale window.
+    snmp_hosts: dict[str, Any] = {}
+    for m in scheduler.monitors:
+        if m.type == "snmp" and m.host_name and m.enabled:
+            cur = snmp_hosts.get(m.host_name)
+            if cur is None or config.effective(m, "interval") < config.effective(cur, "interval"):
+                snmp_hosts[m.host_name] = m
+
     async def host_view(host: str, row: dict[str, Any] | None) -> dict[str, Any] | None:
         mon = pushed.get(host)
         seen = row is not None
-        ha_mon = ha_hosts.get(host) if mon is None else None
+        ha_mon = (ha_hosts.get(host) or snmp_hosts.get(host)) if mon is None else None
         if row is None:
             if mon is None and ha_mon is None:
                 return None
@@ -798,7 +807,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         to its enrolment page. Session only."""
         rows = {r["host"]: r for r in await store.host_rows()}
         out = []
-        for name in sorted({*rows, *pushed, *ha_hosts}):
+        for name in sorted({*rows, *pushed, *ha_hosts, *snmp_hosts}):
             view = await host_view(name, rows.get(name))
             if view is not None:
                 out.append(hostview.summarize(view))

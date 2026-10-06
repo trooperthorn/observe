@@ -231,6 +231,19 @@ monitors:
     credential: snmp-v3-core
     mode: uptime                    # WARNs once when the agent restarts
 
+  # Disks over SNMP. With host_name the readings (and any cpu, memory or interface
+  # monitor that names the same host) also show on that host's page. Use the same name
+  # as a homeassistant host mode monitor to see the HA SOC Probe beside its API readings.
+  - name: HA Probe disks
+    group: servers
+    type: snmp
+    host: ha.lab.example
+    credential: snmp-v3-core
+    mode: storage
+    mount: /data                    # optional: one hrStorageDescr; default every fixed disk
+    host_name: homeassistant
+    thresholds: {direction: above, warn: 85, crit: 95}
+
   - name: Pi CPU
     group: servers
     type: snmp

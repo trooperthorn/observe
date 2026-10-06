@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
+from collections.abc import Callable
 from typing import Any
 
 from ..config import SnmpV2Credential, SnmpV3Credential
+from ..ingest.schema import MAX_TEXT, Batch
 from .base import Check, CheckResult, Result
 
 SYS_UPTIME = ".1.3.6.1.2.1.1.3.0"
@@ -34,10 +37,14 @@ IF_HC_OUT_OCTETS = ".1.3.6.1.2.1.31.1.1.1.10"
 IF_HIGH_SPEED = ".1.3.6.1.2.1.31.1.1.1.15"  # Mbit/s
 HR_PROCESSOR_LOAD = ".1.3.6.1.2.1.25.3.3.1.2"
 HR_STORAGE_TYPE = ".1.3.6.1.2.1.25.2.3.1.2"
+HR_STORAGE_DESCR = ".1.3.6.1.2.1.25.2.3.1.3"
 HR_STORAGE_UNITS = ".1.3.6.1.2.1.25.2.3.1.4"
 HR_STORAGE_SIZE = ".1.3.6.1.2.1.25.2.3.1.5"
 HR_STORAGE_USED = ".1.3.6.1.2.1.25.2.3.1.6"
 HR_STORAGE_RAM = ".1.3.6.1.2.1.25.2.1.2"
+HR_STORAGE_FIXED_DISK = ".1.3.6.1.2.1.25.2.1.4"
+AGENT_VERSION = "observe-snmp-host"
+MAX_DISKS = 64
 
 IF_STATUS = {1: "up", 2: "down", 3: "testing", 4: "unknown", 5: "dormant",
              6: "notPresent", 7: "lowerLayerDown"}
@@ -49,8 +56,11 @@ class SnmpError(Exception):
 
 
 class SnmpCheck(Check):
-    def __init__(self, monitor: Any, config: Any) -> None:
+    def __init__(self, monitor: Any, config: Any, store: Any = None,
+                 clock: Callable[[], float] = time.time) -> None:
         super().__init__(monitor, config)
+        self.store = store
+        self.clock = clock
         self._if_index: str | None = None
         self._last_octets: tuple[float, int, int] | None = None  # (t, in, out)
         self._last_uptime: int | None = None
@@ -115,9 +125,21 @@ class SnmpCheck(Check):
 
     async def probe(self) -> CheckResult:
         try:
-            return await getattr(self, f"_mode_{self.monitor.mode}")()
+            res = await getattr(self, f"_mode_{self.monitor.mode}")()
         except SnmpError as err:
             return CheckResult.fail(f"SNMP: {err}")
+        await self._publish(res)
+        return res
+
+    async def _publish(self, res: CheckResult) -> None:
+        """Store this poll's readings under host_name so the host page shows them. A poll that
+        read nothing stores nothing, and the host then goes stale rather than showing zeros."""
+        host = self.monitor.host_name
+        if not host or self.store is None:
+            return
+        batch = host_batch(host, self.monitor.mode, res, self.clock())
+        if batch is not None:
+            await self.store.ingest_batch(batch, {})
 
     async def _mode_oid(self) -> CheckResult:
         oid = self.monitor.oid if self.monitor.oid.startswith(".") else "." + self.monitor.oid
@@ -171,9 +193,11 @@ class SnmpCheck(Check):
         label = IF_STATUS.get(status, str(status))
         if status != 1:
             return CheckResult.fail(f"{self.monitor.interface} is {label}",
-                                    detail={"ifIndex": i})
+                                    detail={"ifIndex": i, "name": self.monitor.interface,
+                                            "oper_status": label})
         now = asyncio.get_running_loop().time()
-        detail: dict[str, Any] = {"ifIndex": i}
+        detail: dict[str, Any] = {"ifIndex": i, "name": self.monitor.interface,
+                                  "oper_status": label}
         try:
             link_speed = int(vals.get(oids[3], "0") or 0)
         except ValueError:
@@ -226,4 +250,94 @@ class SnmpCheck(Check):
         return CheckResult.ok(
             f"RAM {pct:.0f}% used ({used*units/2**30:.1f} of {size*units/2**30:.1f} GiB)",
             value=round(pct, 1), unit="%",
+            detail={"total_bytes": size * units, "used_bytes": used * units},
         )
+
+    async def _mode_storage(self) -> CheckResult:
+        """Fixed disks from hrStorageTable. Bytes are allocation units times the count, never
+        the raw count (see storage_bytes). The value is the fullest selected disk, in percent."""
+        types = await self.walk(HR_STORAGE_TYPE)
+        disks = [i for i, t in types.items() if t == HR_STORAGE_FIXED_DISK]
+        if not disks:
+            return CheckResult.fail("no fixed disk entry in hrStorageTable on this agent")
+        descr = await self.walk(HR_STORAGE_DESCR)
+        units = await self.walk(HR_STORAGE_UNITS)
+        sizes = await self.walk(HR_STORAGE_SIZE)
+        used = await self.walk(HR_STORAGE_USED)
+        rows: list[dict[str, Any]] = []
+        for i in sorted(disks, key=lambda x: (len(x), x)):
+            mount = descr.get(i, f"storage {i}")
+            if self.monitor.mount and mount != self.monitor.mount:
+                continue
+            try:
+                total, in_use = storage_bytes(units.get(i), sizes.get(i), used.get(i))
+            except ValueError:
+                continue
+            if total <= 0:
+                continue
+            rows.append({"mount": mount[:MAX_TEXT], "total_bytes": total, "used_bytes": in_use,
+                         "used_pct": round(in_use / total * 100, 1)})
+        rows = rows[:MAX_DISKS]
+        if not rows:
+            what = f"mount {self.monitor.mount!r}" if self.monitor.mount else "a usable disk"
+            return CheckResult.fail(f"hrStorageTable has no {what}")
+        worst = max(rows, key=lambda r: r["used_pct"])
+        return CheckResult.ok(
+            f"{len(rows)} disk(s); fullest {worst['mount']} {worst['used_pct']:.0f}% "
+            f"({worst['used_bytes']/2**30:.1f} of {worst['total_bytes']/2**30:.1f} GiB)",
+            value=worst["used_pct"], unit="%", detail={"disks": rows})
+
+
+def storage_bytes(units: str | None, size: str | None, used: str | None) -> tuple[int, int]:
+    """(capacity_bytes, used_bytes) for one hrStorage row, per RFC 2790 and ha_Int_soc
+    docs/SNMPV3.md: allocation units times size, and allocation units times used. The size is
+    never divided on its own, because net-snmp may raise the unit so a large filesystem fits
+    in the 32-bit MIB integer. Raises ValueError for a missing or non-numeric field."""
+    if units is None or size is None or used is None:
+        raise ValueError("incomplete hrStorage row")
+    u, sz, us = int(units), int(size), int(used)
+    if u <= 0 or sz < 0 or us < 0:
+        raise ValueError("invalid hrStorage row")
+    return u * sz, u * us
+
+
+def host_batch(host: str, mode: str, res: CheckResult, now: float) -> Batch | None:
+    """A hostwatch-schema batch from one SNMP result, source "snmp". Shapes follow the detail
+    each mode returns; a result with nothing to show gives None."""
+    samples: list[dict[str, Any]] = []
+
+    def add(metric: str, value: float | None, unit: str = "", **labels: str) -> None:
+        samples.append({"source": "snmp", "metric": metric, "value": value, "unit": unit,
+                        "labels": {k: str(v)[:MAX_TEXT] for k, v in labels.items()}, "ts": now})
+
+    d = res.detail or {}
+    if mode == "cpu" and res.value is not None:
+        add("cpu_pct", res.value, "%")
+        for n, load in enumerate(d.get("per_core", [])[:256]):
+            add("cpu_core_pct", float(load), "%", core=str(n))
+    elif mode == "memory" and res.value is not None and "total_bytes" in d:
+        add("mem_used_pct", res.value, "%")
+        add("mem_total_bytes", float(d["total_bytes"]), "bytes")
+        add("mem_used_bytes", float(d["used_bytes"]), "bytes")
+    elif mode == "storage" and d.get("disks"):
+        for disk in d["disks"]:
+            add("disk_used_pct", disk["used_pct"], "%", mount=disk["mount"])
+            add("disk_total_bytes", float(disk["total_bytes"]), "bytes", mount=disk["mount"])
+            add("disk_used_bytes", float(disk["used_bytes"]), "bytes", mount=disk["mount"])
+    elif mode == "interface" and "ifIndex" in d:
+        name = str(d.get("name", d["ifIndex"]))
+        status = str(d.get("oper_status", "up"))
+        up = status == "up"
+        add("if_up", 1.0 if up else 0.0, "", interface=name, status=status)
+        for key, metric, unit in (("in_bps", "if_in_bps", "bit/s"),
+                                  ("out_bps", "if_out_bps", "bit/s"),
+                                  ("speed_mbps", "if_speed_mbps", "Mbit/s")):
+            if key in d:
+                add(metric, float(d[key]), unit, interface=name)
+        if res.value is not None and up:
+            add("if_util_pct", res.value, "%", interface=name)
+    if not samples:
+        return None
+    return Batch.model_validate({
+        "schema_version": 1, "agent_version": AGENT_VERSION, "host": host, "platform": "snmp",
+        "sent_at": now, "sources": [{"source": "snmp", "available": True}], "samples": samples})

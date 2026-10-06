@@ -8,6 +8,7 @@ const SECTIONS = [
   ["cpu", "CPU"], ["memory", "Memory"], ["power", "Power"], ["temperatures", "Temperatures"],
   ["fans", "Fans and controller"], ["raid", "RAID"], ["zfs", "ZFS pools"], ["disks", "Disks"],
   ["ups", "UPS"], ["ha", "Home Assistant"], ["containers", "Containers"],
+  ["network", "Network interfaces"],
   ["alerts", "Alerts"],
 ];
 const KPI_SECTIONS = ["cpu", "temperatures", "fans", "disks"];

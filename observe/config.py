@@ -370,9 +370,13 @@ class SnmpMonitor(MonitorBase):
     host: str
     port: int = 161
     credential: str
-    mode: Literal["oid", "uptime", "interface", "cpu", "memory"] = "oid"
+    mode: Literal["oid", "uptime", "interface", "cpu", "memory", "storage"] = "oid"
     oid: str | None = None  # mode oid
     interface: str | None = None  # mode interface: ifName, ifDescr, or numeric ifIndex
+    mount: str | None = None  # mode storage: only the hrStorageDescr that equals this
+    # cpu, memory, storage and interface modes: also store the readings under this host name so
+    # they appear on that host's page (use the same name as a Home Assistant host mode monitor).
+    host_name: str | None = Field(None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def _mode_args(self) -> "SnmpMonitor":
@@ -380,6 +384,8 @@ class SnmpMonitor(MonitorBase):
             raise ValueError("mode oid requires oid")
         if self.mode == "interface" and not self.interface:
             raise ValueError("mode interface requires interface")
+        if self.host_name and self.mode in ("oid", "uptime"):
+            raise ValueError("host_name needs mode cpu, memory, storage or interface")
         return self
 
 
