@@ -31,7 +31,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from .. import audit
+from .. import audit, tiers
 from ..config import Config
 from ..store import Store
 from .boot import classify_events
@@ -220,5 +220,22 @@ def build_router(config: Config, store: Store,
         if duplicate:
             out["duplicate"] = True
         return JSONResponse(out)
+
+    @router.get("/internal/v1/agent-config", include_in_schema=False)
+    async def agent_config(request: Request) -> JSONResponse:
+        """The polling rates for the host the ingest key is bound to (section 10.1). The host is
+        taken from the key, never from the request, so an agent can read only its own rates. The
+        same limits and denial audit as ingest apply, and a key of another scope is refused."""
+        peer = request.client.host if request.client else "unknown"
+        if not limiter.allow(peer):
+            return await deny(request, 429, "rate limit exceeded")
+        key = _bearer(request)
+        bound = await key_host(store, key) if key else None
+        if key is None or bound is None:
+            return await deny(request, 401, "missing or invalid ingest key")
+        _, host = bound
+        glob, hosts = await store.storage.read(tiers.load)
+        return JSONResponse({"host": host, "intervals": tiers.effective(host, glob, hosts)},
+                            headers={"Cache-Control": "no-store"})
 
     return router

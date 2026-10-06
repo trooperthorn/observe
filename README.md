@@ -86,6 +86,16 @@ metric has no data for a gap or fewer than X of the last Y polls returned data. 
 after the condition has been false for N polls, so a value at the line does not flap. Rules are
 validated and stored in the database; they are not yet connected to polling, ingest or the console.
 
+### Polling tiers
+
+Agents poll in five tiers: availability (default 30 s), device metrics (60 s), storage health
+(15 min), SMART (1 h) and inventory (1 h). An admin changes the global rates and sets a per-host
+override with `GET` and `PUT /api/admin/tiers`. Each rate must be inside a fixed range per tier (for
+example availability 5 to 3,600 s), and an override must name a host that has an ingest key. An agent
+reads its own effective rates with `GET /internal/v1/agent-config` and its host ingest key; the host
+comes from the key, so it never sees another host's rates. Every change is audited with its old and
+new values.
+
 Availability and the hourly series behind forecasts are read from the summary
 views (`metric_5m`, `metric_hourly`), not from raw poll rows.
 

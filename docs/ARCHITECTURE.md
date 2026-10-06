@@ -193,6 +193,21 @@ loads the values before the first poll and again after each save (`Scheduler.app
 value, then the saved global value, then the config default. The page `/admin/recheck` is written by
 `observe/recheck_page.py` and saved by `admin-recheck.js`.
 
+The polling tiers (`observe/tiers.py`) are availability, device metrics, storage health, SMART and
+inventory, each with a default rate and a minimum and maximum in seconds (section 10.1 of the data
+design). The saved global rates and the per-host overrides are the `app_settings` keys `tiers.global`
+and `tiers.hosts` (one JSON value of host name to rates), written through `Storage.write` on both
+backends together with one `tier_rates_changed` audit row holding the old and new values. `GET` and
+`PUT /api/admin/tiers` need an admin session, the PUT needs the CSRF token, and a refused value answers
+422 and writes `tier_rates_failed`. An override must name a host with an unrevoked `wpi` key. For one
+host the effective rate is its override, then the saved global value, then the default.
+`GET /internal/v1/agent-config` (in `observe/ingest/api.py`) returns `{"host", "intervals"}` for the
+host the bearer `wpi` key is bound to. It uses the ingest rate limit and denial audit, takes the host
+from the key and never from the request, refuses a key of another scope with 401, and answers with
+`Cache-Control: no-store`. The agent reads it at start and after each interval, so a console change
+applies without visiting the host. Wiring the agent scheduler and the staleness check to these rates
+is a later slice.
+
 The threshold rule engine (`observe/rules.py`) evaluates the rules of section 10.4 of the data design.
 A rule is one of four kinds: `consecutive` (X polls in a row), `ratio` (X of the last Y polls),
 `window` (min, max or average over a time window) and `missing` (no data for a gap, or fewer than X of

@@ -34,7 +34,7 @@ from . import __version__
 from . import audit
 from . import auth as authmod
 from . import (enrol, hosttasks, layout, recheck_page, recheck_settings, retention,
-               retention_page, scripts, taskscripts)
+               retention_page, scripts, taskscripts, tiers)
 from . import hostview
 from .alerts import Alerter
 from .checks.host import LATEST_WINDOW_S
@@ -938,6 +938,39 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         glob, saved = await store.storage.read(recheck_settings.load)
         scheduler.apply_recheck(glob, saved)
         return JSONResponse(recheck_settings.describe(config, glob, saved))
+
+    async def tiers_view() -> dict[str, Any]:
+        glob, hosts = await store.storage.read(tiers.load)
+        known = await store.storage.read(tiers.known_hosts)
+        return tiers.describe(glob, hosts, known)
+
+    @app.get("/api/admin/tiers", include_in_schema=False)
+    async def get_tiers(_: authmod.Session = Depends(guards.admin)) -> dict[str, Any]:
+        """The global polling rates, the per-host overrides and the bounds. Admin session; an
+        ingest key is not a session and is refused."""
+        return await tiers_view()
+
+    @app.put("/api/admin/tiers", include_in_schema=False)
+    async def put_tiers(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Change global rates (`global`, null resets one) and, with `hosts`, replace the whole
+        per-host override map. Admin session and CSRF. A refused value answers 422 and is audited;
+        a change is audited with its old and new values and reaches an agent the next time it
+        reads its config."""
+        remote = request.client.host if request.client else ""
+        body = await body_of(request)
+        known = set(await store.storage.read(tiers.known_hosts))
+        try:
+            changes, overrides = tiers.validate(body, known)
+        except tiers.TierError as err:
+            await audit.record(store, "tier_rates_failed", actor=sess.username,
+                               method="PUT", path=tiers.PATH, status=422,
+                               remote=remote, detail={"reason": str(err)})
+            return JSONResponse({"detail": str(err)}, status_code=422)
+        await store.storage.write(lambda db: tiers.save(
+            db, changes, overrides, now=auth_clock(), actor=sess.username, remote=remote),
+            touches=("admin", "audit"))
+        return JSONResponse(await tiers_view())
 
     @app.post("/api/hosts", include_in_schema=False)
     async def create_host(
