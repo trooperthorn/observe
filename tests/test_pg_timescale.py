@@ -117,8 +117,8 @@ def test_the_setup_runs_in_autocommit_after_closing_any_open_transaction():
     assert raw.commits == 1 and raw.autocommit is True
     assert len(raw.calls) == len(pg_timescale.SETUP)
     assert all(raw.modes)
-    cagg = [sql for sql, _ in raw.calls if "timescaledb.continuous" in sql]
-    assert len(cagg) == 3 and all(m for sql, m in zip(raw.calls, raw.modes) if "continuous" in sql[0])
+    cagg = [m for (sql, _), m in zip(raw.calls, raw.modes) if "timescaledb.continuous" in sql]
+    assert cagg == [True, True, True]
 
 
 def test_integer_now_is_registered_before_any_policy_is_added():

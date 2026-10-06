@@ -23,11 +23,12 @@ INTEGER_NOW_FUNC = "observe_now_s"
 def integer_now_statement(relation: str, *, tolerant: bool = False) -> str:
     """Register the integer_now function, which every policy on an integer time column needs.
     A continuous aggregate normally inherits it from its source, so for those the call may be
-    refused as already set and is then ignored."""
+    refused as already set; the refusal is then reported as a warning, never hidden."""
     call = (f"set_integer_now_func('{relation}', '{INTEGER_NOW_FUNC}', replace_if_exists => TRUE)")
     if not tolerant:
         return f"SELECT {call}"
-    return f"DO $$ BEGIN PERFORM {call}; EXCEPTION WHEN others THEN NULL; END $$"
+    return (f"DO $$ BEGIN PERFORM {call}; EXCEPTION WHEN others THEN "
+            f"RAISE WARNING 'set_integer_now_func on {relation} failed: %', SQLERRM; END $$")
 
 
 SETUP = (

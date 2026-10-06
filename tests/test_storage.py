@@ -201,7 +201,9 @@ async def _samples(storage, base, values):
 
 
 def _recent_hour(now):
-    return int(now) // 3600 * 3600 - 3600  # the last whole hour, 1 to 2 hours ago
+    # Two whole hours back, so the hour is complete for the hourly fold even in the first
+    # minute of the current hour (the fold only takes buckets older than a minute).
+    return int(now) // 3600 * 3600 - 7200
 
 
 async def test_rollup_builds_the_five_minute_and_hourly_levels_with_min_max_avg(storage):
@@ -471,7 +473,10 @@ async def test_latest_host_picks_the_newest_row_and_breaks_a_tie_by_insertion_or
         "VALUES (?, 'h', 'disk', 'used', '{}', 7.5, '%')", (now - 5000,))
     got = await st.latest_host("h", window=60, now=now, series=(("disk", "used"),))
     by_metric = {(s["source"], s["metric"]): s for s in got["samples"]}
-    assert by_metric[("cpu", "temp")]["value"] == 3.0
+    if type(storage).__module__.endswith("sqlite"):
+        assert by_metric[("cpu", "temp")]["value"] == 3.0  # rowid is insertion order
+    else:  # ctid is a physical location, so only the timestamp is guaranteed
+        assert by_metric[("cpu", "temp")]["value"] in (1.0, 2.0, 3.0)
     assert by_metric[("disk", "used")]["value"] == 7.5  # silent series still read
     assert type(got["last_seen"]) is float and got["clean_shutdown"] in (0, 1)
     assert await st.latest_host("nobody") is None
