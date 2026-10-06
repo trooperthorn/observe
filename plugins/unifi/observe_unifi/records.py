@@ -61,6 +61,8 @@ class Device:
     ip: str
     firmware: str
     firmware_updatable: bool | None
+    # The id of the device this one is uplinked to, for the map feed. Not stored in the table.
+    uplink_device_id: str = ""
 
 
 def _text(value: Any) -> str:
@@ -73,14 +75,20 @@ def parse_device(site_id: str, raw: Any) -> Device | None:
     Field names (id, macAddress, name, model, state, ipAddress, firmwareVersion,
     firmwareUpdatable) follow ha_Int_soc docs/UNIFI-LOCAL-API-CONTRACT.md and its fakes.
     UNVERIFIED against a live console: that firmwareUpdatable is on the list row; an absent or
-    non-boolean value is stored as NULL (unknown), never as false.
+    non-boolean value is stored as NULL (unknown), never as false. Also UNVERIFIED: that a device
+    row names the device it is uplinked to, as `uplink.deviceId` or `uplinkDeviceId` (the contract
+    verifies `uplinkDeviceId` only on client rows); when neither is a string the device has no
+    device-level link.
     """
     if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not raw["id"]:
         return None
     fu = raw.get("firmwareUpdatable")
+    up = raw.get("uplink")
+    uplink = _text(up.get("deviceId")) if isinstance(up, dict) else ""
+    uplink = uplink or _text(raw.get("uplinkDeviceId"))
     return Device(site_id, raw["id"], _text(raw.get("macAddress")).lower(), _text(raw.get("name")),
                   _text(raw.get("model")), _text(raw.get("state")), _text(raw.get("ipAddress")),
-                  _text(raw.get("firmwareVersion")), fu if isinstance(fu, bool) else None)
+                  _text(raw.get("firmwareVersion")), fu if isinstance(fu, bool) else None, uplink)
 
 
 def _write(store: Store, devices: list[Device], now: float) -> int:

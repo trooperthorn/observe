@@ -15,7 +15,7 @@ It matches a UniFi device port when the device MAC is the switch's chassis MAC a
 has a UniFi port index.
 
 Findings are computed when asked for, from the port properties and the live state that a
-LiveReader returns, plus the changes between the last two values of a property
+LiveReader returns (or a device feed wrote recently), plus the changes between the last two values of a property
 (infra_changes.py). They are shown on the dashboard, port page and map only. Nothing here calls
 an alert target.
 """
@@ -23,6 +23,7 @@ an alert target.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -33,6 +34,11 @@ from .infra import InfraError, InfraService, current_ids_sql
 from .infra_changes import TRACKED, port_changes
 from .portkey import mac_digits, port_key
 
+# Port properties written by a device feed (the observe_unifi plugin) are what the device says
+# about itself. Findings compare field data against them and never treat them as field data.
+DEVICE_SOURCE = "unifi"
+# A device-reported value older than this (by last_verified) is not used as live state.
+DEVICE_MAX_AGE_S = 900.0
 SWITCH_TYPES = ("snmp", "unifi_network", "ping", "tcp")
 _TYPE_RANK = {"snmp": 0, "unifi_network": 1, "ping": 2, "tcp": 3}
 
@@ -257,11 +263,17 @@ class Matcher:
 
     # Findings ---------------------------------------------------------------------------
 
-    async def findings(self, live: LiveReader) -> list[Finding]:
-        """Conflicts between the newest field properties and the live state, computed now."""
+    async def findings(self, live: LiveReader, now: float | None = None) -> list[Finding]:
+        """Conflicts between the newest field properties and the live state, computed now.
+
+        Live state is what the LiveReader returns for a matched monitor; where it has no value,
+        a fresh property written by a device feed (source `unifi`, confirmed within
+        DEVICE_MAX_AGE_S) fills the gap. Without either, the value is unknown and silent.
+        """
+        clock = time.time() if now is None else now
         linked = await self.effective_matches()
 
-        def go(db: Any) -> tuple[list[Any], list[Any], list[Any], list[Any]]:
+        def go(db: Any) -> tuple[list[Any], list[Any], list[Any], list[Any], list[Any]]:
             ports = db.execute(
                 "SELECT p.switch_id, p.port_key, s.mgmt_addresses, "
                 "p.if_index, p.unifi_index FROM infra_ports p "
@@ -269,8 +281,12 @@ class Matcher:
             ).fetchall()
             props = db.execute(
                 "SELECT switch_id, port_key, name, value FROM port_properties WHERE id IN ("
-                + current_ids_sql() + ")"
+                + current_ids_sql("WHERE source != ?") + ")", (DEVICE_SOURCE,)
             ).fetchall()
+            device = db.execute(
+                "SELECT switch_id, port_key, name, value, last_verified FROM port_properties "
+                "WHERE id IN (" + current_ids_sql("WHERE source = ?") + ")",
+                (DEVICE_SOURCE,)).fetchall()
             labels = db.execute(
                 "SELECT id, switch_id, port_key, value FROM port_properties "
                 "WHERE name='jack_label' ORDER BY observed_at, id").fetchall()
@@ -279,10 +295,14 @@ class Matcher:
                 "SELECT switch_id, port_key, name, value, rn FROM ("
                 "SELECT switch_id, port_key, name, value, id, ROW_NUMBER() OVER ("
                 "PARTITION BY switch_id, port_key, name ORDER BY observed_at DESC, id DESC) AS rn "
-                f"FROM port_properties WHERE name IN ({marks})) WHERE rn <= 2", TRACKED
-            ).fetchall()
-            return ports, props, labels, last_two
-        ports, props, labels, last_two = await self._infra._run(go)
+                f"FROM port_properties WHERE source != ? AND name IN ({marks})) WHERE rn <= 2",
+                (DEVICE_SOURCE, *TRACKED)).fetchall()
+            return ports, props, labels, last_two, device
+        ports, props, labels, last_two, device = await self._infra._run(go)
+        fresh: dict[tuple[str, str], dict[str, Any]] = {}
+        for sid, key, name, value, verified in device:
+            if clock - verified <= DEVICE_MAX_AGE_S:
+                fresh.setdefault((sid, key), {})[name] = json.loads(value)
         newest: dict[tuple[str, str], dict[str, Any]] = {}
         earlier: dict[tuple[str, str], dict[str, Any]] = {}
         for sid, key, name, value, rn in last_two:
@@ -298,7 +318,9 @@ class Matcher:
                 continue
             found = self.match_port(sid, linked.get(sid), json.loads(addrs), key, if_index,
                                     unifi_index)
-            out.extend(self._compare(sid, key, field, self._live_of(found, live)))
+            out.extend(self._compare(sid, key, field,
+                                     self._with_device(self._live_of(found, live),
+                                                       fresh.get((sid, key), {}))))
             out.extend(Finding(kind, severity, sid, key, message) for kind, severity, message
                        in port_changes(earlier.get((sid, key), {}), newest.get((sid, key), {})))
         out.extend(_repatched(labels))
@@ -314,6 +336,15 @@ class Matcher:
             speed = got.speed_mbps if speed is None else speed
             vlan = got.vlan if vlan is None else vlan
             poe = got.poe_w if poe is None else poe
+        return LivePort(speed, vlan, poe)
+
+    @staticmethod
+    def _with_device(live: LivePort, device: dict[str, Any]) -> LivePort:
+        """Fill what the live reader did not know from the device feed's fresh properties."""
+        speed, vlan, poe = live.speed_mbps, live.vlan, live.poe_w
+        speed = device.get("link_speed_mbps") if speed is None else speed
+        vlan = device.get("vlan") if vlan is None else vlan
+        poe = device.get("poe_load_w") if poe is None else poe
         return LivePort(speed, vlan, poe)
 
     @staticmethod

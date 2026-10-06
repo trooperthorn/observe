@@ -200,8 +200,9 @@ def _int(v: Any) -> int | None:
 
 def parse_ports(device: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """`port_table` of a stat/device row, keyed by the string port_idx. poe_power is a string of
-    watts on the classic API; poe_class and the VLAN fields (native_vlan, native_networkconf_id,
-    tagged_vlan_mgmt, excluded_networkconf_ids) are unverified."""
+    watts on the classic API; poe_class, speed (link speed in Mbit/s) and the VLAN fields
+    (native_vlan, native_networkconf_id, tagged_vlan_mgmt, excluded_networkconf_ids) are
+    unverified."""
     out: dict[str, dict[str, Any]] = {}
     table = device.get("port_table")
     for p in table if isinstance(table, list) else []:
@@ -211,6 +212,7 @@ def parse_ports(device: dict[str, Any]) -> dict[str, dict[str, Any]]:
         out[str(p["port_idx"])] = {
             "name": _str(p.get("name")),
             "up": p.get("up") if isinstance(p.get("up"), bool) else None,
+            "speed_mbps": _int(p.get("speed")),
             "poe_w": _num(p.get("poe_power")),
             "poe_class": _str(p.get("poe_class")) or None,
             "poe_enabled": p.get("poe_enable") if isinstance(p.get("poe_enable"), bool) else None,

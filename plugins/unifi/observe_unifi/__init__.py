@@ -9,6 +9,10 @@ After a 401 or 403 the collector backs off, doubling its pause up to an hour, an
 request until the pause is over, so a revoked key is not hammered. The optional classic
 controller credential, when set, builds a read-only classic client (`classic.py`) used by
 `classic_snapshot`; the Integration API path works without it.
+
+The map feed (`feed.py`): the devices collector also writes each device as a switch, with its
+uplink device as a link, and the optional `classic` collector adds ports, port properties and
+port-level links. See docs/FIELD-DATA.md.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from observe.store import Store
 
 from .classic import (ClassicClient, parse_devices, parse_offline_clients,
                       parse_wan_health)
+from .feed import feed_classic, feed_integration
 from .client import AuthRejected, IntegrationClient, UniFiError
 from .records import MIGRATIONS, parse_device, prune_unseen, save_devices
 
@@ -137,8 +142,13 @@ class UniFiPlugin(PluginBase):
     def collectors(self) -> list[Collector]:
         s = self.settings
         # The timeout covers the site list and every device page, so it may not exceed the interval.
-        return [Collector("devices", self.collect_devices, float(s.interval),
-                          min(float(s.interval), max(s.timeout * 3, 30.0)))]
+        found = [Collector("devices", self.collect_devices, float(s.interval),
+                           min(float(s.interval), max(s.timeout * 3, 30.0)))]
+        if s.classic_credential is not None:
+            # Login plus four reads, each under the request timeout.
+            found.append(Collector("classic", self.collect_classic, float(s.interval),
+                                   min(float(s.interval), max(s.timeout * 5, 30.0))))
+        return found
 
     async def prune(self, store: Store, now: float) -> int:
         return await prune_unseen(store, now, self.settings.retention_days)
@@ -172,7 +182,18 @@ class UniFiPlugin(PluginBase):
         self._failures = 0
         self._retry_at = 0.0
         devices = [d for d in (parse_device(site_id, r) for r in rows) if d is not None]
-        return await save_devices(store, devices, self.wall())
+        now = self.wall()
+        stored = await save_devices(store, devices, now)
+        await feed_integration(store, devices, now)
+        return stored
+
+    async def collect_classic(self, store: Store) -> int:
+        """One classic poll: ports, port properties and links into the infrastructure map.
+        Raises what classic_snapshot raises. Returns the number of devices fed."""
+        snap = await self.classic_snapshot()
+        devices = snap.get("devices", [])
+        await feed_classic(store, devices, self.wall())
+        return len(devices)
 
     def _pick_site(self, sites: list[Any]) -> str:
         named = [x for x in sites if isinstance(x, dict) and isinstance(x.get("id"), str)]

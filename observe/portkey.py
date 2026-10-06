@@ -78,6 +78,20 @@ def port_key(name: str) -> str:
     return key
 
 
+def unifi_port_key(index: int) -> str:
+    """The port key for a UniFi port index (port_idx or interfaces.ports idx).
+
+    UniFi prints the same port as "Port 5" and numbers it 5, so this builds the key from the
+    index through port_key("Port 5"), and a name read as "Port 5" reaches the same key. A bare
+    "5" is deliberately not given this meaning by port_key(): outside UniFi it can be anything.
+    The key is scoped by the switch id everywhere it is stored, so port 5 of two UniFi
+    devices never collides.
+    """
+    if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+        raise ValueError("a UniFi port index must be a non-negative integer")
+    return port_key(f"Port {index}")
+
+
 def lldp_port_key(subtype: int | str, value: str) -> str:
     """The port key for an LLDP port id. The subtype says how to read the value: names and
     aliases are normalised like any interface name; a MAC, network address, circuit id or

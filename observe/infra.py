@@ -6,8 +6,10 @@ callers may pass whatever spelling they have. Switch ids come from portkey.switc
 
 Port properties are append-only. The current value of a property is the row with the newest
 `observed_at` (the later row id breaks a tie), never the row written last, so a late or resent
-older observation adds history but cannot replace a newer current value. Writing a value
-identical to the current one adds no row; it moves that row's last_verified forward to the
+older observation adds history but cannot replace a newer current value. A value is compared
+with the newest row of the same source only, so a device feed (source `unifi`) and a field test
+each keep their own history and one never confirms the other. Writing a value
+identical to that source's current one adds no row; it moves that row's last_verified forward to the
 observation time, so the page can say "confirmed again on ...". Only allowlisted names are accepted, plus
 `custom.<name>` for hand-entered properties; a custom write needs an actor and is written to
 the audit log. Values are checked for type and length. A property can only be written for a
@@ -24,11 +26,11 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from .portkey import lldp_port_key, port_key, switch_id
+from .portkey import lldp_port_key, port_key, switch_id, unifi_port_key
 from .store import Store
 
 __all__ = ["current_ids_sql", "InfraError", "InfraService", "PROPERTY_TYPES", "UnknownPropertyError",
-           "lldp_port_key", "port_key", "switch_id"]
+           "lldp_port_key", "port_key", "switch_id", "unifi_port_key"]
 
 ROLES = ("access", "uplink", "unknown")
 LINK_SOURCES = ("lldp", "cdp", "field_report", "snmp_lldp", "config")
@@ -310,6 +312,21 @@ class InfraService:
                 "AND source=?", (*ends[0], *ends[1], source)).fetchone()[0])
         return int(await self._run(go))
 
+    async def close_link(self, end_a: tuple[str, str], end_b: tuple[str, str], *, source: str,
+                         now: float | None = None) -> bool:
+        """Close one open edge a feed has replaced with a better one (for example a link with
+        real port numbers in place of a device-level placeholder). Returns True when an open
+        edge was closed. A later confirmation of the same edge reopens it, as for any edge."""
+        ends = sorted((str(k), str(r)) for k, r in (end_a, end_b))
+        ts = time.time() if now is None else now
+
+        def go(db: Any) -> bool:
+            cur = db.execute(
+                "UPDATE infra_links SET closed_at=? WHERE a_kind=? AND a_ref=? AND b_kind=? "
+                "AND b_ref=? AND source=? AND closed_at IS NULL", (ts, *ends[0], *ends[1], source))
+            return bool(cur.rowcount)
+        return bool(await self._run(go))
+
     @staticmethod
     def _close_contradicted(db: Any, ends: list[tuple[str, str]], source: str,
                             ts: float) -> None:
@@ -373,8 +390,8 @@ class InfraService:
                 raise InfraError("unknown port")
             last = db.execute(
                 "SELECT id, value, unit, observed_at FROM port_properties WHERE switch_id=? AND port_key=? "
-                "AND name=? ORDER BY observed_at DESC, id DESC LIMIT 1",
-                (sid, key, name)).fetchone()
+                "AND name=? AND source=? ORDER BY observed_at DESC, id DESC LIMIT 1",
+                (sid, key, name, source)).fetchone()
             if last is not None and last[3] <= seen:
                 if last[1] == text and last[2] == unit:
                     db.execute("UPDATE port_properties SET last_verified=MAX(last_verified, ?) "
@@ -382,8 +399,8 @@ class InfraService:
                     return False
             elif last is not None and db.execute(
                     "SELECT 1 FROM port_properties WHERE switch_id=? AND port_key=? AND name=? "
-                    "AND observed_at=? AND value=? AND unit=?",
-                    (sid, key, name, seen, text, unit)).fetchone() is not None:
+                    "AND source=? AND observed_at=? AND value=? AND unit=?",
+                    (sid, key, name, source, seen, text, unit)).fetchone() is not None:
                 return False  # this older observation is already in the history
             db.execute(
                 "INSERT INTO port_properties (switch_id, port_key, name, value, unit, source, "

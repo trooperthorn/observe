@@ -660,7 +660,9 @@ not part of this step.
 `observe/portkey.py` holds the pure normalisers. `port_key` maps the spellings of one
 interface to one key (`Gi1/0/5` and `GigabitEthernet1/0/5`, Juniper `ge-0/0/5.0`, UniFi
 `Port 5`, Linux `eth0`) and keeps different ports apart (`Gi1/0/5` and `Gi1/0/50`, `Gi1/0/5`
-and `Te1/0/5`, `eth0` and `eth0.100`, `ge-0/0/5` and `ge-0/0/5.1`); an unrecognised name is
+and `Te1/0/5`, `eth0` and `eth0.100`, `ge-0/0/5` and `ge-0/0/5.1`; a bare `5` stays different
+from `Port 5`); `unifi_port_key(index)` builds the key of a UniFi port index, so "Port 5" and
+index 5 are one key (the stored key is always scoped by the switch id); an unrecognised name is
 only lower-cased and stripped of whitespace. `lldp_port_key` reads an LLDP port id by its
 subtype: names and aliases are normalised like interface names, while MAC, network address,
 circuit id and port component keep a prefix so they cannot collide with a name. `switch_id`
@@ -810,6 +812,23 @@ refused and a body is capped at 8 MB. `logout()` posts `/api/auth/logout` and fo
 the plugin's `close()` calls it, but the plugin host has no shutdown hook yet, so nothing calls it
 automatically. The parsers return per-port PoE watts and class, native and tagged VLAN fields, the
 LLDP neighbour table, the uplink MAC with local and remote port numbers, the WAN health row and the
-known clients that are not active. `UniFiPlugin.classic_snapshot()` returns all of these. Nothing
-stores or displays them yet. Every classic field name is unverified against a live console, because
-ha_Int_soc does not read this API.
+known clients that are not active. `UniFiPlugin.classic_snapshot()` returns all of these. Every
+classic field name is unverified against a live console, because ha_Int_soc does not read this API.
+
+`feed.py` writes the map feed through `InfraService` only. The devices collector calls
+`feed_integration` after it stores the snapshot: each device is a switch keyed by `switch_id` of its
+chassis MAC, with its name, address, vendor `Ubiquiti` and model. A device row that names its uplink
+device (`uplink.deviceId` or `uplinkDeviceId`, unverified on device rows) gets a `config` link
+between a port `uplink` on the child and a port `to-<child mac>` on the parent, because a link joins
+ports. The optional `classic` collector, registered only when `classic_credential` is set, calls
+`feed_classic`: ports keyed by `unifi_port_key(port_idx)` with `unifi_index`, the properties
+`link_speed_mbps` (only for a port that is up), `poe_class`, `poe_load_w` and `vlan` with source
+`unifi`, a `config` link for the uplink port numbers, and an `lldp` link for each LLDP neighbour
+whose chassis MAC is a UniFi device of the poll or an already known switch. A neighbour that is not
+known is never created, so cameras and phones do not become switches. A real port link closes the
+device-level placeholder through `InfraService.close_link`, and the placeholder is not made again
+while a real link joins the two devices; the two placeholder ports stay. `append_property` now
+compares a value with the newest row of the same source, so the feed and a field test keep their own
+histories. `Matcher.findings` excludes source `unifi` from the field side, and fills a live value
+the monitor check did not report from a `unifi` property confirmed within 900 seconds, so a stopped
+classic collector goes quiet instead of comparing old values.

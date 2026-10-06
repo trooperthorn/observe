@@ -683,6 +683,9 @@ the site list and the device list from the UniFi Network Integration API with th
 `unifi` credential, and keeps the current snapshot in two tables, `unifi_devices` and
 `unifi_clients`, with a first seen and last seen time and no per-poll history. Only
 `unifi_devices` is filled so far. A record not seen for `retention_days` (default 30) is deleted.
+The same poll feeds the infrastructure map: each device becomes a switch keyed by its chassis
+MAC, so a `unifi_network` monitor whose `device` is that MAC matches it automatically, and a
+device that names its uplink device gets a `config` link to it.
 
 ```yaml
 credentials:
@@ -706,8 +709,13 @@ The optional classic account is a dedicated local view-only account. With it the
 and read PoE watts, per-port VLAN, LLDP neighbours, uplink port numbers, WAN health and offline
 clients. It sends only the login and logout POSTs and GETs of four read views, keeps the session in
 memory, re-logs in once on a 401 and then backs off, and never follows a redirect. The values are
-parsed but not yet stored or shown, and the classic field names are unverified against a live
-console.
+used by a second collector, `classic`, that runs only when `classic_credential` is set. It adds
+each port of each device to the map (`Port N`, with the UniFi port index), writes link speed, PoE
+class, PoE watts and VLAN as port properties with the source `unifi` only when a value changes,
+and adds `config` links from the uplink port numbers and `lldp` links to neighbours that are
+already known switches. With that data a Pockethernet VLAN, speed or PoE result on the same port
+is compared with what the switch reports, and without it nothing is compared. The classic field
+names are unverified against a live console.
 
 ## Not implemented
 
