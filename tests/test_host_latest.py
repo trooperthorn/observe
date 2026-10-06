@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
 from pathlib import Path
 
 from observe.checks.host import LATEST_WINDOW_S
 from observe.store import Store
+
+from .dbq import put_samples
 
 NOW = 1_000_000.0
 STATIC = Path(__file__).resolve().parent.parent / "observe" / "static"
@@ -27,8 +28,7 @@ def _seed(db, old_rows: int, host: str) -> None:
     for i in range(5):
         rows.append((NOW - 100 + i * 10, host, "hwmon", "cpu_temp_c", "{}", 60.0 + i, "C"))
         rows.append((NOW - 100 + i * 10, host, "zfs", "pool_used", json.dumps({"p": "a"}), 5.0 + i, "%"))
-    db.executemany("INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
-                   "VALUES (?,?,?,?,?,?,?)", rows)
+    put_samples(db, rows)
 
 
 async def test_windowed_latest_matches_unbounded(tmp_path):
@@ -55,9 +55,8 @@ async def test_series_silent_beyond_the_window_is_left_out(tmp_path):
 async def test_named_silent_series_is_returned_with_its_old_reading(tmp_path):
     store = Store(str(tmp_path / "w.db"))
     seed(store, 3)
-    store.storage.write_sync(lambda db: db.execute(
-        "INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
-        "VALUES (?,?,?,?,?,?,?)", (NOW - 5000, "nas01", "fan", "rpm", "{}", 900.0, "rpm")))
+    store.storage.write_sync(lambda db: put_samples(
+        db, [(NOW - 5000, "nas01", "fan", "rpm", "{}", 900.0, "rpm")]))
     plain = await store.latest_host("nas01", window=LATEST_WINDOW_S, now=NOW)
     assert "fan" not in {s["source"] for s in plain["samples"]}
     named = await store.latest_host("nas01", window=LATEST_WINDOW_S, now=NOW,
@@ -68,40 +67,17 @@ async def test_named_silent_series_is_returned_with_its_old_reading(tmp_path):
     store.close()
 
 
-def test_a_version_14_database_with_samples_gains_both_indexes(tmp_path):
-    from observe.storage.schema import MIGRATIONS, migrate
-    path = str(tmp_path / "old.db")
-    db = sqlite3.connect(path)
-    db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
-    newer = {v: m for v, m in MIGRATIONS.items() if v > 14}
-    for v in newer:
-        del MIGRATIONS[v]
-    try:
-        migrate(db)
-    finally:
-        MIGRATIONS.update(newer)
-    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 14
-    db.execute("INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
-               "VALUES (1.0,'nas01','hwmon','t','{}',1.0,'C')")
-    db.commit()
-    db.close()
-    Store(path).close()
-    db = sqlite3.connect(path)
-    try:
-        names = {r[1] for r in db.execute("PRAGMA index_list(host_samples)")}
-        assert {"host_samples_host_ts", "host_samples_series"} <= names
-        assert db.execute("SELECT COUNT(*) FROM host_samples").fetchone() == (1,)
-    finally:
-        db.close()
-
-
-def test_host_ts_index_exists_after_migration(tmp_path):
+def test_a_new_database_has_no_host_samples_table(tmp_path):
+    import sqlite3
     path = str(tmp_path / "w.db")
     Store(path).close()
     db = sqlite3.connect(path)
-    cols = [r[2] for r in db.execute("PRAGMA index_info(host_samples_host_ts)")]
-    db.close()
-    assert cols == ["host", "ts"]
+    try:
+        names = {r[0] for r in db.execute("SELECT name FROM sqlite_master")}
+    finally:
+        db.close()
+    assert "host_samples" not in names
+    assert {"resources", "scopes", "series", "samples", "latest"} <= names
 
 
 def _steps(store: Store) -> int:
@@ -128,9 +104,10 @@ def test_bounded_read_does_not_scale_with_retention(tmp_path):
     seed(small, 500)
     seed(large, 20_000)
     plan = " ".join(r[3] for r in large.storage.read_sync(lambda db: db.execute(
-        "EXPLAIN QUERY PLAN SELECT source, metric, labels, value, unit, ts FROM host_samples "
-        "WHERE host=? AND ts>=?", ("nas01", NOW - 900)).fetchall()))
-    assert "host_samples_host_ts" in plan
+        "EXPLAIN QUERY PLAN SELECT sc.name, s.metric, s.attrs, l.value, s.unit, l.ts FROM latest l "
+        "JOIN series s ON s.id = l.series_id JOIN scopes sc ON sc.id = s.scope_id "
+        "WHERE s.resource_id=? AND l.ts>=?", (1, int((NOW - 900) * 1000))).fetchall()))
+    assert "series_resource_metric" in plan and "SCAN samples" not in plan
     a, b = _steps(small), _steps(large)
     assert b <= a + 20, (a, b)
     small.close()

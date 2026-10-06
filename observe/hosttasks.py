@@ -25,7 +25,7 @@ from typing import Any
 
 from . import audit
 from .enrol import PLATFORMS, STEP_MARKER, STEP_TTL_S, TOKEN_TTL_S, MAX_NOTE
-from .storage import Conn
+from .storage import Conn, series
 from .store import Store
 
 TASK_MARKER = "wpt"
@@ -265,11 +265,12 @@ async def remove_host(store: Store, host: str, now: float) -> dict[str, int] | N
         for name, sql in (("enrolments", "DELETE FROM enrolments WHERE host=?"),
                           ("tasks", "DELETE FROM host_tasks WHERE host=?"),
                           ("hosts", "DELETE FROM hosts WHERE host=?"),
-                          ("samples", "DELETE FROM host_samples WHERE host=?"),
                           ("sources", "DELETE FROM host_sources WHERE host=?"),
                           ("events", "DELETE FROM host_events WHERE host=?"),
                           ("batches", "DELETE FROM ingest_batches WHERE host=?")):
             counts[name] = db.execute(sql, (host,)).rowcount
+        counts["samples"] = series.remove_resource(
+            db, "host", host, rollups=store.storage.incremental_rollups)
         return counts if (counts["enrolments"] or counts["hosts"] or counts["keys"]) else None
 
     return await store.storage.write(work, touches=("hosts", "metrics", "events", "admin"))

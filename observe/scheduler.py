@@ -236,8 +236,7 @@ class Scheduler:
         passes = 0
         while True:
             try:
-                # The summary levels are folded every pass; forecasts and pruning run hourly.
-                await self.store.rollup()
+                # The summary levels are kept current at ingest; forecasts and compaction run hourly.
                 if passes % 12 == 0:
                     await self.refresh_forecasts()
                     removed = await self.store.prune(

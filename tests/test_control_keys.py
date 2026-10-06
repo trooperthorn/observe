@@ -314,7 +314,7 @@ def test_wpc_key_is_refused_on_host_ingest(env):
     swapped = "wpi_" + key.split("_", 1)[1]
     assert env.client.post("/api/ingest", json=HOST_BATCH,
                            headers=bearer(swapped)).status_code == 401
-    assert env.rows("SELECT COUNT(*) FROM host_samples") == [(0,)]
+    assert env.rows("SELECT COUNT(*) FROM samples") == [(0,)]
     assert env.rows("SELECT COUNT(*) FROM hosts") == [(0,)]
     assert env.rows("SELECT last_used FROM ingest_keys") == [(None,)]
 

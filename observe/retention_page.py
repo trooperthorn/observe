@@ -18,8 +18,10 @@ LABELS = {
     "daily_days": "Daily summaries",
     "history_days": "Availability history",
     "compress_after_days": "Compress raw chunks after",
-    "late_grace_s": "Late sample grace (seconds)",
 }
+LEVEL_NAMES = {"compaction": "compaction", "raw": "trim raw samples",
+               "5m": "trim 5 minute summaries", "1h": "trim hourly summaries",
+               "1d": "trim daily summaries"}
 EXTRA_OVERRIDE_ROWS = 3
 NL = "\n"
 
@@ -36,10 +38,10 @@ def _when(ts: Any) -> str:
 
 def _state_rows(states: list[tuple[Any, ...]]) -> str:
     if not states:
-        return '<tr><td colspan="5">No compaction or rollup has run yet.</td></tr>'
+        return '<tr><td colspan="5">No compaction has run yet.</td></tr>'
     out = []
     for level, last_run, rows, error in states:
-        name = "compaction" if level == "compaction" else f"rollup {level}"
+        name = LEVEL_NAMES.get(str(level), str(level))
         out.append(
             f"<tr><td>{escape(str(level))}</td><td>{escape(name)}</td>"
             f"<td>{escape(_when(last_run))}</td><td>{escape(str(rows))}</td>"
@@ -109,10 +111,10 @@ def render(described: dict[str, Any], states: list[tuple[Any, ...]], *, backend:
   </div>
   <p id="msg" class="msg-line" role="alert"></p>
   <section class="card" aria-labelledby="last-h">
-    <h3 id="last-h">Last compaction and rollup run</h3>
+    <h3 id="last-h">Last compaction run</h3>
     <p class="card-sub">Storage backend: <strong id="backend">{escape(backend)}</strong></p>
     <table id="rollup-state">
-      <caption class="muted">Rows processed are the summary rows a rollup level wrote, or the poll rows compaction removed.</caption>
+      <caption class="muted">Rows processed are the rows a level had removed after its coverage was verified, or the poll rows the whole compaction removed. The summary levels are kept current as samples arrive.</caption>
       <thead><tr><th scope="col">Level</th><th scope="col">Run</th><th scope="col">Time</th><th scope="col">Rows processed</th><th scope="col">Error</th></tr></thead>
       <tbody>
 {_state_rows(states)}

@@ -15,6 +15,7 @@ from observe.storage import open_storage, pg_timescale, rollups
 from observe.storage.postgres import PgStorage
 from observe.storage.rollups import RetentionLevels
 
+from .dbq import put as dbq_put
 from .test_auth import Env
 
 DAY = 86400
@@ -39,7 +40,7 @@ class StoreOf:
 @pytest.mark.parametrize("body", [
     {}, [], "x", {"raw_days": 0}, {"raw_days": 31}, {"raw_days": 5.5}, {"raw_days": "7"},
     {"raw_days": True}, {"hourly_days": 89}, {"hourly_days": 181}, {"history_days": 3651},
-    {"compress_after_days": 31}, {"late_grace_s": -1}, {"late_grace_s": 3601},
+    {"compress_after_days": 31}, {"late_grace_s": 60},
     {"nonsense": 1}, {"overrides": []}, {"overrides": {"cpu": {}}},
     {"overrides": {"cpu": {"history_days": 5}}}, {"overrides": {"cpu": {"raw_days": 99}}},
     {"overrides": {"bad name": {"raw_days": 5}}}, {"overrides": {"": {"raw_days": 5}}},
@@ -51,12 +52,12 @@ def test_bad_values_are_refused(body):
 
 
 def test_good_values_become_settings_keys_and_null_resets():
-    changes = retention.validate({"raw_days": 30, "hourly_days": 180, "late_grace_s": 0,
+    changes = retention.validate({"raw_days": 30, "hourly_days": 180, "compress_after_days": 2,
                                   "daily_days": None,
                                   "overrides": {"temp": {"raw_days": 2, "daily_days": 5}}})
     assert changes["retention.raw_days"] == "30"
     assert changes["retention.hourly_days"] == "180"
-    assert changes["retention.late_grace_s"] == "0"
+    assert changes["retention.compress_after_days"] == "2"
     assert changes["retention.daily_days"] is None
     assert json.loads(changes[rollups.OVERRIDES_KEY]) == {"temp": {"daily_days": 5, "raw_days": 2}}
     assert retention.validate({"overrides": {}}) == {rollups.OVERRIDES_KEY: None}
@@ -92,12 +93,13 @@ async def test_a_refused_change_writes_nothing(db):
 # ---- per-metric overrides on SQLite ----------------------------------------------------------
 
 async def put(s, ts, value, metric):
-    await s.execute("INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
-                    "VALUES (?, 'h', 'cpu', ?, '{}', ?, 'C')", (ts, metric, value))
+    await dbq_put(s, [(ts, "h", "cpu", metric, "{}", value, "C")])
 
 
 async def counts(s):
-    return dict(await s.fetchall("SELECT metric, COUNT(*) FROM host_samples GROUP BY metric"))
+    return dict(await s.fetchall(
+        "SELECT s.metric, COUNT(*) FROM samples a JOIN series s ON s.id = a.series_id "
+        "GROUP BY s.metric"))
 
 
 async def save(db, changes, now):
@@ -110,7 +112,6 @@ async def test_an_override_keeps_and_drops_rows_differently_from_the_global_leve
     for metric in ("plain", "short", "long"):
         for age in (1, 5, 20):  # days
             await put(db, now - age * DAY, 1.0, metric)
-    await db.rollup(now)
     await save(db, {"retention.raw_days": "7", rollups.OVERRIDES_KEY: json.dumps(
         {"short": {"raw_days": 2}, "long": {"raw_days": 30}})}, now)
     await db.apply_retention(now=now, retention_days=7, audit_retention_days=365)
@@ -122,7 +123,6 @@ async def test_overrides_apply_to_the_rollup_levels_too(db):
     now = 800 * DAY
     for metric in ("plain", "kept"):
         await put(db, now - 20 * DAY, 1.0, metric)
-    await db.rollup(now)
     await save(db, {rollups.OVERRIDES_KEY: json.dumps({"kept": {"rollup_5m_days": 40}})}, now)
     await db.apply_retention(now=now, retention_days=7, audit_retention_days=365)
     assert await db.fetchall("SELECT metric FROM metric_5m") == [("kept",)]
@@ -133,33 +133,25 @@ async def test_overrides_apply_to_the_rollup_levels_too(db):
 async def test_resetting_the_overrides_returns_to_the_global_level(db):
     now = 100 * DAY
     await put(db, now - 5 * DAY, 1.0, "m")
-    await db.rollup(now)
     await save(db, {rollups.OVERRIDES_KEY: json.dumps({"m": {"raw_days": 30}})}, now)
     await save(db, {rollups.OVERRIDES_KEY: None}, now)
     await db.apply_retention(now=now, retention_days=2, audit_retention_days=365)
     assert await counts(db) == {}
 
 
-async def test_the_late_grace_setting_changes_when_a_bucket_is_folded(db):
-    base = 1_000_000 // 300 * 300
-    await put(db, base + 10, 1.0, "m")
-    await save(db, {"retention.late_grace_s": "600"}, base)
-    await db.rollup(base + 300 + 100)
-    assert await db.fetchall("SELECT COUNT(*) FROM metric_5m") == [(0,)]
-    await db.rollup(base + 300 + 600)
-    assert await db.fetchall("SELECT COUNT(*) FROM metric_5m") == [(1,)]
-
-
 def test_timescale_policies_follow_the_overrides_and_compaction_setting():
     levels = RetentionLevels(raw_days=7, compress_after_days=3, overrides={
         "a": {"raw_days": 30}, "b": {"raw_days": 2}})
     text = "\n".join(pg_timescale.policy_statements(levels))
-    assert f"add_retention_policy('host_samples', drop_after => {30 * DAY})" in text
+    # Raw chunks are dropped by compaction after the coverage check; the aggregates keep the
+    # longest level any metric needs.
+    assert "add_retention_policy('samples'" not in text
+    assert f"add_retention_policy('rollup_5m', drop_after => {14 * DAY * 1000})" in text
     # compress_after is capped at half the shortest raw level (2 days), never below one chunk.
-    assert f"add_compression_policy('host_samples', compress_after => {DAY})" in text
+    assert f"add_compression_policy('samples', compress_after => {DAY * 1000})" in text
     longer = "\n".join(pg_timescale.policy_statements(RetentionLevels(raw_days=30,
                                                                       compress_after_days=3)))
-    assert f"compress_after => {3 * DAY})" in longer
+    assert f"compress_after => {3 * DAY * 1000})" in longer
 
 
 # ---- a settings change re-registers the Timescale policies -----------------------------------
@@ -203,10 +195,11 @@ def test_a_settings_change_registers_the_timescale_policies_again():
                                            remote="", path="/p"))
     assert saved == [("admin", "audit")]
     calls = pg._admin.calls
-    assert any("remove_retention_policy('host_samples'" in c for c in calls)
-    assert any(f"add_retention_policy('host_samples', drop_after => {20 * DAY})" in c
+    assert any("remove_retention_policy('samples'" in c for c in calls)
+    assert not any("add_retention_policy('samples'" in c for c in calls)
+    assert any(f"add_retention_policy('rollup_5m', drop_after => {14 * DAY * 1000})" in c
                for c in calls)
-    assert any("add_compression_policy('host_samples'" in c for c in calls)
+    assert any("add_compression_policy('samples'" in c for c in calls)
     assert any("add_continuous_aggregate_policy('rollup_5m'" in c for c in calls)
 
 
@@ -216,12 +209,6 @@ def test_plain_postgres_does_not_touch_timescale_policies():
     asyncio.run(pg.save_retention_settings({"retention.raw_days": "5"}, now=1.0, actor="a",
                                            remote="", path="/p"))
     assert saved and pg._admin.calls == []
-
-
-def test_postgres_leaves_aggregates_to_policies_and_deletes_overridden_raw_rows():
-    assert PgStorage._chunk_managed("DELETE FROM rollup_5m WHERE metric = ? AND bucket < ?", True)
-    assert PgStorage._chunk_managed("DELETE FROM host_samples WHERE ts < ?", False)
-    assert not PgStorage._chunk_managed("DELETE FROM host_samples WHERE ts < ?", True)
 
 
 # ---- the endpoint ----------------------------------------------------------------------------

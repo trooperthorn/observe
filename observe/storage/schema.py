@@ -39,12 +39,6 @@ HOST_TABLES = (
   first_seen REAL NOT NULL, last_seen REAL NOT NULL, boot_id TEXT, boot_ts REAL,
   heartbeat_ts REAL, clean_shutdown INTEGER, confirmed INTEGER NOT NULL DEFAULT 0, confirmed_at REAL
 )""",
-    """CREATE TABLE IF NOT EXISTS host_samples (
-  ts REAL NOT NULL, host TEXT NOT NULL, source TEXT NOT NULL, metric TEXT NOT NULL,
-  labels TEXT NOT NULL DEFAULT '{}', value REAL, unit TEXT NOT NULL DEFAULT ''
-)""",
-    "CREATE INDEX IF NOT EXISTS host_samples_lookup ON host_samples(host, source, metric, ts)",
-    "CREATE INDEX IF NOT EXISTS host_samples_ts ON host_samples(ts)",
     """CREATE TABLE IF NOT EXISTS host_sources (
   host TEXT NOT NULL, source TEXT NOT NULL, available INTEGER NOT NULL,
   reason TEXT NOT NULL DEFAULT '', updated REAL NOT NULL, PRIMARY KEY (host, source)
@@ -247,12 +241,36 @@ ENROLMENT_GUARD_TABLES = (
 )""",
 )
 
-HOST_SAMPLE_TS_INDEX = (
-    "CREATE INDEX IF NOT EXISTS host_samples_host_ts ON host_samples(host, ts)",
-)
-
-HOST_SAMPLE_SERIES_INDEX = (
-    "CREATE INDEX IF NOT EXISTS host_samples_series ON host_samples(host, source, metric, ts)",
+# Series storage (docs/DATA-API-DESIGN.md section 2): resources, scopes, series, the raw samples
+# keyed by series and millisecond timestamp, and the latest point of each series. The summary
+# levels are in observe/storage/rollups.py.
+SERIES_TABLES = (
+    """CREATE TABLE IF NOT EXISTS resources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, key_hash BLOB NOT NULL UNIQUE, kind TEXT NOT NULL,
+  name TEXT NOT NULL, attrs TEXT NOT NULL, first_seen REAL NOT NULL, last_seen REAL NOT NULL
+)""",
+    "CREATE INDEX IF NOT EXISTS resources_kind_name ON resources(kind, name)",
+    """CREATE TABLE IF NOT EXISTS scopes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, version TEXT NOT NULL DEFAULT '',
+  UNIQUE (name, version)
+)""",
+    """CREATE TABLE IF NOT EXISTS series (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, key_hash BLOB NOT NULL UNIQUE,
+  resource_id INTEGER NOT NULL REFERENCES resources(id),
+  scope_id INTEGER NOT NULL REFERENCES scopes(id), metric TEXT NOT NULL,
+  unit TEXT NOT NULL DEFAULT '', instrument TEXT NOT NULL DEFAULT 'gauge',
+  monotonic INTEGER NOT NULL DEFAULT 0, temporality TEXT NOT NULL DEFAULT '',
+  attrs TEXT NOT NULL DEFAULT '{}', first_seen REAL NOT NULL, last_seen REAL NOT NULL
+)""",
+    "CREATE INDEX IF NOT EXISTS series_resource_metric ON series(resource_id, metric)",
+    "CREATE INDEX IF NOT EXISTS series_metric ON series(metric)",
+    """CREATE TABLE IF NOT EXISTS samples (
+  series_id INTEGER NOT NULL, ts INTEGER NOT NULL, value REAL, PRIMARY KEY (series_id, ts)
+) WITHOUT ROWID""",
+    """CREATE TABLE IF NOT EXISTS latest (
+  series_id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, value REAL, prev_ts INTEGER,
+  prev_value REAL
+) WITHOUT ROWID""",
 )
 
 # Change sequences (docs/DATA-API-DESIGN.md section 1.2): one counter per domain, bumped inside
@@ -279,11 +297,11 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     12: HOST_TASK_TABLES,
     13: LAYOUT_TABLES,
     14: ENROLMENT_GUARD_TABLES,
-    15: HOST_SAMPLE_TS_INDEX,
-    16: HOST_SAMPLE_SERIES_INDEX,
-    17: CHANGE_SEQ_TABLES,
-    # Summary levels, their watermarks and the read views (observe/storage/rollups.py).
-    18: ROLLUP_TABLES + METRIC_VIEWS,
+    15: CHANGE_SEQ_TABLES,
+    16: SERIES_TABLES,
+    # Summary levels, their compaction state and the read views (observe/storage/rollups.py).
+    # This step is last: TimescaleDB runs its own version of it.
+    17: ROLLUP_TABLES + METRIC_VIEWS,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

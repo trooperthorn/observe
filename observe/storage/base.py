@@ -41,6 +41,9 @@ class StorageTimeout(StorageError):
 @runtime_checkable
 class Storage(Protocol):
     backend: str
+    # Whether the writer folds each new point into the summary levels itself. False on
+    # PostgreSQL with TimescaleDB, where continuous aggregates build them.
+    incremental_rollups: bool
 
     async def write(self, unit: Callable[[Conn], T], *, touches: Sequence[str] = ()) -> T:
         """Run `unit` on the writer in one transaction and return its result. `touches`
@@ -68,13 +71,11 @@ class Storage(Protocol):
     def change_seqs(self) -> dict[str, int]:
         """All committed change counters."""
 
-    async def rollup(self, now: float) -> int:
-        """Fold raw samples into the 5 minute, hourly and daily levels. Returns the number of
-        buckets written."""
-
     async def apply_retention(self, *, now: float, retention_days: int,
                               audit_retention_days: int) -> int:
-        """Drop rows past retention. Returns the number of poll rows removed."""
+        """One compaction pass (observe/storage/compaction.py): trim the raw samples and the
+        summary levels past their retention after verifying coverage, in chunks, and drop the
+        other history rows past theirs. Returns the number of poll rows removed."""
 
     async def save_retention_settings(self, changes: dict[str, str | None], *, now: float,
                                       actor: str, remote: str, path: str,

@@ -471,8 +471,11 @@ host with 2 GB of memory or more and an SSD: put the password in a file under `.
 `storage.backend: postgres`, `storage.dsn` (no password in it) and `storage.password_file`
 (see `config.example.yaml`), and start the database with `docker compose --profile postgres up -d`.
 The choice is made when the database is created; there is no migration between backends, so
-destroy and redeploy to change it. Both backends keep 5 minute, hourly and daily summaries behind the same
-views (`metric_5m`, `metric_hourly`, `metric_daily`, `availability_history`). See
+destroy and redeploy to change it. Both backends store readings as series (a resource, a scope, a metric and its attributes) and keep
+5 minute, hourly and daily summaries of each (count, sum, minimum, maximum), made as the readings
+arrive, behind the same views (`metric_5m`, `metric_hourly`, `metric_daily`,
+`availability_history`). The hourly compaction pass removes raw and summary rows past their
+retention only after checking that the next level still covers them. See
 `docs/ARCHITECTURE.md`, "Storage interface" and "PostgreSQL and TimescaleDB backend".
 Plugins read and write through `store.storage` (`write`, `read`, `write_sync`, `read_sync`).
 
@@ -482,7 +485,7 @@ database written by a newer version. `server.retention_days` governs poll
 results and host samples (minimum 1), and the new `server.audit_retention_days` (default
 365, minimum 1) governs the audit log independently. The tables for hosts, keys,
 users, sessions and audit are filled by the ingest and login routes.
-An admin can change the retention levels, the compaction delay, the late-sample grace and
+An admin can change the retention levels, the compaction delay and
 per-metric retention overrides with `GET` and `PUT /api/admin/retention` (admin session and CSRF
 token). Every change is audited with its old and new values.
 
@@ -618,7 +621,7 @@ fails partway, such as a refused user, a login that cannot create a session, a
 failed key action or a batch the store could not write, a separate `*_failed`
 or `*_error` row says so. Passwords, tokens and keys are never written, paths
 are sanitized, and `GET /api/audit` (admin session only; parameters `limit`,
-`kind` and `before`) returns the rows newest first. The retention page at `/admin/retention` (Admin menu, admins only) edits the global and per-metric retention settings and shows the last compaction and rollup run with its row counts and any error, and the storage backend name but never the DSN. The audit page at `/audit` (Admin menu,
+`kind` and `before`) returns the rows newest first. The retention page at `/admin/retention` (Admin menu, admins only) edits the global and per-metric retention settings and shows the last compaction run with its row counts and any error, and the storage backend name but never the DSN. The audit page at `/audit` (Admin menu,
 admin only) shows the newest 500 rows in a sortable table with filters for actor, kind, status
 (OK, Refused, Failed) and time range, and pages of 25 or 100.
 

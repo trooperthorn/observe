@@ -1,45 +1,44 @@
-"""The rollup levels, the summary views and the retention levels, shared by both backends.
+"""The summary levels, the summary views and the retention levels, shared by both backends.
 
-Raw samples (`host_samples`) are folded into three summary tables: `rollup_5m` from raw samples,
-`rollup_1h` from the 5 minute rows and `rollup_1d` from the hourly rows. Each level keeps a
-watermark in `rollup_state`, folds each source range exactly once and only ever folds complete
-buckets, so a summary is never recomputed and a replay cannot count a point twice. A sample that
-arrives after its 5 minute bucket was folded (later than LATE_GRACE_S past the bucket end) is
-kept as a raw row until retention and is left out of the summaries.
-
-SQLite and plain PostgreSQL run `fold` as written. On PostgreSQL with TimescaleDB the three
-levels are continuous aggregates with the same names and columns, so the views over them are
-the same text on every backend (docs/DATA-API-DESIGN.md sections 10.2 and 12).
+Raw samples (`samples`, keyed by series id and millisecond timestamp) are summarised in three
+tables: `rollup_5m`, `rollup_1h` and `rollup_1d`, each holding the count, sum, minimum and maximum
+of the non-null values per series and bucket. A bucket is the millisecond timestamp of its start.
+On SQLite and plain PostgreSQL the writer folds every new point into all three levels in the same
+transaction as the point (observe/storage/series.py), so the levels are always current and are
+never recomputed from raw data at read time. On PostgreSQL with TimescaleDB the same three names
+are continuous aggregates over `samples` (observe/storage/pg_timescale.py), so the views over them
+are the same text on every backend (docs/DATA-API-DESIGN.md sections 10.2 and 12). Retention and
+compaction of the levels are in observe/storage/compaction.py.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .base import Conn
 
-LATE_GRACE_S = 60
 WIDTH_5M, WIDTH_1H, WIDTH_1D = 300, 3600, 86400
+MS = 1000
 
 # level name -> (table, bucket width in seconds)
 LEVELS = {"5m": ("rollup_5m", WIDTH_5M), "1h": ("rollup_1h", WIDTH_1H),
           "1d": ("rollup_1d", WIDTH_1D)}
 
-_SERIES = "host TEXT NOT NULL, source TEXT NOT NULL, metric TEXT NOT NULL, labels TEXT NOT NULL"
-_KEY = "PRIMARY KEY (host, source, metric, labels, bucket)"
-
 
 def _table(name: str) -> str:
-    return (f"CREATE TABLE IF NOT EXISTS {name} ({_SERIES}, bucket INTEGER NOT NULL, "
-            f"n INTEGER NOT NULL, sum_v REAL, min_v REAL, max_v REAL, {_KEY})")
+    return (f"CREATE TABLE IF NOT EXISTS {name} (series_id INTEGER NOT NULL, bucket INTEGER NOT NULL, "
+            "n INTEGER NOT NULL, sum_v REAL, min_v REAL, max_v REAL, PRIMARY KEY (series_id, bucket)) "
+            "WITHOUT ROWID")
 
 
 ROLLUP_TABLES = (
     _table("rollup_5m"), _table("rollup_1h"), _table("rollup_1d"),
-    # One row per level: how far it has folded, and when and how much the last fold wrote. The
-    # row named MAINTENANCE_LEVEL is the whole compaction pass: when it last ran and its error.
+    # One row per compacted level (raw, 5m, 1h, 1d): the time before which it was last trimmed
+    # and verified, when it last ran, the rows it removed and the first coverage problem it met.
+    # The row named MAINTENANCE_LEVEL is the whole compaction pass: when it last ran, the poll rows
+    # it removed and its error. This table is always last, because TimescaleDB replaces the
+    # summary tables above it with continuous aggregates.
     "CREATE TABLE IF NOT EXISTS rollup_state (level TEXT PRIMARY KEY, upto INTEGER NOT NULL, "
     "last_run REAL NOT NULL DEFAULT 0, last_rows INTEGER NOT NULL DEFAULT 0, "
     "last_error TEXT NOT NULL DEFAULT '')",
@@ -61,11 +60,18 @@ def note_maintenance(db: Conn, now: float, rows: int, error: str) -> None:
 
 STATE_SQL = "SELECT level, last_run, last_rows, last_error FROM rollup_state ORDER BY level"
 
+# The series a summary row belongs to, named: the resource, the scope (the producer's source) and
+# the metric come from the small identity tables. Bucket is shown in whole seconds.
+_VIEW_SELECT = (
+    "SELECT m.series_id AS series_id, r.name AS resource, sc.name AS scope, s.metric AS metric, "
+    "s.unit AS unit, s.attrs AS attrs, m.bucket / 1000 AS bucket, CAST(m.n AS BIGINT) AS n, "
+    "m.sum_v AS sum_v, m.min_v AS min_v, m.max_v AS max_v, m.sum_v / NULLIF(m.n, 0) AS avg_v "
+    "FROM {source} m JOIN series s ON s.id = m.series_id "
+    "JOIN resources r ON r.id = s.resource_id JOIN scopes sc ON sc.id = s.scope_id")
+
 
 def _view(name: str, source: str) -> str:
-    return (f"CREATE VIEW IF NOT EXISTS {name} AS SELECT host, source, metric, labels, bucket, "
-            f"CAST(n AS BIGINT) AS n, "
-            f"sum_v, min_v, max_v, sum_v / NULLIF(n, 0) AS avg_v FROM {source}")
+    return f"CREATE VIEW IF NOT EXISTS {name} AS " + _VIEW_SELECT.format(source=source)
 
 
 # The same text on every backend. Only the small summary tables are exposed; there is no view
@@ -78,8 +84,8 @@ METRIC_VIEWS = (
 )
 VIEW_NAMES = ("metric_5m", "metric_hourly", "metric_daily", "availability_history")
 VIEW_COLUMNS = {
-    "metric_5m": ("host", "source", "metric", "labels", "bucket", "n", "sum_v", "min_v", "max_v",
-                  "avg_v"),
+    "metric_5m": ("series_id", "resource", "scope", "metric", "unit", "attrs", "bucket", "n",
+                  "sum_v", "min_v", "max_v", "avg_v"),
     "availability_history": ("monitor", "ts", "previous_state", "state", "message"),
 }
 VIEW_COLUMNS["metric_hourly"] = VIEW_COLUMNS["metric_daily"] = VIEW_COLUMNS["metric_5m"]
@@ -98,7 +104,6 @@ class RetentionLevels:
     daily_days: int = 730
     history_days: int = 730
     compress_after_days: int = 1
-    late_grace_s: int = LATE_GRACE_S
     overrides: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
@@ -111,7 +116,6 @@ RETENTION_SETTINGS = {
     "retention.daily_days": ("daily_days", 1, 3650),
     "retention.history_days": ("history_days", 1, 3650),
     "retention.compress_after_days": ("compress_after_days", 1, 30),
-    "retention.late_grace_s": ("late_grace_s", 0, 3600),
 }
 FIELD_KEYS = {spec[0]: key for key, spec in RETENTION_SETTINGS.items()}
 FIELD_BOUNDS = {spec[0]: (spec[1], spec[2]) for spec in RETENTION_SETTINGS.values()}
@@ -212,147 +216,3 @@ def save_settings(db: Conn, changes: dict[str, str | None], *, now: float, actor
         (now, actor, "retention_settings_changed", "PUT", path, 200, remote,
          json.dumps({"old": old, "new": new}, sort_keys=True)))
     return {"old": old, "new": new}
-
-
-# ---- folding ---------------------------------------------------------------------------------
-
-def _state(db: Conn, level: str) -> int | None:
-    row = db.execute("SELECT upto FROM rollup_state WHERE level = ?", (level,)).fetchone()
-    return None if row is None else int(row[0])
-
-
-def _save_state(db: Conn, level: str, upto: int, now: float, rows: int) -> None:
-    db.execute(
-        "INSERT INTO rollup_state (level, upto, last_run, last_rows) VALUES (?, ?, ?, ?) "
-        "ON CONFLICT (level) DO UPDATE SET upto = excluded.upto, last_run = excluded.last_run, "
-        "last_rows = excluded.last_rows", (level, upto, now, rows))
-
-
-def _fold_level(db: Conn, level: str, source_select: str, first_sql: str, end: int,
-                now: float) -> int:
-    table, _ = LEVELS[level]
-    start = _state(db, level)
-    if start is None:
-        row = db.execute(first_sql).fetchone()
-        if row is None or row[0] is None:
-            return 0
-        start = int(row[0])
-    if start >= end:
-        return 0
-    cur = db.execute(
-        f"INSERT INTO {table} (host, source, metric, labels, bucket, n, sum_v, min_v, max_v) "
-        f"{source_select} "
-        "ON CONFLICT (host, source, metric, labels, bucket) DO UPDATE SET "
-        f"n = {table}.n + excluded.n, sum_v = {table}.sum_v + excluded.sum_v, "
-        f"min_v = MIN({table}.min_v, excluded.min_v), max_v = MAX({table}.max_v, excluded.max_v)",
-        (start, end))
-    rows = cur.rowcount
-    _save_state(db, level, end, now, rows)
-    return max(rows, 0)
-
-
-def fold(db: Conn, now: float, bucket_of_ts: Callable[[str, int], str],
-         late_grace_s: int = LATE_GRACE_S) -> int:
-    """Fold every complete bucket that is new since the last call. Runs inside one write unit.
-    `bucket_of_ts(column, width)` is the backend's expression for the start of a bucket of a
-    REAL second timestamp. Returns the number of summary rows written."""
-    complete = int(now - late_grace_s)
-    end_5m = complete // WIDTH_5M * WIDTH_5M
-    b5 = bucket_of_ts("ts", WIDTH_5M)
-    total = _fold_level(
-        db, "5m",
-        "SELECT host, source, metric, labels, " + b5 + " AS bk, COUNT(value), SUM(value), "
-        "MIN(value), MAX(value) FROM host_samples WHERE ts >= ? AND ts < ? AND value IS NOT NULL "
-        "GROUP BY host, source, metric, labels, " + b5,
-        f"SELECT {bucket_of_ts('MIN(ts)', WIDTH_5M)} FROM host_samples",
-        end_5m, now)
-    done_5m = _state(db, "5m")
-    if done_5m is None:
-        return total
-    for level, source, width, below in (("1h", "rollup_5m", WIDTH_1H, "5m"),
-                                        ("1d", "rollup_1h", WIDTH_1D, "1h")):
-        # Only buckets the level below has finished folding, and only whole buckets.
-        end = min(complete, _state(db, below) or 0) // width * width
-        bk = f"(bucket / {width}) * {width}"
-        total += _fold_level(
-            db, level,
-            f"SELECT host, source, metric, labels, {bk} AS bk, SUM(n), SUM(sum_v), MIN(min_v), "
-            f"MAX(max_v) FROM {source} WHERE bucket >= ? AND bucket < ? "
-            f"GROUP BY host, source, metric, labels, {bk}",
-            f"SELECT (MIN(bucket) / {width}) * {width} FROM {source}", end, now)
-    return total
-
-
-def cutoffs(db: Conn, now: float, levels: RetentionLevels) -> dict[str, float]:
-    """The delete bound of each table. A level is never trimmed past the point the next level
-    has folded, so retention cannot remove data that is still needed to build a summary."""
-    raw = now - levels.raw_days * 86400
-    folded_5m = _state(db, "5m")
-    folded_1h = _state(db, "1h")
-    folded_1d = _state(db, "1d")
-    return {
-        "raw_samples": min(raw, float(folded_5m if folded_5m is not None else 0)),
-        "raw": raw,
-        "rollup_5m": min(now - levels.rollup_5m_days * 86400,
-                         float(folded_1h if folded_1h is not None else 0)),
-        "rollup_1h": min(now - levels.hourly_days * 86400,
-                         float(folded_1d if folded_1d is not None else 0)),
-        "rollup_1d": now - levels.daily_days * 86400,
-        "history": now - levels.history_days * 86400,
-    }
-
-
-def override_cutoffs(db: Conn, now: float, levels: RetentionLevels) -> dict[str, dict[str, float]]:
-    """The delete bound of each table for each overridden metric, with the same fold limits as
-    the global bounds."""
-    folded = {lv: _state(db, lv) for lv in ("5m", "1h", "1d")}
-
-    def done(level: str) -> float:
-        return float(folded[level] if folded[level] is not None else 0)
-
-    out = {}
-    for metric in levels.overrides:
-        def age(name: str, metric: str = metric) -> float:
-            return now - days_for(levels, metric, name) * 86400
-        out[metric] = {"host_samples": min(age("raw_days"), done("5m")),
-                       "rollup_5m": min(age("rollup_5m_days"), done("1h")),
-                       "rollup_1h": min(age("hourly_days"), done("1d")),
-                       "rollup_1d": age("daily_days")}
-    return out
-
-
-_METRIC_TABLES = (("host_samples", "ts"), ("rollup_5m", "bucket"), ("rollup_1h", "bucket"),
-                  ("rollup_1d", "bucket"))
-
-
-def retention_statements(cut: dict[str, float], *, now: float, audit_retention_days: int,
-                         override_cut: dict[str, dict[str, float]] | None = None
-                         ) -> list[tuple[str, tuple]]:
-    """Every delete as (sql, args) in the order to run them, one write unit each so ingest is
-    never held back behind one long delete. The first is the poll rows, whose count is returned
-    to the caller. A metric with an override is left out of the global delete of each metric
-    table and has a delete of its own with its own bound."""
-    override_cut = override_cut or {}
-    metrics = tuple(sorted(override_cut))
-    skip = f" AND metric NOT IN ({', '.join('?' * len(metrics))})" if metrics else ""
-
-    def glob(table: str, column: str, key: str) -> tuple[str, tuple]:
-        return f"DELETE FROM {table} WHERE {column} < ?{skip}", (cut[key], *metrics)
-
-    out = [
-        ("DELETE FROM results WHERE ts < ?", (cut["raw"],)),
-        glob("host_samples", "ts", "raw_samples"),
-        ("DELETE FROM ingest_batches WHERE ts < ?", (cut["raw"],)),
-        glob("rollup_5m", "bucket", "rollup_5m"),
-        glob("rollup_1h", "bucket", "rollup_1h"),
-        glob("rollup_1d", "bucket", "rollup_1d"),
-        ("DELETE FROM events WHERE ts < ?", (cut["history"],)),
-        ("DELETE FROM host_events WHERE ts < ?", (cut["history"],)),
-        ("DELETE FROM audit WHERE ts < ?", (now - audit_retention_days * 86400,)),
-        ("DELETE FROM sessions WHERE expires < ?", (now,)),
-    ]
-    for metric in metrics:
-        for table, column in _METRIC_TABLES:
-            out.append((f"DELETE FROM {table} WHERE metric = ? AND {column} < ?",
-                        (metric, override_cut[metric][table])))
-    return out

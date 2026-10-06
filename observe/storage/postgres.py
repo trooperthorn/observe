@@ -26,7 +26,7 @@ from psycopg import errors as pg_errors
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import ConnectionPool, PoolTimeout
 
-from . import pg_timescale, rollups
+from . import compaction, pg_timescale, rollups
 from .base import CHANGE_DOMAINS, Conn, IntegrityConflict, StorageBusy, StorageError, StorageTimeout, T
 from .pg_dialect import table_info_query, translate_sql
 from .schema import (MIGRATIONS, PLUGIN_TABLES, PluginSchemaTooNewError, SchemaTooNewError)
@@ -118,10 +118,6 @@ class PgConn:
         return _Cursor(cur)
 
 
-def _bucket_of_ts(column: str, width: int) -> str:
-    return f"(floor({column} / {width}) * {width})::bigint"
-
-
 class PgStorage:
     backend = "postgres"
 
@@ -154,6 +150,7 @@ class PgStorage:
             self._admin = PgConn(psycopg.connect(self._conninfo, autocommit=True))
             self._wconn = PgConn(self._wraw)
             self.timescale = self._start(plugins or {}, timescale)
+            self.incremental_rollups = not self.timescale
             self._seqs = {d: int(s) for d, s in self._wconn.execute(
                 "SELECT domain, seq FROM change_seq")}
             self._wraw.commit()
@@ -430,55 +427,46 @@ class PgStorage:
     def _apply_policies(self, levels: rollups.RetentionLevels) -> None:
         self._admin_run(pg_timescale.policy_statements(levels))
 
-    async def rollup(self, now: float) -> int:
-        if not self.timescale:
-            levels = await self.write(lambda db: rollups.load_levels(db))
-            return await self.write(
-                lambda db: rollups.fold(db, now, _bucket_of_ts, levels.late_grace_s))
-        levels = await self.write(lambda db: rollups.load_levels(db))
-
-        def refresh() -> int:
-            def count() -> int:
-                return int(self._admin.execute("SELECT count(*) FROM rollup_5m").fetchone()[0])
-            before = count()
-            self._admin_run(pg_timescale.refresh_statements(now, levels))
-            return count() - before
-
-        return max(0, await asyncio.wrap_future(self._writer.submit(refresh)))
-
     async def apply_retention(self, *, now: float, retention_days: int,
                               audit_retention_days: int) -> int:
-        await self.rollup(now)
-        levels = await self.write(lambda db: rollups.load_levels(db, retention_days))
-        cut = await self.write(lambda db: rollups.cutoffs(db, now, levels))
-        override_cut = await self.write(lambda db: rollups.override_cutoffs(db, now, levels))
-        if self.timescale:
-            def policies() -> None:
-                self._apply_policies(levels)
-                self._admin_run(pg_timescale.drop_statements(now, levels))
-            await asyncio.wrap_future(self._writer.submit(policies))
-        removed = 0
-        for i, (sql, args) in enumerate(rollups.retention_statements(
-                cut, now=now, audit_retention_days=audit_retention_days,
-                override_cut=override_cut)):
-            if self.timescale and self._chunk_managed(sql, bool(override_cut)):
-                continue  # chunks are dropped by the policies above
-            count = await self.write(lambda db, sql=sql, args=args: db.execute(
-                sql, args).rowcount)
-            if i == 0:
-                removed = count
-        return removed
+        """One compaction pass. Plain PostgreSQL runs the shared per-series, chunked, verified
+        compaction. On TimescaleDB the summary levels are trimmed by their policies, and raw
+        samples by `drop_raw`, which refreshes the aggregates and checks coverage first."""
+        if not self.timescale:
+            return await compaction.run(self, now, retention_days, audit_retention_days)
+        return await compaction.run(self, now, retention_days, audit_retention_days,
+                                    summaries_by_policy=True, raw=self.drop_raw)
 
-    @staticmethod
-    def _chunk_managed(sql: str, has_overrides: bool) -> bool:
-        """Whether the TimescaleDB policies already cover this delete. Continuous aggregates
-        cannot be deleted from, so they are always left to their policies (which keep the longest
-        level any metric needs). Raw samples can, so with overrides they are deleted per metric
-        as well, because a policy can only drop a chunk once every metric in it is past
-        retention."""
-        if "rollup_" in sql:
-            return True
-        return "host_samples" in sql and not has_overrides
+    async def drop_raw(self, now: float, levels: rollups.RetentionLevels) -> int:
+        """TimescaleDB: refresh the aggregates over the recent window, verify that they cover the
+        raw chunks about to go, and drop those chunks. A metric with a shorter override is trimmed
+        by row first, because a chunk can only be dropped once every metric in it is past
+        retention. Returns the raw rows older than the drop bound."""
+        def refresh() -> None:
+            self._apply_policies(levels)
+            self._admin_run(pg_timescale.refresh_statements(now, levels))
+        await asyncio.wrap_future(self._writer.submit(refresh))
+        if levels.overrides:
+            await compaction.compact_level(self, "raw", now, levels)
+        holds = compaction.whole_table_cuts(levels, now)
+        bound = holds.raw
+
+        def check(db: Conn) -> tuple[bool, int]:
+            ok = compaction.coverage_ok(db, "raw", bound, holds)
+            n = db.execute("SELECT COUNT(*) FROM samples WHERE ts < ?", (bound,)).fetchone()[0]
+            return ok, int(n)
+
+        ok, rows = await self.read(check)
+        error = ""
+        if ok:
+            await asyncio.wrap_future(self._writer.submit(
+                self._admin_run, [pg_timescale.drop_raw_statement(bound)]))
+        else:
+            error = "raw chunks kept: the aggregates do not cover them yet"
+            log.warning(error)
+        await self.write(lambda db: compaction.note_level(
+            db, "raw", bound // 1000, now, rows if ok else 0, error))
+        return rows if ok else 0
 
     async def save_retention_settings(self, changes: dict[str, str | None], *, now: float,
                                       actor: str, remote: str, path: str,

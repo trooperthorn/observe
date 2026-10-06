@@ -22,6 +22,7 @@ from observe.store import Store
 from observe.web import create_app
 
 from .conftest import make_config
+from .dbq import SAMPLE_ROWS
 
 FIXTURES = Path(__file__).parent / "fixtures" / "hostwatch"
 
@@ -80,7 +81,7 @@ def test_valid_batch_is_stored(env):
     r = env.post(fixture("batch_minimal"), key)
     assert r.status_code == 200, r.text
     assert r.json() == {"stored": 2, "events_stored": 0}
-    assert env.rows("SELECT host, source, metric, value FROM host_samples ORDER BY metric") == [
+    assert env.rows(f"SELECT host, source, metric, value FROM {SAMPLE_ROWS} ORDER BY metric") == [
         ("nas01", "rapl", "dram_watts", None), ("nas01", "rapl", "package_watts", 12.5)]
     sources = dict((s, (a, r)) for _, s, a, r, _ in env.rows("SELECT * FROM host_sources"))
     assert sources["rapl"] == (1, "") and sources["mdraid"][0] == 0
@@ -98,7 +99,7 @@ def test_missing_or_wrong_key_is_401(env):
     assert env.post(body, "wpi_nosuchprefix_secret").status_code == 401
     assert env.client.post("/api/ingest", json=body,
                            headers={"Authorization": "Basic Zm9vOmJhcg=="}).status_code == 401
-    assert env.rows("SELECT COUNT(*) FROM host_samples") == [(0,)]
+    assert env.rows("SELECT COUNT(*) FROM samples") == [(0,)]
 
 
 def test_revoked_key_is_401(env):
@@ -112,7 +113,7 @@ def test_key_bound_to_another_host_is_403(env):
     key = env.key("nas02")
     r = env.post(fixture("batch_minimal"), key)  # the batch says nas01
     assert r.status_code == 403
-    assert env.rows("SELECT COUNT(*) FROM host_samples") == [(0,)]
+    assert env.rows("SELECT COUNT(*) FROM samples") == [(0,)]
     assert env.rows("SELECT COUNT(*) FROM hosts") == [(0,)]
 
 
@@ -124,7 +125,7 @@ def test_duplicate_batch_replay_is_acknowledged_once(env):
     again = env.post(body, key)
     assert again.status_code == 200
     assert again.json() == {"stored": 0, "events_stored": 0, "duplicate": True}
-    assert env.rows("SELECT COUNT(*) FROM host_samples") == [(1,)]
+    assert env.rows("SELECT COUNT(*) FROM samples") == [(1,)]
     assert env.rows("SELECT COUNT(*) FROM host_events") == [(2,)]
     other = copy.deepcopy(body)
     other["batch_id"] = "2b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed"
@@ -199,7 +200,7 @@ def test_invalid_body_is_422_and_stores_nothing(env):
     assert env.post(worse, key).status_code == 422
     assert env.post(b"not json", key).status_code == 422
     assert env.post(b"[1,2]", key).status_code == 422
-    assert env.rows("SELECT COUNT(*) FROM host_samples") == [(0,)]
+    assert env.rows("SELECT COUNT(*) FROM samples") == [(0,)]
     assert env.rows("SELECT COUNT(*) FROM hosts") == [(0,)]
 
 
@@ -331,7 +332,7 @@ def test_hostwatch_agent_request_is_accepted_end_to_end(env):
     r = agent_post(env, hostwatch_batch(), key)
     assert r.status_code == 200, r.text
     assert r.json() == {"stored": 1, "events_stored": 0}
-    assert env.rows("SELECT host, metric, value FROM host_samples") == [("nas01", "package_watts", 12.5)]
+    assert env.rows(f"SELECT host, metric, value FROM {SAMPLE_ROWS}") == [("nas01", "package_watts", 12.5)]
 
 
 def test_batch_with_unknown_fields_is_accepted(env):
@@ -352,11 +353,11 @@ def test_resend_without_batch_id_is_stored_once(env):
     again = agent_post(env, body, key)
     assert again.status_code == 200
     assert again.json() == {"stored": 0, "events_stored": 0, "duplicate": True}
-    assert env.rows("SELECT COUNT(*) FROM host_samples") == [(1,)]
+    assert env.rows("SELECT COUNT(*) FROM samples") == [(1,)]
     changed = hostwatch_batch()
     changed["samples"][0]["ts"] += 15
     assert agent_post(env, changed, key).json()["stored"] == 1
-    assert env.rows("SELECT COUNT(*) FROM host_samples") == [(2,)]
+    assert env.rows("SELECT COUNT(*) FROM samples") == [(2,)]
 
 
 def test_invalid_batch_is_422_and_logged(env, caplog):
@@ -397,7 +398,7 @@ def test_deeply_nested_body_is_rejected_and_recorded(env, body):
     assert r.status_code == 400
     rows = env.rows("SELECT kind, status, detail FROM audit WHERE kind='ingest_denied'")
     assert len(rows) == 1 and rows[0][1] == 400 and "nested" in rows[0][2]
-    assert env.rows("SELECT COUNT(*) FROM host_samples") == [(0,)]
+    assert env.rows("SELECT COUNT(*) FROM samples") == [(0,)]
 
 
 def test_brackets_inside_strings_do_not_count_as_nesting(env):

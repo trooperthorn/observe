@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from .checks.base import CheckResult
 from .ingest.schema import Batch, normalize_severity
 from .state import Transition
-from .storage import Conn, Storage, open_storage, rollups
+from .storage import Conn, Storage, open_storage, rollups, series
 
 if TYPE_CHECKING:
     from .plugins import LoadedPlugins
@@ -57,6 +57,11 @@ _TAKES_OVER = (f"({_rank_sql('excluded.agent_version')} > {_rank_sql('hosts.agen
 
 
 
+# The newest point of each series of a host, with its source (scope), metric, labels and unit.
+_LATEST_SQL = ("SELECT sc.name, s.metric, s.attrs, l.value, s.unit, l.ts FROM latest l "
+               "JOIN series s ON s.id = l.series_id JOIN scopes sc ON sc.id = s.scope_id ")
+
+
 class Store:
     def __init__(self, path: str, plugins: LoadedPlugins | None = None, *,
                  backend: str = "sqlite", dsn: str | None = None, password: str | None = None,
@@ -72,10 +77,6 @@ class Store:
         return cls(config.server.db_path, plugins, backend=s.backend,
                    dsn=s.dsn.get_secret_value() if s.dsn else None, password=s.password(),
                    timescale=s.timescaledb)
-
-    async def rollup(self) -> int:
-        """Fold the samples that are due into the summary levels."""
-        return await self.storage.rollup(time.time())
 
     async def fetch(self, sql: str, args: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
         """One read statement on the read pool."""
@@ -172,11 +173,12 @@ class Store:
             "ELSE hosts.agent_version END, "
             "heartbeat_ts=MAX(COALESCE(hosts.heartbeat_ts, 0), excluded.heartbeat_ts)",
             (batch.host, batch.platform, batch.agent_version, now, now, sent))
-        db.executemany(
-            "INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
-            "VALUES (?,?,?,?,?,?,?)",
-            [(clamp(s.ts), batch.host, s.source, s.metric, json.dumps(s.labels, sort_keys=True),
-              s.value, s.unit) for s in batch.samples])
+        # A pushed host is a resource of kind host; each source is the scope its points came
+        # from and its labels are the point attributes (docs/DATA-API-DESIGN.md section 3.2).
+        recorded = series.record_points(
+            db, kind="host", name=batch.host, now=now, rollups=self.storage.incremental_rollups,
+            points=[series.Point(s.source, s.metric, s.unit, series.canonical(s.labels),
+                                 series.to_ms(clamp(s.ts)), s.value) for s in batch.samples])
         db.executemany(
             "INSERT INTO host_sources (host, source, available, reason, updated) VALUES (?,?,?,?,?) "
             "ON CONFLICT(host, source) DO UPDATE SET available=excluded.available, "
@@ -209,7 +211,7 @@ class Store:
                     "UPDATE hosts SET boot_id=?, boot_ts=?, clean_shutdown=? "
                     "WHERE host=? AND (boot_ts IS NULL OR boot_ts <= ?)",
                     (ev.boot_id, ev_ts, clean, batch.host, ev_ts))
-        return len(batch.samples), stored, False
+        return len(batch.samples) - recorded.dropped, stored, False
 
     async def ingest_batch(self, batch: Batch, boots: dict[int, tuple[str, int | None]],
                            now: float | None = None) -> tuple[int, int, bool]:
@@ -222,38 +224,31 @@ class Store:
 
     @staticmethod
     def _latest_host_unit(db: Conn, host: str, since: float, newest_fallback: bool,
-                          series: tuple[tuple[str, str], ...]) -> dict[str, Any] | None:
+                          series_wanted: tuple[tuple[str, str], ...]) -> dict[str, Any] | None:
         row = db.execute(
             "SELECT last_seen, platform, agent_version, clean_shutdown, boot_ts FROM hosts WHERE host=?",
             (host,)).fetchone()
         if row is None:
             return None
-        # Newest row per series; rowid breaks a tie between equal timestamps, so the
-        # row inserted last wins instead of an arbitrary one.
-        samples = db.execute(
-            "SELECT source, metric, labels, value, unit, ts FROM ("
-            "SELECT source, metric, labels, value, unit, ts, ROW_NUMBER() OVER ("
-            "PARTITION BY source, metric, labels ORDER BY ts DESC, rowid DESC) AS n "
-            "FROM host_samples WHERE host=? AND ts>=?) AS newest WHERE n=1", (host, since)).fetchall()
-        if not samples and newest_fallback:
-            # Nothing inside the window: return the single newest row (one index
-            # lookup) so a host that has gone quiet still reads as stale, not empty.
-            samples = db.execute(
-                "SELECT source, metric, labels, value, unit, ts FROM host_samples "
-                "WHERE host=? ORDER BY ts DESC, rowid DESC LIMIT 1", (host,)).fetchall()
-        if series:
-            # A named series with nothing inside the window is silent, not absent:
-            # read its own newest row (series index) so it still grades as stale.
+        since_ms = series.to_ms(since)
+        rid = series.find_resource(db, "host", host)
+        samples = [] if rid is None else db.execute(
+            _LATEST_SQL + "WHERE s.resource_id=? AND l.ts>=?", (rid, since_ms)).fetchall()
+        if rid is not None and not samples and newest_fallback:
+            # Nothing inside the window: return the single newest row so a host that has gone
+            # quiet still reads as stale, not empty.
+            samples = db.execute(_LATEST_SQL + "WHERE s.resource_id=? ORDER BY l.ts DESC LIMIT 1",
+                                 (rid,)).fetchall()
+        if series_wanted and rid is not None:
+            # A named series with nothing inside the window is silent, not absent: read its own
+            # latest row so it still grades as stale.
             have = {(r[0], r[1]) for r in samples}
-            for src, metric in series:
+            for src, metric in series_wanted:
                 if (src, metric) in have:
                     continue
                 samples = list(samples) + db.execute(
-                    "SELECT source, metric, labels, value, unit, ts FROM ("
-                    "SELECT source, metric, labels, value, unit, ts, ROW_NUMBER() OVER ("
-                    "PARTITION BY labels ORDER BY ts DESC, rowid DESC) AS n "
-                    "FROM host_samples WHERE host=? AND source=? AND metric=? AND ts<?) "
-                    "AS newest WHERE n=1", (host, src, metric, since)).fetchall()
+                    _LATEST_SQL + "WHERE s.resource_id=? AND sc.name=? AND s.metric=? AND l.ts<?",
+                    (rid, src, metric, since_ms)).fetchall()
         sources = db.execute(
             "SELECT source, available, reason FROM host_sources WHERE host=?",
             (host,)).fetchall()
@@ -261,7 +256,7 @@ class Store:
             "last_seen": row[0], "platform": row[1], "agent_version": row[2],
             "clean_shutdown": row[3], "boot_ts": row[4],
             "samples": [{"source": r[0], "metric": r[1], "labels": json.loads(r[2]),
-                         "value": r[3], "unit": r[4], "ts": r[5]} for r in samples],
+                         "value": r[3], "unit": r[4], "ts": r[5] / 1000.0} for r in samples],
             "sources": {r[0]: {"available": bool(r[1]), "reason": r[2]} for r in sources},
         }
 

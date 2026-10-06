@@ -55,24 +55,32 @@ def test_pragma_table_info_runs_the_catalogue_query():
     assert "information_schema.columns" in sql and args == ("ingest_keys",)
 
 
-def test_the_hypertable_is_chunked_by_day_on_whole_seconds():
+def test_the_hypertable_is_chunked_by_day_on_whole_milliseconds():
     text = " ".join(pg_timescale.SETUP)
-    assert "create_hypertable('host_samples', 'ts_s'" in text
-    assert "chunk_time_interval => 86400" in text
-    assert "timescaledb.compress_segmentby" in text
+    assert "create_hypertable('samples', 'ts'" in text
+    assert "chunk_time_interval => 86400000" in text
+    assert "timescaledb.compress_segmentby = 'series_id'" in text
+    assert "host_samples" not in text and "ts_s" not in text
     for name in ("rollup_5m", "rollup_1h", "rollup_1d"):
         assert f"CREATE MATERIALIZED VIEW IF NOT EXISTS {name} WITH (timescaledb.continuous)" in text
+    # The levels are built on each other and carry the columns of the shared summary tables.
+    assert "time_bucket(300000::bigint, ts)" in text
+    assert "FROM rollup_5m GROUP BY series_id" in text and "FROM rollup_1h GROUP BY series_id" in text
+    assert "count(value) AS n, sum(value) AS sum_v, min(value) AS min_v, max(value) AS max_v" in text
 
 
 def test_the_policies_follow_the_retention_levels():
     levels = RetentionLevels(raw_days=3, rollup_5m_days=10, hourly_days=100, daily_days=400)
     text = "\n".join(pg_timescale.policy_statements(levels))
-    assert "add_retention_policy('host_samples', drop_after => 259200)" in text
-    assert "add_retention_policy('rollup_5m', drop_after => 864000)" in text
-    assert "add_retention_policy('rollup_1h', drop_after => 8640000)" in text
-    assert "add_retention_policy('rollup_1d', drop_after => 34560000)" in text
-    assert "remove_retention_policy('host_samples', if_exists => TRUE)" in text  # repeatable
-    assert "add_compression_policy('host_samples'" in text
+    day = 86_400_000
+    assert f"add_retention_policy('rollup_5m', drop_after => {10 * day})" in text
+    assert f"add_retention_policy('rollup_1h', drop_after => {100 * day})" in text
+    assert f"add_retention_policy('rollup_1d', drop_after => {400 * day})" in text
+    # Raw chunks are dropped by compaction after a coverage check, never by a blind policy.
+    assert "add_retention_policy('samples'" not in text
+    assert "remove_retention_policy('samples', if_exists => TRUE)" in text  # repeatable
+    assert "remove_retention_policy('rollup_5m', if_exists => TRUE)" in text
+    assert "add_compression_policy('samples'" in text
     assert text.count("add_continuous_aggregate_policy") == 3
 
 
@@ -80,10 +88,11 @@ def test_the_policies_follow_the_retention_levels():
 def test_a_refresh_window_stays_inside_the_retention_of_its_source(raw_days):
     levels = RetentionLevels(raw_days=raw_days)
     starts = pg_timescale.refresh_start_offsets(levels)
-    assert starts["rollup_5m"] <= raw_days * 86400 // 2 or starts["rollup_5m"] == 900
-    assert starts["rollup_1h"] <= levels.rollup_5m_days * 86400
-    assert starts["rollup_1d"] <= levels.hourly_days * 86400
-    assert starts["rollup_5m"] >= 900  # at least two buckets plus the end offset
+    day = 86_400_000
+    assert starts["rollup_5m"] <= raw_days * day // 2 or starts["rollup_5m"] == 900_000
+    assert starts["rollup_1h"] <= levels.rollup_5m_days * day
+    assert starts["rollup_1d"] <= levels.hourly_days * day
+    assert starts["rollup_5m"] >= 900_000  # at least two buckets plus the end offset
 
 
 def test_a_refresh_covers_complete_buckets_in_level_order():
@@ -91,7 +100,7 @@ def test_a_refresh_covers_complete_buckets_in_level_order():
     assert [c.split("'")[1] for c in calls] == ["rollup_5m", "rollup_1h", "rollup_1d"]
     for call in calls:
         start, end = (int(x) for x in call.rstrip(")").rsplit(",", 2)[1:])
-        assert start < end <= 1_000_000_000 - 60
+        assert start < end <= (1_000_000_000 - 60) * 1000
 
 
 class FakeAdmin(FakeRaw):
@@ -124,7 +133,7 @@ def test_the_setup_runs_in_autocommit_after_closing_any_open_transaction():
 def test_integer_now_is_registered_before_any_policy_is_added():
     stmts = pg_timescale.policy_statements(RetentionLevels())
     first_add = next(i for i, s in enumerate(stmts) if "add_" in s and "_policy" in s)
-    registered = [i for i, s in enumerate(stmts) if "set_integer_now_func('host_samples'" in s]
+    registered = [i for i, s in enumerate(stmts) if "set_integer_now_func('samples'" in s]
     assert registered and registered[0] < first_add
     setup = pg_timescale.SETUP
     assert (next(i for i, s in enumerate(setup) if "set_integer_now_func" in s)
@@ -134,10 +143,14 @@ def test_integer_now_is_registered_before_any_policy_is_added():
 @pytest.mark.parametrize("raw_days", [1, 3, 7, 45])
 def test_refresh_windows_and_policy_offsets_are_multiples_of_the_bucket_width(raw_days):
     levels = RetentionLevels(raw_days=raw_days, rollup_5m_days=11, hourly_days=13)
-    widths = {"rollup_5m": 300, "rollup_1h": 3600, "rollup_1d": 86400}
+    widths = {"rollup_5m": 300_000, "rollup_1h": 3_600_000, "rollup_1d": 86_400_000}
     for view, start in pg_timescale.refresh_start_offsets(levels).items():
         assert start % widths[view] == 0
     for call in pg_timescale.refresh_statements(1_000_000_123.0, levels):
         view = call.split("'")[1]
         start, end = (int(x) for x in call.rstrip(")").rsplit(",", 2)[1:])
         assert start % widths[view] == 0 and end % widths[view] == 0 and start < end
+
+
+def test_the_drop_of_raw_chunks_names_the_samples_hypertable():
+    assert pg_timescale.drop_raw_statement(5) == "SELECT drop_chunks('samples', older_than => 5)"

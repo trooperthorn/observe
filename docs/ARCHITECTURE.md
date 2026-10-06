@@ -116,53 +116,94 @@ become `GREATEST` and `LEAST`, and `PRAGMA table_info` becomes a catalogue query
 REPLACE` is refused. The core steps and the plugin steps run through the same rewrite, and an
 advisory lock makes two starting processes migrate one at a time.
 
-The summary levels are shared. Migration 18 adds `rollup_5m`, `rollup_1h`, `rollup_1d` (host,
-source, metric, labels, bucket, n, sum, min, max), the watermark table `rollup_state` and four
-views with the same columns on every backend: `metric_5m`, `metric_hourly`, `metric_daily` (with
-`avg_v` as sum over count) and `availability_history` (over `events`). `Storage.rollup(now)`
-folds each level once from the level below it, complete buckets only, inside one write unit
-(`observe/storage/rollups.py`); the scheduler calls it every 5 minutes. A sample that arrives more
-than 60 seconds after its 5 minute bucket was folded stays a raw row and is left out of the
-summaries. `apply_retention` folds first, then trims each level at its own age: raw 7 days (1 to
-30), 5 minute 14 days, hourly 90 days (90 to 180), daily 730 days and the up and down history 730
-days, read from `app_settings` keys `retention.raw_days`, `retention.5m_days`,
-`retention.hourly_days`, `retention.daily_days` and `retention.history_days`. A level is never
-trimmed past what the next level has folded. When no raw setting exists, `server.retention_days`
-is the raw level. Two more settings sit beside them: `retention.compress_after_days` (1 to 30,
-default 1, the TimescaleDB compression delay) and `retention.late_grace_s` (0 to 3600, default 60,
-how long after a 5 minute bucket ends it is folded). Per-metric overrides are one JSON value in
-`retention.overrides`: a metric name maps to its own `raw_days`, `rollup_5m_days`, `hourly_days`
-or `daily_days`, within the same bounds, at most 100 metrics. The shared retention code deletes a
-metric with an override by its own bounds and leaves it out of the global delete, on SQLite and
-plain PostgreSQL. `observe/retention.py` validates a change (whole numbers inside the bounds,
-unknown names refused) and `Storage.save_retention_settings` writes the keys and one
-`retention_settings_changed` audit row holding the old and new values in one transaction.
-`GET` and `PUT /api/admin/retention` (admin session, CSRF on the PUT) read and change them; a
-refused value is 422 and audited as `retention_settings_failed`. On TimescaleDB a change also
-registers the policies again at once. A chunk is dropped only when every metric in it is past
-retention, so the policy keeps the longest of the global level and the overrides; raw rows of a
-metric kept for less are deleted by row, but a continuous aggregate cannot be deleted from, so
-its metrics keep the longest level (a known difference from SQLite).
+Series storage and the summary levels are shared. Migration 16 adds `resources`, `scopes`,
+`series`, `samples` and `latest` (`observe/storage/series.py`), and migration 17 adds `rollup_5m`,
+`rollup_1h`, `rollup_1d`, the compaction table `rollup_state` and four views with the same columns
+on every backend: `metric_5m`, `metric_hourly`, `metric_daily` and `availability_history` (over
+`events`). There is no `host_samples` table.
+
+A resource is an entity that produces data; a pushed host is a resource of kind `host` whose
+identity is its `host.name`. A scope is the producer of a point, which for a pushed host is the
+source name (`hwmon`, `zfs`, `thermalctl`). A series is a resource, a scope, a metric and the
+point attributes (a host's labels), stored once with a stable integer id; its key is a BLAKE2b
+digest of the canonical form, attributes sorted by key, scalar values only. The design leaves the
+scope out of the series identity, but until the OpenTelemetry normalizer gives every producer one
+metric namespace two sources can send the same metric name for one host, so the scope is part of
+the identity for now. At most 2,000 series per resource and 50,000 in all are kept; a point for a
+series over a cap is dropped and counted in `Recorded.dropped`. `samples` holds `(series_id, ts,
+value)` with `ts` in integer milliseconds and the primary key `(series_id, ts)`, so a replay of a
+point cannot be stored twice, and `latest` holds the newest point of each series with the one
+before it. Both ids are never reused (`AUTOINCREMENT`), so removing a host cannot leave summary
+rows that a later series would adopt.
+
+`series.record_points` runs inside the ingest write unit. A point is stored with `INSERT ... ON
+CONFLICT DO NOTHING`, and only a point that was newly inserted updates `latest` (kept when the
+point is not older than the current one, so arrival order does not matter) and, on SQLite and plain
+PostgreSQL, the three summary levels: one upsert each into `rollup_5m`, `rollup_1h` and
+`rollup_1d` holding the count, sum, minimum and maximum of the non-null values of the bucket, whose
+key is the millisecond start of the bucket. The levels are therefore current in the same
+transaction as the raw point and are never recomputed at read time, an out-of-order point lands in
+its own bucket, and a replay changes nothing. A point resent with a different value replaces the
+stored one; the 5 minute bucket is recomputed from raw samples, and a coarser bucket from the level
+below when that level still holds all of it, otherwise its count and sum are adjusted by the
+difference and its extremes widened. A value of null is stored (the gap stays visible) and counts
+toward nothing. The views join the series, scope and resource names and show the bucket in whole
+seconds with `avg_v` as sum over count; there is no view over raw samples.
+
+Compaction (`observe/storage/compaction.py`, run by `apply_retention` from the scheduler every
+hour) trims, level by level, raw samples (default 7 days, 1 to 30), 5 minute summaries (14 days),
+hourly summaries (90 days, 90 to 180) and daily summaries (730 days), and the up and down history
+(730 days), read from `app_settings` keys `retention.raw_days`, `retention.5m_days`,
+`retention.hourly_days`, `retention.daily_days` and `retention.history_days`. When no raw setting
+exists, `server.retention_days` is the raw level. Before a series loses rows, the compaction
+verifies coverage: the points about to go must be counted in the levels above that still hold their
+time range (the count of the coarser level at least the count of the finer one, each checked over
+the range that level keeps). A series that fails is left alone, the first failure is kept in
+`rollup_state` and shown on the admin page, and the pass goes on. A cut is aligned down to the
+width of the level that covers it (5 minutes for raw, an hour for 5 minute rows, a day for hourly
+and daily rows), so a bucket is never split. Deletes are chunked: a write unit removes at most
+5,000 rows and looks at no more than 500 series, so ingest is never held back behind one delete.
+`retention.compress_after_days` (1 to 30, default 1) is the TimescaleDB compression delay. Per-metric
+overrides are one JSON value in `retention.overrides`: a metric name maps to its own `raw_days`,
+`rollup_5m_days`, `hourly_days` or `daily_days`, within the same bounds, at most 100 metrics, and the
+compaction gives that metric's series their own cuts, on SQLite and plain PostgreSQL.
+`observe/retention.py` validates a change (whole numbers inside the bounds, unknown names refused)
+and `Storage.save_retention_settings` writes the keys and one `retention_settings_changed` audit row
+holding the old and new values in one transaction. `GET` and `PUT /api/admin/retention` (admin
+session, CSRF on the PUT) read and change them; a refused value is 422 and audited as
+`retention_settings_failed`. On TimescaleDB a change also registers the policies again at once.
 
 The admin retention page `GET /admin/retention` (admin session, in the Admin menu) is written by
 the server (`observe/retention_page.py`) so the CSRF token and the last-run table are in the first
 response; `admin-retention.js` saves the form with `PUT /api/admin/retention`. The table reads
-`rollup_state`: one row per rollup level (`5m`, `1h`, `1d`) with the time and rows of its last
-fold, and one `compaction` row that the maintenance loop writes after each pass (poll rows
-removed, and the error text, cut to 200 characters, when the pass failed). The page names the
-storage backend and never the DSN or its password.
+`rollup_state`: one row per trimmed level (`raw`, `5m`, `1h`, `1d`) with the time it was trimmed to,
+when, the rows removed and the first coverage problem, and one `compaction` row that the
+maintenance loop writes after each pass (poll rows removed, and the error text, cut to 200
+characters, when the pass failed). The page names the storage backend and never the DSN or its
+password.
 
 With the TimescaleDB extension (`storage.timescaledb: auto` uses it when the database offers it,
-`on` requires it, `off` never uses it) `host_samples` is a hypertable chunked by day on `ts_s`
-(whole seconds, kept by a trigger because `ts` is a REAL), and `rollup_5m`, `rollup_1h` and
-`rollup_1d` are continuous aggregates with the same names and columns as the plain tables, so the
-views are the same text on both. Refresh, retention and compression policies are removed and
-added again from the retention levels at start and at every retention run, so a changed setting
-applies at the next compaction, or at once when it is saved through the admin endpoint. A refresh window never reaches back past half of its source's
-retention, so a refresh cannot rebuild a bucket whose source rows are gone. On plain PostgreSQL
-the shared incremental rollups run unchanged. The choice is made when the database is created:
-a database created without TimescaleDB is refused under `on`, and a TimescaleDB database is
-refused when the extension is off, because there is no migration path; destroy and redeploy.
+`on` requires it, `off` never uses it) `samples` is a hypertable chunked by day on `ts`
+(milliseconds, compressed by series), and `rollup_5m`, `rollup_1h` and `rollup_1d` are continuous
+aggregates over it (the hourly one over the 5 minute one, the daily over the hourly) with the same
+names and columns as the plain tables, so the views are the same text on both. The writer then
+stores only the point and `latest` (`Storage.incremental_rollups` is false) and the aggregates
+build the levels, which are current as of the last refresh (every 5 minutes, and at each
+compaction). Refresh and compression policies, and the retention policies of the aggregates, are
+removed and added again from the retention levels at start and at every retention run, so a changed
+setting applies at the next compaction, or at once when it is saved through the admin endpoint. A
+refresh window never reaches back past half of its source's retention, so a refresh cannot rebuild a
+bucket whose source rows are gone. Raw samples have no retention policy: `PgStorage.drop_raw`
+refreshes the aggregates, checks coverage over the range about to go, and only then drops whole
+chunks older than the longest raw level any metric keeps, and a metric with a shorter override is
+first trimmed by row. A chunk is a day, so raw rows can outlive the raw level by up to a day. The
+aggregates cannot be deleted from by metric, so their metrics keep the longest level (a known
+difference from SQLite), and removing a host deletes its raw samples and series but leaves its
+buckets in the aggregates to retention; the views join the series table, so they no longer show
+them. On plain PostgreSQL the shared incremental rollups and compaction run unchanged. The choice
+is made when the database is created: a database created without TimescaleDB is refused under `on`,
+and a TimescaleDB database is refused when the extension is off, because there is no migration
+path; destroy and redeploy.
 
 Application queries are written once and return the same Python types on both backends. Counts
 and sums that feed arithmetic are cast to `BIGINT` and averages to `DOUBLE PRECISION` in the SQL,
@@ -208,7 +249,7 @@ with an interval of at least 30 seconds and a timeout. The scheduler runs each i
 its own task, once at startup and then on its interval, so one failing or slow
 collector is logged once per streak and cannot stop the others or the scheduler.
 
-Version 2 adds `hosts`, `host_samples`, `host_sources` and `host_events`.
+Version 2 adds `hosts`, `host_sources` and `host_events`.
 Version 3 adds `ingest_keys`, `users`, `sessions` and `audit`, and version 4 adds
 `ingest_batches`, version 5 adds `plugin_schema`, and version 6 adds the
 infrastructure tables (see "Infrastructure map core"). Version 9 adds the
@@ -216,8 +257,8 @@ infrastructure tables (see "Infrastructure map core"). Version 9 adds the
 `enrolments` (see "Host enrolment") and version 11 adds its `step_hash` and `reports` columns. Version 12 adds
 the `allowlist_rev`, `allowlist_saved_at` and `reissued_at` columns of `enrolments` and the `host_tasks` table (see "Host
 settings"). Version 13 adds `ui_layouts` (see "Dashboard layout"). Version 14 adds the `guard_step`, `guard_reason` and
-`guard_at` columns of `enrolments` and the `app_settings` table (see "Host enrolment"). Version 15 adds the
-`host_samples_host_ts` index on `host_samples (host, ts)`. Version 17 adds `change_seq`. A migration step may
+`guard_at` columns of `enrolments` and the `app_settings` table (see "Host enrolment"). Version 15 adds `change_seq`, version 16 the series tables
+(`resources`, `scopes`, `series`, `samples`, `latest`) and version 17 the summary levels and views. A migration step may
 be a function as well as a statement, so an `ALTER TABLE` can check first and
 stay safe to run again. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
@@ -661,8 +702,9 @@ back the host settings page (`GET /hosts/{name}/settings`, the static `host-sett
   open (see THREAT-MODEL.md).
 - **Danger zone.** `POST /api/hosts/{name}/keys/revoke` and `POST /api/hosts/{name}/remove` need
   `confirm_host` equal to the host name. Revoke revokes the `wpi` and `wpc` keys of the host. Remove
-  does that, then deletes the enrolment, its tasks and the host's stored rows (`hosts`,
-  `host_samples`, `host_sources`, `host_events`, `ingest_batches`) in one transaction, and keeps the
+  does that, then deletes the enrolment, its tasks and the host's stored rows (`hosts`, the host's
+  resource with its series, samples, latest rows and summary rows, `host_sources`, `host_events`,
+  `ingest_batches`) in one transaction, and keeps the
   audit log and the control command history. A host listed in the Observe config is refused (409)
   because it would come back.
 - **Audit kinds.** `host_allowlist_saved`, `host_allowlist_failed`, `host_task_created`,

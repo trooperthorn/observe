@@ -13,6 +13,7 @@ import pytest
 from observe import hosttasks
 from observe.ingest.keys import verify_key
 
+from .dbq import SAMPLE_ROWS
 from .test_auth import BASIC
 from .test_enrol_api import GOOD, admin, audit_kinds, create, ingest_for, run_install, token_of
 from .test_install_script import STEP_KEY, Served, check_syntax, env  # noqa: F401
@@ -533,9 +534,17 @@ def test_remove_deletes_the_host_and_its_data_but_keeps_the_audit_log(env):
     for bad in ({}, {"confirm_host": "nas02"}, {"confirm_host": "nas01\n"}):
         assert env.client.post(url, json=bad, headers=hdr).status_code == 400
     assert env.rows("SELECT COUNT(*) FROM enrolments WHERE host='nas01'") == [(1,)]
+    stored = env.rows(f"SELECT COUNT(*) FROM {SAMPLE_ROWS} WHERE host='nas01'")[0][0]
+    assert stored > 0
     r = env.client.post(url, json={"confirm_host": "nas01"}, headers=hdr)
     assert r.status_code == 200 and r.json()["removed"]["keys"] == 2
-    for table in ("enrolments", "hosts", "host_samples", "host_sources", "host_events",
+    assert r.json()["removed"]["samples"] == stored
+    assert env.rows(f"SELECT COUNT(*) FROM {SAMPLE_ROWS} WHERE host='nas01'") == [(0,)]
+    assert env.rows("SELECT COUNT(*) FROM resources WHERE name='nas01'") == [(0,)]
+    assert env.rows("SELECT COUNT(*) FROM latest l WHERE NOT EXISTS "
+                    "(SELECT 1 FROM series s WHERE s.id = l.series_id)") == [(0,)]
+    assert env.rows(f"SELECT COUNT(*) FROM {SAMPLE_ROWS} WHERE host='nas02'")[0][0] > 0
+    for table in ("enrolments", "hosts", "host_sources", "host_events",
                   "ingest_batches", "host_tasks"):
         assert env.rows(f"SELECT COUNT(*) FROM {table} WHERE host='nas01'") == [(0,)], table
     assert env.rows("SELECT COUNT(*) FROM ingest_keys WHERE host='nas01' AND revoked_at IS NULL"
@@ -591,7 +600,7 @@ def test_a_version_11_database_with_enrolments_migrates_to_14(tmp_path):
     db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
     db.commit()
     newer = {v: m for v, m in MIGRATIONS.items() if v > 11}
-    assert newer and SCHEMA_VERSION == 18
+    assert newer and SCHEMA_VERSION == 17
     for v in newer:
         del MIGRATIONS[v]
     try:
@@ -611,7 +620,7 @@ def test_a_version_11_database_with_enrolments_migrates_to_14(tmp_path):
         assert db.execute("SELECT allowlist_rev, allowlist_saved_at, reissued_at FROM enrolments "
                           "WHERE host='nas01'").fetchone() == (0, None, None)
         assert db.execute("SELECT COUNT(*) FROM host_tasks").fetchone() == (0,)
-        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 18
+        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 17
     finally:
         db.close()
 

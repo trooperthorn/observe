@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .base import CHANGE_DOMAINS, Conn, IntegrityConflict, StorageBusy, StorageTimeout, T
-from . import rollups
+from . import compaction, rollups
 from .schema import migrate, migrate_plugins
 
 READ_POOL_SIZE = 3
@@ -60,10 +60,6 @@ class _Reader:
         return 1 if self.deadline and time.monotonic() > self.deadline else 0
 
 
-def _bucket_of_ts(column: str, width: int) -> str:
-    return f"CAST({column} / {width} AS INTEGER) * {width}"
-
-
 def _translate(err: sqlite3.Error) -> Exception:
     if isinstance(err, sqlite3.IntegrityError):
         return IntegrityConflict(str(err))
@@ -72,6 +68,7 @@ def _translate(err: sqlite3.Error) -> Exception:
 
 class SqliteStorage:
     backend = "sqlite"
+    incremental_rollups = True
 
     def __init__(self, path: str, plugins: Mapping[str, Sequence[Any]] | None = None, *,
                  read_pool_size: int = READ_POOL_SIZE,
@@ -231,30 +228,13 @@ class SqliteStorage:
 
     # ---- rollups, retention, plugin tables ------------------------------------------------
 
-    async def rollup(self, now: float) -> int:
-        levels = await self.write(lambda db: rollups.load_levels(db))
-        return await self.write(
-            lambda db: rollups.fold(db, now, _bucket_of_ts, levels.late_grace_s))
-
     async def apply_retention(self, *, now: float, retention_days: int,
                               audit_retention_days: int) -> int:
-        """Fold what is due, then drop rows past each level's retention. A level is never
-        trimmed past what the next level has folded. Each table is its own unit so ingest is
-        never held back behind one long delete. Returns the poll rows removed."""
-        await self.rollup(now)
-        levels = await self.write(lambda db: rollups.load_levels(db, retention_days))
-        cut = await self.write(lambda db: rollups.cutoffs(db, now, levels))
-        override_cut = await self.write(lambda db: rollups.override_cutoffs(db, now, levels))
-
-        removed = 0
-        for i, (sql, args) in enumerate(rollups.retention_statements(
-                cut, now=now, audit_retention_days=audit_retention_days,
-                override_cut=override_cut)):
-            count = await self.write(lambda db, sql=sql, args=args: db.execute(
-                sql, args).rowcount)
-            if i == 0:
-                removed = count
-        return removed
+        """Compact: drop raw samples and then each summary level past its retention after
+        verifying that the levels above still cover them, in chunks, then the other history
+        tables. Each chunk is its own unit so ingest is never held back behind one long delete.
+        Returns the poll rows removed."""
+        return await compaction.run(self, now, retention_days, audit_retention_days)
 
     async def save_retention_settings(self, changes: dict[str, str | None], *, now: float,
                                       actor: str, remote: str, path: str,

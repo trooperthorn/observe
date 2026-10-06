@@ -150,7 +150,7 @@ def test_scope_must_be_well_formed(store):
 def test_wpf_key_is_refused_on_host_ingest(env):
     field_key, _ = run(create_field_key(env.store, "nas01"))  # even with a matching label
     assert env.ingest(field_key).status_code == 401
-    assert env.rows("SELECT COUNT(*) FROM host_samples") == [(0,)]
+    assert env.rows("SELECT COUNT(*) FROM samples") == [(0,)]
     assert env.rows("SELECT COUNT(*) FROM hosts") == [(0,)]
     assert env.rows("SELECT last_used FROM ingest_keys") == [(None,)]
     swapped = "wpi_" + field_key.split("_", 1)[1]

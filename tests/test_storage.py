@@ -22,6 +22,8 @@ from observe.storage import (CHANGE_DOMAINS, IntegrityConflict, Storage, Storage
 from observe.storage.schema import SCHEMA_VERSION, SchemaTooNewError
 from observe.storage.sqlite import SqliteStorage
 
+from .dbq import put, settle
+
 
 @dataclass
 class Migration:
@@ -167,18 +169,14 @@ async def test_retention_drops_old_rows_and_keeps_the_rest(storage):
     assert await storage.fetchall("SELECT COUNT(*) FROM audit") == [(1,)]
 
 
-async def test_rollup_with_nothing_to_fold_writes_no_buckets(storage):
-    assert await storage.rollup(1_000_000_000.0) == 0
-
-
 def _view_columns(storage, view):
     return storage.read_sync(lambda db: [c[0] for c in db.execute(
         f"SELECT * FROM {view} WHERE 1 = 0").description])
 
 
 def test_the_summary_views_have_the_same_columns_on_every_backend(storage):
-    summary = ["host", "source", "metric", "labels", "bucket", "n", "sum_v", "min_v", "max_v",
-               "avg_v"]
+    summary = ["series_id", "resource", "scope", "metric", "unit", "attrs", "bucket", "n", "sum_v",
+               "min_v", "max_v", "avg_v"]
     for view in ("metric_5m", "metric_hourly", "metric_daily"):
         assert _view_columns(storage, view) == summary
     assert _view_columns(storage, "availability_history") == [
@@ -193,51 +191,14 @@ async def test_availability_history_lists_every_state_change(storage):
         ("m", 5.0, "up", "warn", "Degraded")]
 
 
-async def _samples(storage, base, values):
-    for offset, value in values:
-        await storage.execute(
-            "INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
-            "VALUES (?, 'h', 'cpu', 'temp', '{}', ?, 'C')", (base + offset, value))
-
-
-def _recent_hour(now):
-    # Two whole hours back, so the hour is complete for the hourly fold even in the first
-    # minute of the current hour (the fold only takes buckets older than a minute).
-    return int(now) // 3600 * 3600 - 7200
-
-
-async def test_rollup_builds_the_five_minute_and_hourly_levels_with_min_max_avg(storage):
-    now = time.time()
-    base = _recent_hour(now)
-    await _samples(storage, base, [(10, 10.0), (20, 30.0), (310, 5.0), (320, 7.0), (330, None)])
-    assert await storage.rollup(now) > 0
-    rows = await storage.fetchall(
-        "SELECT bucket, n, min_v, max_v, avg_v FROM metric_5m ORDER BY bucket")
-    assert [(int(b), int(n), lo, hi, avg) for b, n, lo, hi, avg in rows] == [
-        (base, 2, 10.0, 30.0, 20.0), (base + 300, 2, 5.0, 7.0, 6.0)]
-    hourly = await storage.fetchall(
-        "SELECT bucket, n, min_v, max_v, avg_v FROM metric_hourly ORDER BY bucket")
-    assert [(int(b), int(n), lo, hi, avg) for b, n, lo, hi, avg in hourly] == [
-        (base, 4, 5.0, 30.0, 13.0)]
-
-
-async def test_rolling_up_again_does_not_count_a_sample_twice(storage):
-    now = time.time()
-    await _samples(storage, _recent_hour(now), [(10, 10.0), (20, 30.0)])
-    await storage.rollup(now)
-    await storage.rollup(now)
-    await storage.rollup(now + 60)
-    assert await storage.fetchall("SELECT n FROM metric_5m") == [(2,)]
-
-
 async def test_retention_drops_raw_samples_past_the_raw_level(storage):
     now = time.time()
     old = now - 40 * 86400
-    await _samples(storage, old, [(0, 1.0)])
+    await put(storage, [(old, "h", "cpu", "temp", "{}", 1.0, "C")])
     await storage.execute(
         "INSERT INTO app_settings (key, value, updated) VALUES ('retention.raw_days', '7', 1)")
     await storage.apply_retention(now=now, retention_days=30, audit_retention_days=365)
-    assert await storage.fetchall("SELECT COUNT(*) FROM host_samples") == [(0,)]
+    assert await storage.fetchall("SELECT COUNT(*) FROM samples") == [(0,)]
 
 
 def test_close_is_safe_to_repeat(storage):
@@ -445,38 +406,31 @@ async def test_availability_is_a_plain_float_percentage_on_every_backend(storage
 
 
 async def test_the_summary_views_return_plain_ints_and_floats_on_every_backend(storage):
-    now = time.time()
-    base = _recent_hour(now)
-    await _samples(storage, base, [(10, 10.0), (20, 30.0), (310, 5.0)])
-    await storage.rollup(now)
+    base = int(time.time()) // 3600 * 3600 - 7200
+    await put(storage, [(base + off, "h", "cpu", "temp", "{}", v, "C")
+                        for off, v in [(10, 10.0), (20, 30.0), (310, 5.0)]])
+    await settle(storage)
     for view in ("metric_5m", "metric_hourly"):
-        rows = await storage.fetchall(f"SELECT n, sum_v, min_v, max_v, avg_v FROM {view}")
+        rows = await storage.fetchall(f"SELECT n, sum_v, min_v, max_v, avg_v, bucket FROM {view}")
         assert rows
-        for n, sum_v, min_v, max_v, avg_v in rows:
-            assert type(n) is int
+        for n, sum_v, min_v, max_v, avg_v, bucket in rows:
+            assert type(n) is int and type(bucket) is int
             assert all(type(x) is float for x in (sum_v, min_v, max_v, avg_v))
     total = await storage.fetchall("SELECT SUM(n) FROM metric_5m")
     assert int(total[0][0]) == 3
 
 
-async def test_latest_host_picks_the_newest_row_and_breaks_a_tie_by_insertion_order(storage):
+async def test_latest_host_picks_the_newest_row_and_the_last_value_sent_wins_a_tie(storage):
     st = _store_on(storage)
     now = time.time()
     await storage.execute("INSERT INTO hosts (host, first_seen, last_seen, clean_shutdown) "
                           "VALUES ('h', 1, ?, 1)", (now,))
-    for value in (1.0, 2.0, 3.0):  # one timestamp: the row inserted last wins
-        await storage.execute(
-            "INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
-            "VALUES (?, 'h', 'cpu', 'temp', '{}', ?, 'C')", (now - 5, value))
-    await storage.execute(
-        "INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
-        "VALUES (?, 'h', 'disk', 'used', '{}', 7.5, '%')", (now - 5000,))
+    for value in (1.0, 2.0, 3.0):  # one timestamp: the point sent last wins
+        await put(storage, [(now - 5, "h", "cpu", "temp", "{}", value, "C")])
+    await put(storage, [(now - 5000, "h", "disk", "used", "{}", 7.5, "%")])
     got = await st.latest_host("h", window=60, now=now, series=(("disk", "used"),))
     by_metric = {(s["source"], s["metric"]): s for s in got["samples"]}
-    if type(storage).__module__.endswith("sqlite"):
-        assert by_metric[("cpu", "temp")]["value"] == 3.0  # rowid is insertion order
-    else:  # ctid is a physical location, so only the timestamp is guaranteed
-        assert by_metric[("cpu", "temp")]["value"] in (1.0, 2.0, 3.0)
+    assert by_metric[("cpu", "temp")]["value"] == 3.0
     assert by_metric[("disk", "used")]["value"] == 7.5  # silent series still read
     assert type(got["last_seen"]) is float and got["clean_shutdown"] in (0, 1)
     assert await st.latest_host("nobody") is None

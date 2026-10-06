@@ -308,7 +308,7 @@ def test_phase5_database_migrates_keeping_rows(tmp_path):
     assert counts == {"results": 1, "hosts": 1, "audit": 1, "plugin_schema": 1,
                       **{t: 0 for t in INFRA}}
     assert INFRA <= tables(path)
-    assert SCHEMA_VERSION == 18  # 15 and 16 are the host sample indexes, 17 the change sequences, 18 the rollups
+    assert SCHEMA_VERSION == 17  # 15 is the change sequences, 16 the series tables, 17 the summary levels
     assert "infra_dependencies" in tables(path)
 
 
@@ -359,5 +359,5 @@ def test_version_10_database_with_enrolments_survives_the_reports_migration(tmp_
     assert [tuple(r) for r in rows] == [("fetched1", 2.0, None, "[]"),
                                         ("pending1", None, None, "[]")]
     db = sqlite3.connect(path)
-    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 18
+    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 17
     db.close()

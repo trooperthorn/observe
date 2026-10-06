@@ -96,7 +96,7 @@ def test_the_page_says_so_when_nothing_has_run(tmp_path):
     try:
         env.user("root", admin=True)
         env.login("root")
-        assert "No compaction or rollup has run yet." in env.client.get("/admin/retention").text
+        assert "No compaction has run yet." in env.client.get("/admin/retention").text
     finally:
         env.client.close()
         env.store.close()

@@ -10,9 +10,10 @@ import pytest
 
 from observe.storage.schema import MIGRATIONS, SCHEMA_VERSION, SchemaTooNewError, migrate
 from observe.store import Store
-from .dbq import run_sql
+from .dbq import put_samples, run_sql
 
-NEW_TABLES = {"schema_version", "hosts", "host_samples", "host_sources", "host_events",
+NEW_TABLES = {"schema_version", "hosts", "resources", "scopes", "series", "samples", "latest",
+              "host_sources", "host_events",
               "ingest_keys", "users", "sessions", "audit"}
 DAY = 86400
 
@@ -119,9 +120,8 @@ def test_prune_applies_retention(tmp_path):
     store = Store(str(tmp_path / "w.db"))
     now = time.time()
     old, recent, very_old, audit_old = now - 40 * DAY, now - DAY, now - 800 * DAY, now - 100 * DAY
-    for ts in (old, recent):
-        run_sql(store, "INSERT INTO host_samples (ts, host, source, metric) VALUES (?,?,?,?)",
-                    (ts, "h", "cpu", "temp"))
+    store.storage.write_sync(lambda db: put_samples(
+        db, [(ts, "h", "cpu", "temp", "{}", 1.0, "") for ts in (old, recent)]))
     for ts in (very_old, old):
         run_sql(store, "INSERT INTO host_events (host, ts, kind, severity, source, title, dedup_key) "
                     "VALUES ('h', ?, 'boot', 'info', 'agent', 't', ?)", (ts, str(ts)))
@@ -138,7 +138,7 @@ def test_prune_applies_retention(tmp_path):
         return run_sql(store, f"SELECT COUNT(*) FROM {table}")[0][0]
 
     assert removed == 1
-    assert count("host_samples") == 1  # the 40 day old sample is gone at 30 days
+    assert count("samples") == 1  # the 40 day old sample is gone at 30 days
     assert [r[0] for r in run_sql(store, "SELECT ts FROM host_events")] == [old]  # kept for the two year history level
     assert count("audit") == 1  # audit uses its own, shorter window here
     assert [r[0] for r in run_sql(store, "SELECT id_hash FROM sessions")] == ["live"]

@@ -13,6 +13,7 @@ from observe import auth
 from observe_control.actions import capabilities, validate
 from observe_control.queue import QueueError
 
+from .dbq import put_samples
 from .test_auth import PASSWORD
 from .test_control_queue import FLOOR, Env, bearer, run
 from .test_field_docs import ROOT, stored_bytes
@@ -31,9 +32,8 @@ def env(tmp_path):
             db.execute("INSERT INTO hosts (host, first_seen, last_seen) VALUES (?,?,?)",
                        (host, now, now))
         for fan in ("pwm1", "pwm2"):
-            db.execute("INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
-                       "VALUES (?,?,?,?,?,?,?)",
-                       (now, HOST, "thermalctl", "fan_duty", json.dumps({"fan": fan}), 40, "%"))
+            put_samples(db, [(now, HOST, "thermalctl", "fan_duty", json.dumps({"fan": fan}),
+                              40, "%")])
 
     e.store.storage.write_sync(seed)
     run(auth.create_user(e.store, e.cfg, "root", PASSWORD, True, now=now))
