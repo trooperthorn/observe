@@ -63,3 +63,11 @@ def test_rejected_names_fail_everywhere(name):
 def test_non_string_names_are_refused(value):
     with pytest.raises(enrol.EnrolError):
         enrol._fans([value])
+
+
+def test_a_header_stored_under_the_old_rule_gives_a_message_that_says_how_to_recover():
+    allow = {"fans": [{"header": "pwm.1"}], "services": []}
+    with pytest.raises(scripts.ScriptError) as err:
+        scripts.control_toml("host1", allow, "")
+    assert "a fan header has characters that are not allowed" in str(err.value)
+    assert "remove or rename that header" in str(err.value)

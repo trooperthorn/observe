@@ -94,7 +94,11 @@ def control_toml(host: str, allow: dict[str, Any], public_key: str) -> str:
     limits: list[int] = []
     for fan in fans:
         header = fan["header"] if isinstance(fan, dict) else fan
-        headers.append(_need(_HEADER, header, "a fan header"))
+        if not isinstance(header, str) or not _HEADER.fullmatch(header):
+            raise ScriptError("a fan header has characters that are not allowed; hostwatch-control "
+                              "accepts letters, digits, underscore and hyphen only, so remove "
+                              "or rename that header in the allowlist")
+        headers.append(header)
         if isinstance(fan, dict) and fan.get("min_duty_limit") is not None:
             limit = fan["min_duty_limit"]
             if type(limit) is not int or not 0 <= limit <= 100:

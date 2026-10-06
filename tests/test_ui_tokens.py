@@ -93,7 +93,7 @@ def test_stylesheets_hard_code_no_hex_outside_tokens():
         if css.name == "tokens.css":
             continue
         text = re.sub(r"/\*.*?\*/", "", css.read_text(encoding="utf-8"), flags=re.S)
-        assert not re.search(r"#[0-9a-fA-F]{3,8}b", text), css.name
+        assert not re.search(r"#[0-9a-fA-F]{3,8}", text), css.name
 
 
 # ---- contrast ---------------------------------------------------------------------------
