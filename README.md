@@ -482,6 +482,9 @@ database written by a newer version. `server.retention_days` governs poll
 results and host samples (minimum 1), and the new `server.audit_retention_days` (default
 365, minimum 1) governs the audit log independently. The tables for hosts, keys,
 users, sessions and audit are filled by the ingest and login routes.
+An admin can change the retention levels, the compaction delay, the late-sample grace and
+per-metric retention overrides with `GET` and `PUT /api/admin/retention` (admin session and CSRF
+token). Every change is audited with its old and new values.
 
 The hostwatch wire schema models exist in `observe/ingest/schema.py`, with
 size and count limits, ignoring of unknown fields, and rejection of unknown schema

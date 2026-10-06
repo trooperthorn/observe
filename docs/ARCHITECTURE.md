@@ -128,7 +128,21 @@ summaries. `apply_retention` folds first, then trims each level at its own age: 
 days, read from `app_settings` keys `retention.raw_days`, `retention.5m_days`,
 `retention.hourly_days`, `retention.daily_days` and `retention.history_days`. A level is never
 trimmed past what the next level has folded. When no raw setting exists, `server.retention_days`
-is the raw level. The admin page for these settings is a later slice.
+is the raw level. Two more settings sit beside them: `retention.compress_after_days` (1 to 30,
+default 1, the TimescaleDB compression delay) and `retention.late_grace_s` (0 to 3600, default 60,
+how long after a 5 minute bucket ends it is folded). Per-metric overrides are one JSON value in
+`retention.overrides`: a metric name maps to its own `raw_days`, `rollup_5m_days`, `hourly_days`
+or `daily_days`, within the same bounds, at most 100 metrics. The shared retention code deletes a
+metric with an override by its own bounds and leaves it out of the global delete, on SQLite and
+plain PostgreSQL. `observe/retention.py` validates a change (whole numbers inside the bounds,
+unknown names refused) and `Storage.save_retention_settings` writes the keys and one
+`retention_settings_changed` audit row holding the old and new values in one transaction.
+`GET` and `PUT /api/admin/retention` (admin session, CSRF on the PUT) read and change them; a
+refused value is 422 and audited as `retention_settings_failed`. On TimescaleDB a change also
+registers the policies again at once. A chunk is dropped only when every metric in it is past
+retention, so the policy keeps the longest of the global level and the overrides; raw rows of a
+metric kept for less are deleted by row, but a continuous aggregate cannot be deleted from, so
+its metrics keep the longest level (a known difference from SQLite).
 
 With the TimescaleDB extension (`storage.timescaledb: auto` uses it when the database offers it,
 `on` requires it, `off` never uses it) `host_samples` is a hypertable chunked by day on `ts_s`
@@ -136,7 +150,7 @@ With the TimescaleDB extension (`storage.timescaledb: auto` uses it when the dat
 `rollup_1d` are continuous aggregates with the same names and columns as the plain tables, so the
 views are the same text on both. Refresh, retention and compression policies are removed and
 added again from the retention levels at start and at every retention run, so a changed setting
-applies at the next compaction. A refresh window never reaches back past half of its source's
+applies at the next compaction, or at once when it is saved through the admin endpoint. A refresh window never reaches back past half of its source's
 retention, so a refresh cannot rebuild a bucket whose source rows are gone. On plain PostgreSQL
 the shared incremental rollups run unchanged. The choice is made when the database is created:
 a database created without TimescaleDB is refused under `on`, and a TimescaleDB database is

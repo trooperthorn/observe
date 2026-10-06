@@ -14,8 +14,9 @@ the same text on every backend (docs/DATA-API-DESIGN.md sections 10.2 and 12).
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .base import Conn
 
@@ -70,31 +71,73 @@ VIEW_COLUMNS["metric_hourly"] = VIEW_COLUMNS["metric_daily"] = VIEW_COLUMNS["met
 
 @dataclass(frozen=True)
 class RetentionLevels:
+    """The retention, compaction and rollup settings. `overrides` maps a metric name to the
+    levels that metric keeps for a different time than the global level."""
+
     raw_days: int = 7
     rollup_5m_days: int = 14
     hourly_days: int = 90
     daily_days: int = 730
     history_days: int = 730
+    compress_after_days: int = 1
+    late_grace_s: int = LATE_GRACE_S
+    overrides: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
-# setting key -> (field, lowest, highest). The keys live in app_settings, where the admin page
-# writes them with an audit record.
+# setting key -> (field, lowest, highest). The keys live in app_settings, where the admin
+# endpoint writes them with an audit record.
 RETENTION_SETTINGS = {
     "retention.raw_days": ("raw_days", 1, 30),
     "retention.5m_days": ("rollup_5m_days", 1, 365),
     "retention.hourly_days": ("hourly_days", 90, 180),
     "retention.daily_days": ("daily_days", 1, 3650),
     "retention.history_days": ("history_days", 1, 3650),
+    "retention.compress_after_days": ("compress_after_days", 1, 30),
+    "retention.late_grace_s": ("late_grace_s", 0, 3600),
 }
+FIELD_KEYS = {spec[0]: key for key, spec in RETENTION_SETTINGS.items()}
+FIELD_BOUNDS = {spec[0]: (spec[1], spec[2]) for spec in RETENTION_SETTINGS.values()}
+
+# The levels a single metric may keep for its own time. The history level is not keyed by metric.
+OVERRIDE_FIELDS = ("raw_days", "rollup_5m_days", "hourly_days", "daily_days")
+OVERRIDES_KEY = "retention.overrides"
+MAX_OVERRIDES = 100
+
+
+def parse_overrides(text: object) -> dict[str, dict[str, int]]:
+    """The stored per-metric overrides; anything out of range or malformed is left out."""
+    try:
+        data = json.loads(text) if isinstance(text, str) else {}
+    except ValueError:
+        return {}
+    out: dict[str, dict[str, int]] = {}
+    if not isinstance(data, dict):
+        return out
+    for metric, levels in data.items():
+        if not isinstance(metric, str) or not isinstance(levels, dict):
+            continue
+        kept = {}
+        for name, days in levels.items():
+            if name in OVERRIDE_FIELDS and type(days) is int:
+                low, high = FIELD_BOUNDS[name]
+                if low <= days <= high:
+                    kept[name] = days
+        if kept:
+            out[metric] = kept
+    return out
 
 
 def load_levels(db: Conn, fallback_raw_days: int | None = None) -> RetentionLevels:
     """The admin's retention settings, defaults for a missing or out-of-range value. When no raw
     setting exists, `fallback_raw_days` (server.retention_days) is the raw level."""
     values: dict[str, int] = {}
+    overrides: dict[str, dict[str, int]] = {}
     if fallback_raw_days is not None:
         values["raw_days"] = int(fallback_raw_days)
     for key, value in db.execute("SELECT key, value FROM app_settings WHERE key LIKE 'retention.%'"):
+        if key == OVERRIDES_KEY:
+            overrides = parse_overrides(value)
+            continue
         spec = RETENTION_SETTINGS.get(key)
         if spec is None:
             continue
@@ -105,7 +148,52 @@ def load_levels(db: Conn, fallback_raw_days: int | None = None) -> RetentionLeve
             continue
         if low <= days <= high:
             values[name] = days
-    return RetentionLevels(**values)
+    return RetentionLevels(**values, overrides=overrides)
+
+
+def days_for(levels: RetentionLevels, metric: str, name: str) -> int:
+    """The days a metric keeps a level: its own override, else the global level."""
+    return levels.overrides.get(metric, {}).get(name, getattr(levels, name))
+
+
+def longest_days(levels: RetentionLevels, name: str) -> int:
+    """The longest any metric keeps a level. A chunk of a hypertable can only be dropped when
+    every metric in it is past retention, so the policy uses this."""
+    return max([getattr(levels, name), *(o[name] for o in levels.overrides.values() if name in o)])
+
+
+def shortest_days(levels: RetentionLevels, name: str) -> int:
+    return min([getattr(levels, name), *(o[name] for o in levels.overrides.values() if name in o)])
+
+
+def settings_view(levels: RetentionLevels) -> dict:
+    """The effective settings as the admin sees them, and as an audit record keeps them."""
+    out: dict = {name: getattr(levels, name) for name in FIELD_BOUNDS}
+    out["overrides"] = {m: dict(sorted(o.items())) for m, o in sorted(levels.overrides.items())}
+    return out
+
+
+def save_settings(db: Conn, changes: dict[str, str | None], *, now: float, actor: str,
+                  remote: str, path: str, fallback_raw_days: int | None = None) -> dict:
+    """Inside one write unit: write the changed keys (None resets one to its default), read the
+    settings before and after, and append the one audit row that records both. Returns
+    {"old": ..., "new": ...}."""
+    old = settings_view(load_levels(db, fallback_raw_days))
+    for key, value in changes.items():
+        if value is None:
+            db.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+        else:
+            db.execute(
+                "INSERT INTO app_settings (key, value, updated) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+                (key, value, now))
+    new = settings_view(load_levels(db, fallback_raw_days))
+    db.execute(
+        "INSERT INTO audit (ts, actor, kind, method, path, status, remote, detail) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (now, actor, "retention_settings_changed", "PUT", path, 200, remote,
+         json.dumps({"old": old, "new": new}, sort_keys=True)))
+    return {"old": old, "new": new}
 
 
 # ---- folding ---------------------------------------------------------------------------------
@@ -145,11 +233,12 @@ def _fold_level(db: Conn, level: str, source_select: str, first_sql: str, end: i
     return max(rows, 0)
 
 
-def fold(db: Conn, now: float, bucket_of_ts: Callable[[str, int], str]) -> int:
+def fold(db: Conn, now: float, bucket_of_ts: Callable[[str, int], str],
+         late_grace_s: int = LATE_GRACE_S) -> int:
     """Fold every complete bucket that is new since the last call. Runs inside one write unit.
     `bucket_of_ts(column, width)` is the backend's expression for the start of a bucket of a
     REAL second timestamp. Returns the number of summary rows written."""
-    complete = int(now - LATE_GRACE_S)
+    complete = int(now - late_grace_s)
     end_5m = complete // WIDTH_5M * WIDTH_5M
     b5 = bucket_of_ts("ts", WIDTH_5M)
     total = _fold_level(
@@ -195,20 +284,57 @@ def cutoffs(db: Conn, now: float, levels: RetentionLevels) -> dict[str, float]:
     }
 
 
-def retention_statements(cut: dict[str, float], *, now: float,
-                         audit_retention_days: int) -> list[tuple[str, float]]:
-    """Every delete as (sql, bound) in the order to run them, one write unit each so ingest is
+def override_cutoffs(db: Conn, now: float, levels: RetentionLevels) -> dict[str, dict[str, float]]:
+    """The delete bound of each table for each overridden metric, with the same fold limits as
+    the global bounds."""
+    folded = {lv: _state(db, lv) for lv in ("5m", "1h", "1d")}
+
+    def done(level: str) -> float:
+        return float(folded[level] if folded[level] is not None else 0)
+
+    out = {}
+    for metric in levels.overrides:
+        def age(name: str, metric: str = metric) -> float:
+            return now - days_for(levels, metric, name) * 86400
+        out[metric] = {"host_samples": min(age("raw_days"), done("5m")),
+                       "rollup_5m": min(age("rollup_5m_days"), done("1h")),
+                       "rollup_1h": min(age("hourly_days"), done("1d")),
+                       "rollup_1d": age("daily_days")}
+    return out
+
+
+_METRIC_TABLES = (("host_samples", "ts"), ("rollup_5m", "bucket"), ("rollup_1h", "bucket"),
+                  ("rollup_1d", "bucket"))
+
+
+def retention_statements(cut: dict[str, float], *, now: float, audit_retention_days: int,
+                         override_cut: dict[str, dict[str, float]] | None = None
+                         ) -> list[tuple[str, tuple]]:
+    """Every delete as (sql, args) in the order to run them, one write unit each so ingest is
     never held back behind one long delete. The first is the poll rows, whose count is returned
-    to the caller."""
-    return [
-        ("DELETE FROM results WHERE ts < ?", cut["raw"]),
-        ("DELETE FROM host_samples WHERE ts < ?", cut["raw_samples"]),
-        ("DELETE FROM ingest_batches WHERE ts < ?", cut["raw"]),
-        ("DELETE FROM rollup_5m WHERE bucket < ?", cut["rollup_5m"]),
-        ("DELETE FROM rollup_1h WHERE bucket < ?", cut["rollup_1h"]),
-        ("DELETE FROM rollup_1d WHERE bucket < ?", cut["rollup_1d"]),
-        ("DELETE FROM events WHERE ts < ?", cut["history"]),
-        ("DELETE FROM host_events WHERE ts < ?", cut["history"]),
-        ("DELETE FROM audit WHERE ts < ?", now - audit_retention_days * 86400),
-        ("DELETE FROM sessions WHERE expires < ?", now),
+    to the caller. A metric with an override is left out of the global delete of each metric
+    table and has a delete of its own with its own bound."""
+    override_cut = override_cut or {}
+    metrics = tuple(sorted(override_cut))
+    skip = f" AND metric NOT IN ({', '.join('?' * len(metrics))})" if metrics else ""
+
+    def glob(table: str, column: str, key: str) -> tuple[str, tuple]:
+        return f"DELETE FROM {table} WHERE {column} < ?{skip}", (cut[key], *metrics)
+
+    out = [
+        ("DELETE FROM results WHERE ts < ?", (cut["raw"],)),
+        glob("host_samples", "ts", "raw_samples"),
+        ("DELETE FROM ingest_batches WHERE ts < ?", (cut["raw"],)),
+        glob("rollup_5m", "bucket", "rollup_5m"),
+        glob("rollup_1h", "bucket", "rollup_1h"),
+        glob("rollup_1d", "bucket", "rollup_1d"),
+        ("DELETE FROM events WHERE ts < ?", (cut["history"],)),
+        ("DELETE FROM host_events WHERE ts < ?", (cut["history"],)),
+        ("DELETE FROM audit WHERE ts < ?", (now - audit_retention_days * 86400,)),
+        ("DELETE FROM sessions WHERE expires < ?", (now,)),
     ]
+    for metric in metrics:
+        for table, column in _METRIC_TABLES:
+            out.append((f"DELETE FROM {table} WHERE metric = ? AND {column} < ?",
+                        (metric, override_cut[metric][table])))
+    return out

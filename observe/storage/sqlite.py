@@ -232,7 +232,9 @@ class SqliteStorage:
     # ---- rollups, retention, plugin tables ------------------------------------------------
 
     async def rollup(self, now: float) -> int:
-        return await self.write(lambda db: rollups.fold(db, now, _bucket_of_ts))
+        levels = await self.write(lambda db: rollups.load_levels(db))
+        return await self.write(
+            lambda db: rollups.fold(db, now, _bucket_of_ts, levels.late_grace_s))
 
     async def apply_retention(self, *, now: float, retention_days: int,
                               audit_retention_days: int) -> int:
@@ -242,15 +244,26 @@ class SqliteStorage:
         await self.rollup(now)
         levels = await self.write(lambda db: rollups.load_levels(db, retention_days))
         cut = await self.write(lambda db: rollups.cutoffs(db, now, levels))
+        override_cut = await self.write(lambda db: rollups.override_cutoffs(db, now, levels))
 
         removed = 0
-        for i, (sql, bound) in enumerate(rollups.retention_statements(
-                cut, now=now, audit_retention_days=audit_retention_days)):
-            count = await self.write(lambda db, sql=sql, bound=bound: db.execute(
-                sql, (bound,)).rowcount)
+        for i, (sql, args) in enumerate(rollups.retention_statements(
+                cut, now=now, audit_retention_days=audit_retention_days,
+                override_cut=override_cut)):
+            count = await self.write(lambda db, sql=sql, args=args: db.execute(
+                sql, args).rowcount)
             if i == 0:
                 removed = count
         return removed
+
+    async def save_retention_settings(self, changes: dict[str, str | None], *, now: float,
+                                      actor: str, remote: str, path: str,
+                                      fallback_raw_days: int | None = None) -> dict:
+        """Write the retention settings and their one audit row in one transaction. Retention
+        reads the settings at its next run, so there is nothing to refresh here."""
+        return await self.write(lambda db: rollups.save_settings(
+            db, changes, now=now, actor=actor, remote=remote, path=path,
+            fallback_raw_days=fallback_raw_days), touches=("admin", "audit"))
 
     def apply_plugin_migrations(self, plugins: Mapping[str, Sequence[Any]]) -> None:
         # migrate_plugins runs its own transaction per step, so it is not wrapped in a unit.

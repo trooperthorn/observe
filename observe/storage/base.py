@@ -76,6 +76,13 @@ class Storage(Protocol):
                               audit_retention_days: int) -> int:
         """Drop rows past retention. Returns the number of poll rows removed."""
 
+    async def save_retention_settings(self, changes: dict[str, str | None], *, now: float,
+                                      actor: str, remote: str, path: str,
+                                      fallback_raw_days: int | None = None) -> dict:
+        """Write retention, compaction and rollup settings to app_settings with one audit row
+        holding the old and new values, in one transaction. A None value resets a setting.
+        Returns {"old": ..., "new": ...}. On TimescaleDB the policies are registered again."""
+
     def apply_plugin_migrations(self, plugins: Mapping[str, Sequence[Any]]) -> None:
         """Create or upgrade plugin tables from each plugin's migrations (portable DDL)."""
 

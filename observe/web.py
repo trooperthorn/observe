@@ -33,7 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from . import audit
 from . import auth as authmod
-from . import enrol, hosttasks, layout, scripts, taskscripts
+from . import enrol, hosttasks, layout, retention, scripts, taskscripts
 from . import hostview
 from .alerts import Alerter
 from .checks.host import LATEST_WINDOW_S
@@ -858,6 +858,31 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                            path="/api/enrol/public-url", status=200, remote=remote,
                            detail={"url": url})
         return JSONResponse({"url": url, "source": "saved"})
+
+    @app.get("/api/admin/retention", include_in_schema=False)
+    async def get_retention(_: authmod.Session = Depends(guards.admin)) -> dict[str, Any]:
+        """The effective retention, compaction and rollup settings with their bounds and the
+        per-metric overrides. Admin session; an ingest key is not a session and is refused."""
+        return await retention.read_settings(store, config.server.retention_days)
+
+    @app.put("/api/admin/retention", include_in_schema=False)
+    async def put_retention(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Change any of the settings in the body (null resets one; `overrides` replaces the
+        whole per-metric list). Admin session and CSRF. Refused values answer 422 and are
+        audited; a change is audited with its old and new values."""
+        remote = request.client.host if request.client else ""
+        body = await body_of(request)
+        try:
+            out = await retention.update_settings(
+                store, body, actor=sess.username, remote=remote, now=auth_clock(),
+                fallback_raw_days=config.server.retention_days)
+        except retention.RetentionError as err:
+            await audit.record(store, "retention_settings_failed", actor=sess.username,
+                               method="PUT", path=retention.PATH, status=422, remote=remote,
+                               detail={"reason": str(err)})
+            return JSONResponse({"detail": str(err)}, status_code=422)
+        return JSONResponse(out)
 
     @app.post("/api/hosts", include_in_schema=False)
     async def create_host(

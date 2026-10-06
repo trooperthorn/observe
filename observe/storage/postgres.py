@@ -432,7 +432,9 @@ class PgStorage:
 
     async def rollup(self, now: float) -> int:
         if not self.timescale:
-            return await self.write(lambda db: rollups.fold(db, now, _bucket_of_ts))
+            levels = await self.write(lambda db: rollups.load_levels(db))
+            return await self.write(
+                lambda db: rollups.fold(db, now, _bucket_of_ts, levels.late_grace_s))
         levels = await self.write(lambda db: rollups.load_levels(db))
 
         def refresh() -> int:
@@ -449,21 +451,51 @@ class PgStorage:
         await self.rollup(now)
         levels = await self.write(lambda db: rollups.load_levels(db, retention_days))
         cut = await self.write(lambda db: rollups.cutoffs(db, now, levels))
+        override_cut = await self.write(lambda db: rollups.override_cutoffs(db, now, levels))
         if self.timescale:
             def policies() -> None:
                 self._apply_policies(levels)
                 self._admin_run(pg_timescale.drop_statements(now, levels))
             await asyncio.wrap_future(self._writer.submit(policies))
         removed = 0
-        for i, (sql, bound) in enumerate(rollups.retention_statements(
-                cut, now=now, audit_retention_days=audit_retention_days)):
-            if self.timescale and ("host_samples" in sql or "rollup_" in sql):
+        for i, (sql, args) in enumerate(rollups.retention_statements(
+                cut, now=now, audit_retention_days=audit_retention_days,
+                override_cut=override_cut)):
+            if self.timescale and self._chunk_managed(sql, bool(override_cut)):
                 continue  # chunks are dropped by the policies above
-            count = await self.write(lambda db, sql=sql, bound=bound: db.execute(
-                sql, (bound,)).rowcount)
+            count = await self.write(lambda db, sql=sql, args=args: db.execute(
+                sql, args).rowcount)
             if i == 0:
                 removed = count
         return removed
+
+    @staticmethod
+    def _chunk_managed(sql: str, has_overrides: bool) -> bool:
+        """Whether the TimescaleDB policies already cover this delete. Continuous aggregates
+        cannot be deleted from, so they are always left to their policies (which keep the longest
+        level any metric needs). Raw samples can, so with overrides they are deleted per metric
+        as well, because a policy can only drop a chunk once every metric in it is past
+        retention."""
+        if "rollup_" in sql:
+            return True
+        return "host_samples" in sql and not has_overrides
+
+    async def save_retention_settings(self, changes: dict[str, str | None], *, now: float,
+                                      actor: str, remote: str, path: str,
+                                      fallback_raw_days: int | None = None) -> dict:
+        """Write the retention settings and their one audit row in one transaction, then, on
+        TimescaleDB, register the refresh, retention and compression policies again so the new
+        values apply now and not at the next compaction."""
+        result = await self.write(lambda db: rollups.save_settings(
+            db, changes, now=now, actor=actor, remote=remote, path=path,
+            fallback_raw_days=fallback_raw_days), touches=("admin", "audit"))
+        if self.timescale:
+            await self.refresh_policies(fallback_raw_days)
+        return result
+
+    async def refresh_policies(self, fallback_raw_days: int | None = None) -> None:
+        levels = await self.write(lambda db: rollups.load_levels(db, fallback_raw_days))
+        await asyncio.wrap_future(self._writer.submit(self._apply_policies, levels))
 
     def apply_plugin_migrations(self, plugins: Mapping[str, Sequence[Any]]) -> None:
         if self._on_writer():
