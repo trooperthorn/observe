@@ -612,6 +612,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
 
     if plugins.plugins:
         scheduler.hooks.append(prune_plugins)
+        scheduler.add_collectors(plugins)
 
     @app.get("/api/infra/map", include_in_schema=False)
     async def infra_map(site: str | None = None, building: str | None = None,

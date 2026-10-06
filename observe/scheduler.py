@@ -60,6 +60,7 @@ class Scheduler:
         # Coroutine functions run once a minute, for example the infrastructure map's
         # dependency refresh, so that ageing and new links reach the rollup without a request.
         self.hooks: list[Callable[[], Awaitable[Any]]] = []
+        self._collectors: list[tuple[str, Any]] = []
 
     # ---------------------------------------------------------------- polling
 
@@ -197,6 +198,39 @@ class Scheduler:
                     log.exception("scheduler hook failed")
             await asyncio.sleep(60)
 
+    async def _wait(self, seconds: float) -> None:
+        """The pause between collector runs. A test replaces it to avoid real waiting."""
+        await asyncio.sleep(seconds)
+
+    async def _collector_loop(self, plugin: str, collector: Any) -> None:
+        """Run one plugin collector forever. A failure is logged once per streak."""
+        label = f"{plugin}.{collector.name}"
+        failing = False
+        while True:
+            try:
+                await asyncio.wait_for(collector.run(self.store), collector.timeout)
+            except asyncio.CancelledError:
+                raise
+            except TimeoutError:
+                if not failing:
+                    log.error("collector %s timed out after %gs", label, collector.timeout)
+                failing = True
+            except Exception:  # noqa: BLE001
+                if not failing:
+                    log.exception("collector %s failed", label)
+                failing = True
+            else:
+                if failing:
+                    log.info("collector %s recovered", label)
+                failing = False
+            await self._wait(collector.interval)
+
+    def add_collectors(self, plugins: Any) -> None:
+        """Register the collectors of the loaded plugins; start() runs them."""
+        for loaded in plugins.plugins:
+            for c in loaded.collectors:
+                self._collectors.append((loaded.name, c))
+
     async def _maintenance(self) -> None:
         await asyncio.sleep(30)  # let the first poll wave land before forecasting
         while True:
@@ -214,6 +248,9 @@ class Scheduler:
         self._tasks = [asyncio.create_task(self._loop(m), name=m.slug) for m in self.monitors]
         self._tasks.append(asyncio.create_task(self._maintenance(), name="maintenance"))
         self._tasks.append(asyncio.create_task(self._hook_loop(), name="hooks"))
+        for plugin, c in self._collectors:
+            self._tasks.append(asyncio.create_task(self._collector_loop(plugin, c),
+                                                   name=f"collector:{plugin}.{c.name}"))
 
     async def stop(self) -> None:
         for t in self._tasks:

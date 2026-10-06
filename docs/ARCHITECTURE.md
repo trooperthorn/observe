@@ -88,6 +88,11 @@ is not touched: its tables and its `plugin_schema` row stay as they were, so
 listing it again later picks up where it stopped. Observe never drops plugin
 tables.
 
+A plugin may also declare collectors through `collectors()`: periodic async jobs
+with an interval of at least 30 seconds and a timeout. The scheduler runs each in
+its own task, once at startup and then on its interval, so one failing or slow
+collector is logged once per streak and cannot stop the others or the scheduler.
+
 Version 2 adds `hosts`, `host_samples`, `host_sources` and `host_events`.
 Version 3 adds `ingest_keys`, `users`, `sessions` and `audit`, and version 4 adds
 `ingest_batches`, version 5 adds `plugin_schema`, and version 6 adds the

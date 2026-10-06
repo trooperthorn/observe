@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict
 
-from observe.plugins import (KeyScope, MapContribution, Migration, NavEntry, PluginBase,
+from observe.plugins import (Collector, KeyScope, MapContribution, Migration, NavEntry, PluginBase,
                                PluginPage, PluginRouter)
 
 STATIC = Path(__file__).parent / "echo_static"
@@ -26,6 +26,7 @@ class EchoPlugin(PluginBase):
 
     def __init__(self) -> None:
         self.settings: EchoSettings | None = None
+        self.ticks = 0
 
     def configure(self, settings: Any) -> None:
         self.settings = settings
@@ -71,6 +72,12 @@ class EchoPlugin(PluginBase):
 
     def nav_entries(self) -> list[NavEntry]:
         return [NavEntry("Echo", "/plugins/echo"), NavEntry("Echo admin", "/plugins/echo/a", True)]
+
+    def collectors(self) -> list[Collector]:
+        return [Collector("tick", self.tick, 30, 5)]
+
+    async def tick(self, store: Any) -> None:
+        self.ticks += 1
 
     def monitor_types(self) -> dict[str, Any]:
         return {"echo.ping": object}

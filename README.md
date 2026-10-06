@@ -600,7 +600,7 @@ its migrations run at startup, and a database written by a newer release of the
 plugin is refused. Removing a plugin from `plugins:` hides its pages, navigation
 entries and routes but keeps its data, so listing it again resumes where it
 stopped. A plugin's navigation entry may name the console `workspace` it belongs under
-(`overview`, `hosts`, `network`, `reports` or `admin`; the default is `network`). Plugin pages live under `/plugins/<name>/` and need a login. Plugins run in the same process with full trust, so install only
+(`overview`, `hosts`, `network`, `reports` or `admin`; the default is `network`). Plugin pages live under `/plugins/<name>/` and need a login. A plugin may also declare periodic collectors: async jobs with an interval of at least 30 seconds and a timeout no longer than the interval. The scheduler runs each in its own task, once at startup and then on its interval. A failure or timeout is logged once per streak and never stops other collectors or the scheduler, and a plugin with a shorter interval is refused at startup. Plugins run in the same process with full trust, so install only
 plugins you trust. The design is in `docs/FIELD-DATA.md`.
 
 The Pockethernet plugin accepts field reports from the phone at

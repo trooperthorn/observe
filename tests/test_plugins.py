@@ -16,6 +16,7 @@ from starlette.routing import Mount
 from observe.alerts import Alerter
 from observe.plugins import (GROUP, KeyScope, LoadedPlugins, Migration, Plugin, PluginBase,
                                PluginError, PluginRouter, load_plugins)
+from observe.plugins import Collector
 from observe.scheduler import Scheduler
 from observe.store import Store
 from observe.web import create_app
@@ -249,3 +250,121 @@ def test_core_routes_unchanged_without_plugins(tmp_path):
     finally:
         e.client.close()
         e.store.close()
+
+
+# ---------------------------------------------------------------- collectors
+
+
+class _Stop(Exception):
+    """Raised by the fake pause to end a collector loop after a set number of runs."""
+
+
+def _collector_sched(runs: int):
+    import asyncio
+    cfg = config(plugins=["echo"])
+    loaded = load_plugins(cfg, installed(ep("echo", "echo_plugin")))
+    sched = Scheduler(cfg, None, Alerter(cfg))  # type: ignore[arg-type]
+    sched.add_collectors(loaded)
+    waits: list[float] = []
+
+    async def wait(seconds: float) -> None:
+        await asyncio.sleep(0)  # yield so concurrent loops interleave
+        waits.append(seconds)
+        if len(waits) >= runs:
+            raise _Stop
+
+    sched._wait = wait  # type: ignore[method-assign]
+    return loaded, sched, waits
+
+
+async def _drive(sched):
+    (plugin, c), = sched._collectors
+    with pytest.raises(_Stop):
+        await sched._collector_loop(plugin, c)
+
+
+def test_echo_collector_runs_on_its_interval():
+    import asyncio
+    loaded, sched, waits = _collector_sched(3)
+    asyncio.run(_drive(sched))
+    assert loaded.get("echo").plugin.ticks == 3
+    assert waits == [30, 30, 30]
+
+
+def test_collector_exception_is_isolated_and_logged_once(caplog):
+    import asyncio
+    loaded, sched, waits = _collector_sched(6)
+    calls = {"bad": 0, "good": 0}
+
+    async def bad(store):
+        calls["bad"] += 1
+        raise RuntimeError("collector bug")
+
+    async def good(store):
+        calls["good"] += 1
+
+    async def both():
+        # Each collector has its own loop, so one failing cannot stop the other.
+        with pytest.raises(_Stop):
+            await asyncio.gather(sched._collector_loop("echo", Collector("bad", bad, 30, 5)),
+                                 sched._collector_loop("echo", Collector("good", good, 30, 5)))
+
+    with caplog.at_level("INFO", logger="observe"):
+        asyncio.run(both())
+    failures = [r for r in caplog.records if "collector echo.bad failed" in r.getMessage()]
+    assert len(failures) == 1
+    assert calls["bad"] >= 2 and calls["good"] >= 2
+
+
+def test_collector_timeout_is_logged_once(caplog):
+    import asyncio
+    _, sched, _ = _collector_sched(3)
+
+    async def slow(store):
+        await asyncio.sleep(3600)
+
+    async def go():
+        with pytest.raises(_Stop):
+            await sched._collector_loop("echo", Collector("slow", slow, 30, 0.01))
+
+    with caplog.at_level("INFO", logger="observe"):
+        asyncio.run(go())
+    assert len([r for r in caplog.records if "echo.slow timed out" in r.getMessage()]) == 1
+
+
+def _plugin_with(collectors):
+    class Bad(PluginBase):
+        name = "bad"
+        core_versions = ">=1"
+
+        def collectors(self):
+            return collectors
+
+    mod = type(sys)("tests.fakes.bad_plugin")
+    mod.plugin = Bad()
+    return mod
+
+
+async def _noop(store):
+    return None
+
+
+@pytest.mark.parametrize("collectors,message", [
+    ([Collector("c", _noop, 29.9, 5)],
+     "at least 30"),
+    ([Collector("c", _noop, 30, 31)],
+     "timeout"),
+    ([Collector("c", lambda s: None, 30, 5)],
+     "async callable"),
+    ([Collector("c", _noop, 30, 5),
+      Collector("c", _noop, 30, 5)],
+     "declared twice"),
+])
+def test_bad_collectors_are_refused_at_startup(collectors, message):
+    mod = _plugin_with(collectors)
+    sys.modules[mod.__name__] = mod
+    try:
+        with pytest.raises(PluginError, match=message):
+            load_plugins(config(plugins=["bad"]), installed(ep("bad", "bad_plugin")))
+    finally:
+        del sys.modules[mod.__name__]

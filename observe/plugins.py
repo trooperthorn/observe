@@ -16,6 +16,9 @@ mount_plugins). The plugin cannot choose weaker authentication, skip CSRF,
 skip the rate limit or skip the audit log, because it never controls the
 mounting. It can only ask for the stricter admin role.
 
+Collectors (periodic async jobs with a declared interval of at least 30 seconds and a
+timeout) are validated here and run by the scheduler, each in its own task.
+
 Migrations are applied by the store (observe/store.py, migrate_plugins), and
 pages and static files are served by the app (observe/web.py), both only for
 plugins that are listed. Hooks that later slices consume (monitor types, map
@@ -26,6 +29,7 @@ plugin fails at startup, but they are applied by the code for those features.
 from __future__ import annotations
 
 import importlib.metadata
+import inspect
 import logging
 import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -53,6 +57,7 @@ _NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _SCOPE = re.compile(r"^[a-z]{3,8}$")
 _PUBLIC_PREFIX = re.compile(r"^/api/v1(/[a-z0-9][a-z0-9-]*)*$")
 MAX_LABEL = 64
+MIN_COLLECTOR_INTERVAL = 30.0  # seconds; a collector may not run more often than this
 
 
 class PluginError(Exception):
@@ -126,6 +131,21 @@ class MapContribution:
     dependencies: tuple[Mapping[str, Any], ...] = ()
 
 
+@dataclass(frozen=True)
+class Collector:
+    """A periodic job a plugin asks the scheduler to run.
+
+    `run` is an async callable taking the store. It runs once at startup and then every
+    `interval` seconds, and is cancelled after `timeout` seconds. An exception or a timeout is
+    logged once per streak of failures and never stops other collectors or the scheduler.
+    """
+
+    name: str
+    run: Callable[[Any], Awaitable[Any]]
+    interval: float
+    timeout: float
+
+
 @runtime_checkable
 class Plugin(Protocol):
     """The contract. PluginBase supplies an empty default for every hook."""
@@ -143,6 +163,7 @@ class Plugin(Protocol):
     def nav_entries(self) -> list[NavEntry]: ...
     def monitor_types(self) -> dict[str, Any]: ...
     def map_contribution(self, store: Any) -> Awaitable[MapContribution]: ...
+    def collectors(self) -> list[Collector]: ...
     def configure(self, settings: BaseModel | None) -> None: ...
     def prune(self, store: Any, now: float) -> Awaitable[int]: ...
 
@@ -182,6 +203,9 @@ class PluginBase:
     async def map_contribution(self, store: Any) -> MapContribution:
         return MapContribution()
 
+    def collectors(self) -> list[Collector]:
+        return []
+
     def configure(self, settings: BaseModel | None) -> None:
         """Called once with the validated settings section, or None when there is no model."""
 
@@ -201,6 +225,7 @@ class LoadedPlugin:
     nav_entries: tuple[NavEntry, ...]
     monitor_types: Mapping[str, Any]
     settings: BaseModel | None
+    collectors: tuple[Collector, ...] = ()
 
     @property
     def name(self) -> str:
@@ -349,6 +374,24 @@ def _check_monitor_types(name: str, types: dict[str, Any]) -> None:
                               f"{prefix!r}, so it cannot shadow a core type")
 
 
+def _check_collectors(name: str, collectors: list[Collector]) -> None:
+    seen: set[str] = set()
+    for c in collectors:
+        if not isinstance(c, Collector) or not isinstance(c.name, str)                 or not _NAME.match(c.name) or not callable(c.run)                 or not inspect.iscoroutinefunction(c.run):
+            raise PluginError(f"plugin {name!r}: collectors() must return Collector objects "
+                              "with a lower-case name and an async callable")
+        if c.name in seen:
+            raise PluginError(f"plugin {name!r}: collector {c.name!r} is declared twice")
+        seen.add(c.name)
+        if isinstance(c.interval, bool) or not isinstance(c.interval, (int, float))                 or not c.interval >= MIN_COLLECTOR_INTERVAL:
+            raise PluginError(f"plugin {name!r}: collector {c.name!r} interval "
+                              f"{c.interval!r} must be a number of at least "
+                              f"{MIN_COLLECTOR_INTERVAL:g} seconds")
+        if isinstance(c.timeout, bool) or not isinstance(c.timeout, (int, float))                 or not 0 < c.timeout <= c.interval:
+            raise PluginError(f"plugin {name!r}: collector {c.name!r} timeout {c.timeout!r} "
+                              "must be above 0 and no longer than its interval")
+
+
 def _settings(name: str, model: type[BaseModel] | None,
               raw: Mapping[str, Any]) -> BaseModel | None:
     if model is None:
@@ -381,6 +424,7 @@ def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
         migrations, pages = plugin.migrations(), plugin.pages()
         static_dir = plugin.static_dir()
         nav, mtypes = plugin.nav_entries(), plugin.monitor_types()
+        collectors = plugin.collectors()
     except PluginError:
         raise
     except Exception as err:
@@ -391,9 +435,10 @@ def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
     _check_migrations(name, migrations)
     _check_nav_and_pages(name, nav, pages, static_dir)
     _check_monitor_types(name, mtypes)
+    _check_collectors(name, collectors)
     plugin.configure(settings)
     return LoadedPlugin(plugin, tuple(routers), tuple(scopes), tuple(migrations), tuple(pages),
-                        static_dir, tuple(nav), dict(mtypes), settings)
+                        static_dir, tuple(nav), dict(mtypes), settings, tuple(collectors))
 
 
 def load_plugins(config: Config, entry_points: EntryPoints = installed_entry_points,

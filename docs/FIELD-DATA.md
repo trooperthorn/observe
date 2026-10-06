@@ -154,6 +154,11 @@ Observe gains a plugin system, and this design is split between the core and the
 - Audit kinds are `plugin_request` (state-changing requests), `plugin_denied` and `plugin_failed`. Successful reads are not audited.
 - A plugin's monitor type names must start with `<plugin>.`, and key scope markers may not be `wpi`.
 
+### Built: plugin collectors hook
+
+- `PluginBase.collectors()` returns `Collector(name, run, interval, timeout)` objects. `run` is an async callable that takes the store. Startup refuses an interval below 30 seconds, a timeout that is not above 0 or is longer than the interval, a non-async callable, and a repeated name.
+- The scheduler (`Scheduler.add_collectors`, `_collector_loop`) runs each collector in its own task, once at startup and then after each interval. A timeout cancels the run. An exception or timeout is logged once per streak of failures, with one line when it recovers, and never reaches other collectors or the scheduler.
+
 ### Built: plugin migrations, config and pages (slice 2)
 
 - `plugin_schema` (core schema version 5) holds one version per plugin. `Store` applies the migrations of listed plugins after the core's, one transaction per step, and raises `PluginSchemaTooNewError` when a plugin's recorded version is newer than its code. A plugin that is not listed is not touched, and its tables are kept when it is disabled.
