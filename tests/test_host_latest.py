@@ -50,6 +50,49 @@ async def test_series_silent_beyond_the_window_is_left_out(tmp_path):
     store.close()
 
 
+async def test_named_silent_series_is_returned_with_its_old_reading(tmp_path):
+    store = Store(str(tmp_path / "w.db"))
+    seed(store, 3)
+    store._db.execute("INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
+                      "VALUES (?,?,?,?,?,?,?)", (NOW - 5000, "nas01", "fan", "rpm", "{}", 900.0, "rpm"))
+    store._db.commit()
+    plain = await store.latest_host("nas01", window=LATEST_WINDOW_S, now=NOW)
+    assert "fan" not in {s["source"] for s in plain["samples"]}
+    named = await store.latest_host("nas01", window=LATEST_WINDOW_S, now=NOW,
+                                    series=(("fan", "rpm"), ("none", "never")))
+    unbounded = await store.latest_host("nas01")
+    key = lambda s: (s["source"], s["metric"])
+    assert sorted(named["samples"], key=key) == sorted(unbounded["samples"], key=key)  # the silent series is kept, a never-seen one adds nothing
+    store.close()
+
+
+def test_a_version_14_database_with_samples_gains_both_indexes(tmp_path):
+    from observe.store import MIGRATIONS, migrate
+    path = str(tmp_path / "old.db")
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+    newer = {v: m for v, m in MIGRATIONS.items() if v > 14}
+    for v in newer:
+        del MIGRATIONS[v]
+    try:
+        migrate(db)
+    finally:
+        MIGRATIONS.update(newer)
+    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 14
+    db.execute("INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
+               "VALUES (1.0,'nas01','hwmon','t','{}',1.0,'C')")
+    db.commit()
+    db.close()
+    Store(path).close()
+    db = sqlite3.connect(path)
+    try:
+        names = {r[1] for r in db.execute("PRAGMA index_list(host_samples)")}
+        assert {"host_samples_host_ts", "host_samples_series"} <= names
+        assert db.execute("SELECT COUNT(*) FROM host_samples").fetchone() == (1,)
+    finally:
+        db.close()
+
+
 def test_host_ts_index_exists_after_migration(tmp_path):
     path = str(tmp_path / "w.db")
     Store(path).close()

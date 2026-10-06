@@ -343,3 +343,22 @@ async def test_stored_severity_normalized_and_raw_kept():
     assert by_key["info"]["severity"] == "info" and "severity_raw" not in by_key["info"]["detail"]
     assert by_key["odd"]["severity"] == "warning"
     assert _alerts(events, T0)["status"] == "critical"
+
+
+async def test_component_silent_beyond_the_window_still_fails_while_others_report():
+    comps = COMPONENTS + [{"source": "hwmon", "metric": "fan_rpm", "direction": "below",
+                           "warn": 100, "crit": 50}]
+    env = Env([host_mon(components=comps)], f2d=1)
+    env.clock.now = T0 + 6000
+    now = env.clock.now
+    await env.store.ingest_batch(batch(temp=50.0, ts=now - 5000), {}, now=now - 5000)
+    fresh = Batch.model_validate({
+        "schema_version": 1, "agent_version": "t", "host": "nas01", "platform": "linux",
+        "sent_at": now, "sources": [{"source": "hwmon", "available": True}],
+        "samples": [{"source": "hwmon", "metric": "fan_rpm", "value": 900.0, "unit": "rpm",
+                     "labels": {}, "ts": now}]})
+    await env.store.ingest_batch(fresh, {}, now=now)
+    res = await env.poll()
+    assert res.result.value == "fail"
+    assert res.detail["components"]["hwmon.cpu_temp_c"] == "stale"
+    assert res.detail["components"]["hwmon.fan_rpm"] == "good"

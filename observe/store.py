@@ -276,6 +276,10 @@ HOST_SAMPLE_TS_INDEX = (
     "CREATE INDEX IF NOT EXISTS host_samples_host_ts ON host_samples(host, ts)",
 )
 
+HOST_SAMPLE_SERIES_INDEX = (
+    "CREATE INDEX IF NOT EXISTS host_samples_series ON host_samples(host, source, metric, ts)",
+)
+
 MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = {
     1: BASELINE,
     2: HOST_TABLES,
@@ -292,6 +296,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     13: LAYOUT_TABLES,
     14: ENROLMENT_GUARD_TABLES,
     15: HOST_SAMPLE_TS_INDEX,
+    16: HOST_SAMPLE_SERIES_INDEX,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
@@ -534,7 +539,8 @@ class Store:
             self._ingest_sync, batch, boots, time.time() if now is None else now)
 
     def _latest_host_sync(self, host: str, since: float,
-                          newest_fallback: bool = False) -> dict[str, Any] | None:
+                          newest_fallback: bool = False,
+                          series: tuple[tuple[str, str], ...] = ()) -> dict[str, Any] | None:
         with self._lock:
             row = self._db.execute(
                 "SELECT last_seen, platform, agent_version, clean_shutdown, boot_ts FROM hosts WHERE host=?",
@@ -554,6 +560,19 @@ class Store:
                 samples = self._db.execute(
                     "SELECT source, metric, labels, value, unit, ts FROM host_samples "
                     "WHERE host=? ORDER BY ts DESC, rowid DESC LIMIT 1", (host,)).fetchall()
+            if series:
+                # A named series with nothing inside the window is silent, not absent:
+                # read its own newest row (series index) so it still grades as stale.
+                have = {(r[0], r[1]) for r in samples}
+                for src, metric in series:
+                    if (src, metric) in have:
+                        continue
+                    samples = list(samples) + self._db.execute(
+                        "SELECT source, metric, labels, value, unit, ts FROM ("
+                        "SELECT source, metric, labels, value, unit, ts, ROW_NUMBER() OVER ("
+                        "PARTITION BY labels ORDER BY ts DESC, rowid DESC) AS n "
+                        "FROM host_samples WHERE host=? AND source=? AND metric=? AND ts<?) "
+                        "WHERE n=1", (host, src, metric, since)).fetchall()
             sources = self._db.execute(
                 "SELECT source, available, reason FROM host_sources WHERE host=?",
                 (host,)).fetchall()
@@ -566,17 +585,20 @@ class Store:
         }
 
     async def latest_host(self, host: str, since: float = 0.0, *, window: float | None = None,
-                          now: float | None = None) -> dict[str, Any] | None:
+                          now: float | None = None,
+                          series: tuple[tuple[str, str], ...] = ()) -> dict[str, Any] | None:
         """The newest reading per source, metric and label set for a pushed host
         (samples older than `since` are left out), its source availability, and
         when a batch last arrived. None when the host has never pushed. With `window`
         only samples from the last `window` seconds before `now` are read, so the cost
         does not grow with retention; a series silent for longer is absent, except that when
-        nothing at all is in the window the single newest sample is returned."""
+        nothing at all is in the window the single newest sample is returned. Each
+        (source, metric) in `series` that has nothing in the window is still returned with its
+        own newest older reading, so a silent configured component is graded stale."""
         if window is not None:
             since = max(since, (time.time() if now is None else now) - window)
         return await asyncio.to_thread(
-            self._latest_host_sync, host, since, window is not None)
+            self._latest_host_sync, host, since, window is not None, tuple(series))
 
     def _host_rows_sync(self) -> list[dict[str, Any]]:
         with self._lock:

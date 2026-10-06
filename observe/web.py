@@ -772,7 +772,8 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         stale_after = (mon.stale_after or 3 * config.effective(mon, "interval")) if mon             else 3 * config.defaults.interval
         if seen:
             data = await store.latest_host(
-                host, window=max(stale_after, LATEST_WINDOW_S), now=now)
+                host, window=max(stale_after, LATEST_WINDOW_S), now=now,
+                series=tuple((c.source, c.metric) for c in mon.components) if mon else ())
         state = None
         if mon is not None:
             st = scheduler.states[mon.slug]

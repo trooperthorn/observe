@@ -282,3 +282,18 @@ def test_host_name_with_slash_opens_in_api_and_page_link(env):
     assert r.status_code == 200 and r.json()["host"] == "rack/nas 01?#%"
     assert env.client.get("/api/hosts/rack/nas 01?#%".replace("?#%", "%3F%23%25")).status_code == 200
     assert env.client.get("/host?name=rack%2Fnas%2001").status_code == 200
+
+
+def test_configured_component_silent_for_long_stays_stale_on_the_page(tmp_path):
+    e = Env(tmp_path, [{"name": "NAS", "type": "pushed_host", "host": "nas01",
+                        "components": [{"source": "cpu", "metric": "utilization_pct",
+                                        "warn": 80, "crit": 95}]}])
+    try:
+        e.push(batch(samples=[s("cpu", "utilization_pct", 5.0, "%", ts=NOW - 5000),
+                              s("memory", "mem_total", 8e9, "B")]))
+        e.login()
+        d = detail(e)
+        assert d["cpu"]["items"][0]["stale"] is True
+        assert d["cpu"]["state"] == "stale"
+    finally:
+        e.close()

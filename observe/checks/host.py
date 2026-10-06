@@ -58,7 +58,8 @@ class PushedHostCheck(Check):
         m = self.monitor
         now = self.clock()
         data = await self.store.latest_host(
-            m.host, window=max(self.stale_after, LATEST_WINDOW_S), now=now)
+            m.host, window=max(self.stale_after, LATEST_WINDOW_S), now=now,
+            series=tuple((c.source, c.metric) for c in m.components))
         if data is None:
             return CheckResult.fail(f"no batch ever received from {m.host}",
                                     detail={"components": {}})
