@@ -312,7 +312,7 @@ def test_both_collectors_feed_the_map_and_only_get_requests_follow_the_login(tmp
     console = Both()
     env = Env(tmp_path, Console([]), {"classic_credential": "classic"})
     env.plugin.transport = httpx.MockTransport(console)
-    assert [c.name for c in env.plugin.collectors()] == ["devices", "classic"]
+    assert [c.name for c in env.plugin.collectors()] == ["devices", "classic", "clients"]
     assert run(env.plugin.collect_devices(env.store)) == 2
     assert run(env.plugin.collect_classic(env.store)) == 2
     sent = [(r.method, r.url.path) for r in console.requests]
@@ -328,7 +328,7 @@ def test_both_collectors_feed_the_map_and_only_get_requests_follow_the_login(tmp
 
 def test_no_classic_collector_without_the_credential(tmp_path):
     env = Env(tmp_path, Console([device(1)]))
-    assert [c.name for c in env.plugin.collectors()] == ["devices"]
+    assert [c.name for c in env.plugin.collectors()] == ["devices", "clients"]
     assert run(env.plugin.collect_devices(env.store)) == 1
     assert env.rows("infra_ports") == []
     assert run(env.plugin.collect_classic(env.store)) == 0

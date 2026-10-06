@@ -13,24 +13,36 @@ controller credential, when set, builds a read-only classic client (`classic.py`
 The map feed (`feed.py`): the devices collector also writes each device as a switch, with its
 uplink device as a link, and the optional `classic` collector adds ports, port properties and
 port-level links. See docs/FIELD-DATA.md.
+
+Clients and Protect. Every `clients_interval` seconds (300) the `clients` collector reads the
+Integration API client list, enriches it from the classic views when the classic credential is
+set, and keeps one row per MAC. Every `protect_interval` seconds (120), when `protect` is true,
+the `protect` collector reads the Protect camera list with the same key. A failure of the classic
+views never stops the Integration rows; the pages say the enrichment is unavailable. The pages
+(pages.py) are the UniFi page under Network.
 """
 
 from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from observe.plugins import Collector, Migration, PluginBase, PluginError
+from observe.plugins import (Collector, Migration, NavEntry, PluginBase, PluginError,
+                             PluginPage, PluginRouter)
 from observe.store import Store
 
 from .classic import (ClassicClient, parse_devices, parse_offline_clients,
                       parse_wan_health)
+from .clients import (device_index, enrich, offline_clients, parse_active_clients,
+                      parse_camera, parse_client, save_cameras, save_clients)
 from .feed import feed_classic, feed_integration
 from .client import AuthRejected, IntegrationClient, UniFiError
+from .pages import PAGE_PATH, build_pages_router, page_files
 from .records import MIGRATIONS, parse_device, prune_unseen, save_devices
 
 __version__ = "0.1.0"
@@ -54,6 +66,11 @@ class UniFiSettings(BaseModel):
     classic_credential: str | None = None
     site: str | None = None  # site name; the only site when omitted
     interval: int = Field(default=120, ge=30, le=3600)
+    clients_interval: int = Field(default=300, ge=30, le=3600)
+    # Protect cameras, off by default because Protect may not be installed on the console.
+    protect: bool = False
+    protect_base_path: str = "/proxy/protect/integration/v1"
+    protect_interval: int = Field(default=120, ge=30, le=3600)
     timeout: float = Field(default=20.0, gt=0, le=120)
     retention_days: int = Field(default=30, ge=1, le=3650)
 
@@ -77,6 +94,10 @@ class UniFiPlugin(PluginBase):
         self.transport: httpx.AsyncBaseTransport | None = None  # a test replaces it
         self._failures = 0
         self._retry_at = 0.0
+        self._protect_failures = 0
+        self._protect_retry_at = 0.0
+        # Why the last clients poll had no classic detail, or None. Shown on the pages.
+        self.classic_note: str | None = None
 
     def config_model(self) -> type[BaseModel]:
         return UniFiSettings
@@ -88,6 +109,9 @@ class UniFiPlugin(PluginBase):
         self._classic_login = None
         self._failures = 0
         self._retry_at = 0.0
+        self._protect_failures = 0
+        self._protect_retry_at = 0.0
+        self.classic_note = None
 
     def bind_credentials(self, credentials: Mapping[str, Any]) -> None:
         s = self.settings
@@ -139,6 +163,18 @@ class UniFiPlugin(PluginBase):
     def migrations(self) -> list[Migration]:
         return list(MIGRATIONS)
 
+    def routers(self) -> list[PluginRouter]:
+        return [PluginRouter(build_pages_router(self))]  # a login session, enforced by the core
+
+    def pages(self) -> list[PluginPage]:
+        return page_files()
+
+    def static_dir(self) -> Path:
+        return Path(__file__).parent / "static"
+
+    def nav_entries(self) -> list[NavEntry]:
+        return [NavEntry("UniFi", PAGE_PATH)]
+
     def collectors(self) -> list[Collector]:
         s = self.settings
         # The timeout covers the site list and every device page, so it may not exceed the interval.
@@ -148,6 +184,11 @@ class UniFiPlugin(PluginBase):
             # Login plus four reads, each under the request timeout.
             found.append(Collector("classic", self.collect_classic, float(s.interval),
                                    min(float(s.interval), max(s.timeout * 5, 30.0))))
+        found.append(Collector("clients", self.collect_clients, float(s.clients_interval),
+                               min(float(s.clients_interval), max(s.timeout * 8, 30.0))))
+        if s.protect:
+            found.append(Collector("protect", self.collect_protect, float(s.protect_interval),
+                                   min(float(s.protect_interval), max(s.timeout * 2, 30.0))))
         return found
 
     async def prune(self, store: Store, now: float) -> int:
@@ -158,29 +199,40 @@ class UniFiPlugin(PluginBase):
         pause = min(self.settings.interval * 2 ** (self._failures - 1), MAX_BACKOFF_S)
         self._retry_at = self.clock() + pause
 
-    async def collect_devices(self, store: Store) -> int:
-        """One poll. Raises BackedOff while pausing, AuthRejected on a 401 or 403, UniFiError
-        for an answer it refuses. Returns the number of devices stored."""
+    def _gate(self) -> None:
         now = self.clock()
         if now < self._retry_at:
             raise BackedOff(f"pausing after a rejected credential, retry in "
                             f"{self._retry_at - now:.0f}s")
+
+    def _api(self, base_path: str) -> IntegrationClient:
         s = self.settings
         if self.api_key is None:  # pragma: no cover - bind_credentials runs at load
             raise UniFiError("no API key bound")
-        base = f"{'https' if s.https else 'http'}://{s.host}:{s.port}{s.base_path}"
-        api = IntegrationClient(base, self.api_key, s.verify_tls, s.ca_bundle, s.timeout,
-                                self.transport)
+        base = f"{'https' if s.https else 'http'}://{s.host}:{s.port}{base_path}"
+        return IntegrationClient(base, self.api_key, s.verify_tls, s.ca_bundle, s.timeout,
+                                 self.transport)
+
+    async def _site_and_rows(self, suffix: str) -> tuple[str, list[Any]]:
+        """The chosen site id and every row of `/sites/{id}/<suffix>`, with the shared backoff."""
+        self._gate()
+        api = self._api(self.settings.base_path)
         try:
             async with api.session() as c:
                 sites = await api.list_all(c, "/sites")
                 site_id = self._pick_site(sites)
-                rows = await api.list_all(c, f"/sites/{site_id}/devices")
+                rows = await api.list_all(c, f"/sites/{site_id}/{suffix}")
         except AuthRejected:
             self._backoff()
             raise
         self._failures = 0
         self._retry_at = 0.0
+        return site_id, rows
+
+    async def collect_devices(self, store: Store) -> int:
+        """One poll. Raises BackedOff while pausing, AuthRejected on a 401 or 403, UniFiError
+        for an answer it refuses. Returns the number of devices stored."""
+        site_id, rows = await self._site_and_rows("devices")
         devices = [d for d in (parse_device(site_id, r) for r in rows) if d is not None]
         now = self.wall()
         stored = await save_devices(store, devices, now)
@@ -194,6 +246,65 @@ class UniFiPlugin(PluginBase):
         devices = snap.get("devices", [])
         await feed_classic(store, devices, self.wall())
         return len(devices)
+
+    async def collect_clients(self, store: Store) -> int:
+        """One clients poll. Raises what collect_devices raises. Classic detail is optional: a
+        classic failure is noted for the pages and the Integration rows are still stored.
+        Returns the number of client rows written."""
+        site_id, rows = await self._site_and_rows("clients")
+        now = self.wall()
+        live = [c for c in (parse_client(site_id, r) for r in rows) if c is not None]
+        known: list[dict[str, Any]] = []
+        active: dict[str, dict[str, Any]] = {}
+        self.classic_note = None
+        if self._classic_client() is not None:
+            try:
+                snap = await self.classic_clients()
+                active, known = snap["active"], snap["offline"]
+            except (UniFiError, AuthRejected) as err:
+                # The message holds no secret: classic.py never puts one in an error.
+                self.classic_note = f"classic detail unavailable: {err}"
+            except httpx.HTTPError as err:  # a 5xx, a timeout or a refused connection
+                self.classic_note = f"classic detail unavailable: {type(err).__name__}"
+        live = enrich(live, active, await device_index(store, site_id))
+        off = offline_clients(site_id, known, {c.mac for c in live if c.mac}, now,
+                              self.settings.retention_days)
+        return await save_clients(store, site_id, live, off, now)
+
+    async def classic_clients(self) -> dict[str, Any]:
+        """The two classic views the clients poll needs: connected detail by MAC and the known
+        clients that are not connected."""
+        c = self._classic_client()
+        if c is None:
+            return {"active": {}, "offline": []}
+        active = await c.get("stat/sta")
+        known = await c.get("rest/user")
+        return {"active": parse_active_clients(active),
+                "offline": parse_offline_clients(known, active)}
+
+    async def collect_protect(self, store: Store) -> int:
+        """One Protect poll of the unpaginated camera array, with its own backoff after a 401 or
+        403. Returns the number of cameras stored."""
+        now = self.clock()
+        if now < self._protect_retry_at:
+            raise BackedOff(f"pausing after a rejected credential, retry in "
+                            f"{self._protect_retry_at - now:.0f}s")
+        api = self._api(self.settings.protect_base_path)
+        try:
+            async with api.session() as c:
+                body = await api.get(c, "/cameras")  # never paged: Protect 7.2.105 takes no offset
+        except AuthRejected:
+            self._protect_failures += 1
+            pause = min(self.settings.protect_interval * 2 ** (self._protect_failures - 1),
+                        MAX_BACKOFF_S)
+            self._protect_retry_at = self.clock() + pause
+            raise
+        if not isinstance(body, list):
+            raise UniFiError("/cameras did not return a list")
+        self._protect_failures = 0
+        self._protect_retry_at = 0.0
+        cams = [c for c in (parse_camera(r) for r in body) if c is not None]
+        return await save_cameras(store, cams, self.wall())
 
     def _pick_site(self, sites: list[Any]) -> str:
         named = [x for x in sites if isinstance(x, dict) and isinstance(x.get("id"), str)]

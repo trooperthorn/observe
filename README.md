@@ -678,11 +678,11 @@ Warning on the port page and the map.
 
 The `unifi` plugin lives in `plugins/unifi` and is installed into the image with
 `pip install ./plugins/unifi`; it needs `plugins: [unifi]` to load. This release holds the
-settings, the tables and the devices collector. Every `interval` seconds (default 120) it reads
-the site list and the device list from the UniFi Network Integration API with the API key of a
-`unifi` credential, and keeps the current snapshot in two tables, `unifi_devices` and
-`unifi_clients`, with a first seen and last seen time and no per-poll history. Only
-`unifi_devices` is filled so far. A record not seen for `retention_days` (default 30) is deleted.
+settings, the tables, the devices, clients and Protect collectors and the UniFi page. Every
+`interval` seconds (default 120) it reads the site list and the device list from the UniFi Network
+Integration API with the API key of a `unifi` credential, and keeps the current snapshot in
+`unifi_devices`, `unifi_clients` and `unifi_cameras`, with a first seen and last seen time and no
+per-poll history. A record not seen for `retention_days` (default 30) is deleted.
 The same poll feeds the infrastructure map: each device becomes a switch keyed by its chassis
 MAC, so a `unifi_network` monitor whose `device` is that MAC matches it automatically, and a
 device that names its uplink device gets a `config` link to it.
@@ -699,9 +699,24 @@ plugin_settings:
     site: Default          # the only site when omitted
     interval: 120
     retention_days: 30
+    clients_interval: 300  # seconds between client polls
+    protect: false         # true polls Protect cameras with the same key
+    protect_interval: 120
     # classic_credential: unifi_view   # optional; enables the read-only classic client
 ```
 
+Clients are read every `clients_interval` seconds (default 300) and kept one row per MAC. With
+the classic account each connected client also gets its access point or switch, switch port number
+and SSID, and clients the console knows but that are not connected are added as offline with the
+time the console last saw them (older than `retention_days` they are left out). A client the
+console stops listing is marked not connected, not deleted. With `protect: true` a camera
+collector reads the Protect camera list every `protect_interval` seconds (default 120): state,
+connected and, only when the console gives a boolean `isRecording`, recording. NVR storage is not
+read because no route for it is verified.
+
+The **UniFi** page under Network (`/plugins/unifi`, signed in users only) has Devices, Clients and
+Protect tabs. The Clients tab filters by text, kind and state and draws only the rows in view, so
+a few thousand clients stay fast. The page shows what the last poll stored, not live data.
 The collector sends only GET requests, never follows a redirect, refuses a response over 4 MB
 and a list over 50 pages. After a 401 or 403 it stops sending requests, waits one interval, and
 doubles the wait on each further rejection up to one hour, so a revoked key is not hammered.

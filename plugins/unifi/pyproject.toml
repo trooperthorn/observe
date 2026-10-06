@@ -10,5 +10,8 @@ unifi = "observe_unifi:plugin"
 [tool.setuptools]
 packages = ["observe_unifi"]
 
+[tool.setuptools.package-data]
+observe_unifi = ["pages/*.html", "static/*.js", "static/*.css"]
+
 [tool.setuptools.dynamic]
 version = {attr = "observe_unifi.__version__"}

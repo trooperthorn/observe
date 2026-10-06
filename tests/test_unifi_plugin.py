@@ -243,7 +243,7 @@ def test_backed_off_collector_keeps_one_failure_streak(tmp_path, caplog):
             raise Stop
 
     sched._wait = wait  # type: ignore[method-assign]
-    (name, c), = sched._collectors
+    (name, c), = [x for x in sched._collectors if x[1].name == "devices"]
 
     async def go():
         with pytest.raises(Stop):
@@ -341,7 +341,8 @@ def test_plugin_is_off_unless_listed(tmp_path):
 def test_listed_plugin_creates_tables_and_registers_a_120_second_collector(tmp_path):
     env = Env(tmp_path, Console([]))
     assert env.rows() == [] and env.rows("unifi_clients") == []
-    (c,) = env.loaded.get("unifi").collectors
+    c, clients = env.loaded.get("unifi").collectors
+    assert (clients.name, clients.interval) == ("clients", 300.0)
     assert (c.name, c.interval) == ("devices", 120.0) and c.timeout <= c.interval
 
 
@@ -383,7 +384,7 @@ def test_collect_runs_through_the_scheduler_loop(tmp_path):
         raise Stop
 
     sched._wait = wait  # type: ignore[method-assign]
-    (name, c), = sched._collectors
+    (name, c), = [x for x in sched._collectors if x[1].name == "devices"]
 
     async def go():
         with pytest.raises(Stop):

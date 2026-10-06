@@ -538,4 +538,8 @@ monitors:
 #     site: Default                # the only site when omitted
 #     interval: 120                # seconds between device polls
 #     retention_days: 30           # delete devices unseen this long
-#     # classic_credential: unifi_view   # optional, type unifi_classic; not used yet
+#     clients_interval: 300        # seconds between client polls
+#     protect: false               # true polls Protect cameras with the same key
+#     protect_interval: 120
+#     # classic_credential: unifi_view   # optional, type unifi_classic; adds offline clients,
+#     #                                  # switch ports and SSIDs, PoE, VLAN and LLDP

@@ -1,0 +1,24 @@
+/* The UniFi page. Tokens only, no colour literals. The clients table draws only the rows in view:
+   every row is one fixed height, and the spacer rows above and below carry the rest. */
+.crumbs { color: var(--o-text-muted); font-size: var(--o-fs-sm); margin: 0; }
+.tabs { display: flex; gap: var(--o-s2); margin: var(--o-s3) 0; flex-wrap: wrap; }
+.tab { border: 1px solid var(--o-border); background: var(--o-surface); color: var(--o-text);
+  border-radius: 6px; padding: 0 var(--o-s3); min-height: 36px; font: inherit; cursor: pointer; }
+.tab[aria-selected="true"] { background: var(--o-accent-tint); border-color: var(--o-accent);
+  color: var(--o-accent); }
+.filters { display: flex; gap: var(--o-s2); align-items: center; flex-wrap: wrap;
+  margin: 0 0 var(--o-s3); }
+.filters input, .filters select { border: 1px solid var(--o-border); border-radius: 6px;
+  background: var(--o-surface); color: var(--o-text); padding: 0 var(--o-s2); min-height: 32px;
+  font: inherit; }
+.filters input { min-width: 220px; }
+.vscroll { max-height: 480px; overflow: auto; border: 1px solid var(--o-border);
+  border-radius: 6px; }
+.vscroll:focus-visible { outline: 2px solid var(--o-accent); outline-offset: 1px; }
+.vscroll table.data thead th { position: sticky; top: 0; background: var(--o-surface);
+  z-index: 1; }
+.vscroll tr.vrow { height: 40px; }
+.vscroll tr.vrow td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 22ch; padding-top: 0; padding-bottom: 0; }
+.vscroll tr.vspace td { padding: 0; border: 0; }
+.vscroll tr.vspace:hover { background: transparent; }

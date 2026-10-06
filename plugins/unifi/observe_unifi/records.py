@@ -2,8 +2,8 @@
 
 One row per device or client, replaced on every poll. There is no per-poll history. A row keeps
 `first_seen` from the poll that first saw it and `last_seen` from the latest poll that did, and
-a row not seen for `retention_days` is deleted. `unifi_clients` is created here for the client
-collector of a later slice; this slice writes only `unifi_devices`.
+a row not seen for `retention_days` is deleted. `unifi_clients` is one row per MAC and
+`unifi_cameras` one row per Protect camera; see clients.py.
 """
 
 from __future__ import annotations
@@ -46,6 +46,29 @@ MIGRATIONS = (
   PRIMARY KEY (site_id, client_id)
 )""",
         "CREATE INDEX IF NOT EXISTS unifi_clients_seen ON unifi_clients (last_seen)",
+    )),
+    # Version 2: what the clients and Protect collectors keep (docs/FIELD-DATA.md). `connected`
+    # is NULL when unknown. `client_id` is the lower-case MAC when the row has one, so a client
+    # is one row however it was seen.
+    Migration(2, (
+        "ALTER TABLE unifi_clients ADD COLUMN connected INTEGER",
+        "ALTER TABLE unifi_clients ADD COLUMN connected_at REAL",
+        "ALTER TABLE unifi_clients ADD COLUMN ssid TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE unifi_clients ADD COLUMN uplink_mac TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE unifi_clients ADD COLUMN sw_port INTEGER",
+        "ALTER TABLE unifi_clients ADD COLUMN enriched INTEGER NOT NULL DEFAULT 0",
+        """CREATE TABLE IF NOT EXISTS unifi_cameras (
+  camera_id TEXT NOT NULL PRIMARY KEY,
+  mac TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT '',
+  connected INTEGER,
+  recording INTEGER,
+  first_seen REAL NOT NULL,
+  last_seen REAL NOT NULL
+)""",
+        "CREATE INDEX IF NOT EXISTS unifi_cameras_seen ON unifi_cameras (last_seen)",
     )),
 )
 
@@ -121,10 +144,10 @@ async def save_devices(store: Store, devices: Iterable[Device], now: float) -> i
 
 
 async def prune_unseen(store: Store, now: float, retention_days: int) -> int:
-    """Delete devices and clients not seen for retention_days. Returns rows deleted."""
+    """Delete devices, clients and cameras not seen for retention_days. Returns rows deleted."""
     cutoff = now - retention_days * 86400
     total = 0
-    for table in ("unifi_devices", "unifi_clients"):
+    for table in ("unifi_devices", "unifi_clients", "unifi_cameras"):
         total += await asyncio.to_thread(
             store._delete, f"DELETE FROM {table} WHERE last_seen < ?", (cutoff,))
     return total

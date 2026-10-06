@@ -783,7 +783,8 @@ The `unifi_network` check has a `ports` mode that issues one GET for a device de
 
 ### UniFi plugin
 
-`plugins/unifi/observe_unifi` is a plugin with no routes or pages yet. `UniFiSettings` is its
+`plugins/unifi/observe_unifi` is a plugin with session routes and one page (see Clients, Protect and
+the UniFi page below). `UniFiSettings` is its
 `plugin_settings.unifi` model. The plugin host calls the optional `bind_credentials` hook after
 validation with the config's named credentials, so the plugin can check that `credential` names a
 `unifi` credential and `classic_credential` a `unifi_classic` one, and fail startup with a
@@ -814,6 +815,30 @@ automatically. The parsers return per-port PoE watts and class, native and tagge
 LLDP neighbour table, the uplink MAC with local and remote port numbers, the WAN health row and the
 known clients that are not active. `UniFiPlugin.classic_snapshot()` returns all of these. Every
 classic field name is unverified against a live console, because ha_Int_soc does not read this API.
+
+`clients.py` holds the clients and cameras code. Migration 2 adds `connected`, `connected_at`, `ssid`,
+`uplink_mac`, `sw_port` and `enriched` to `unifi_clients` and creates `unifi_cameras`. The `clients`
+collector (`collect_clients`, `clients_interval` 300 s) shares the devices collector's site pick and
+backoff (`_site_and_rows`), parses the Integration client list, and, when the classic credential is
+set, reads only `stat/sta` and `rest/user` (`classic_clients`) to enrich connected clients and list
+offline ones. A client is one row keyed by its lower-case MAC (the Integration id when there is no
+MAC). One transaction upserts the poll, marks rows it did not write as not connected, and upserts
+offline rows, which keep the stored address and kind and never move `last_seen` back. An offline
+client last seen before `retention_days` is skipped so the prune does not remove it only for the next
+poll to add it back. The uplink MAC from `ap_mac` or `sw_mac` resolves to a device id through
+`unifi_devices`. A classic failure (a `UniFiError`, a 401 or an HTTP error) leaves the Integration
+rows stored and sets `classic_note`, which the page shows. The `protect` collector (`protect: true`,
+`protect_interval` 120 s) reads the unpaginated `GET {protect_base_path}/cameras` with the same key and
+its own backoff, so a rejected Protect key does not pause the network collectors. `isRecording` is
+stored only when it is a boolean, because `recordingSettings.mode` on other firmwares is unverified.
+
+`pages.py` and `pages/unifi.html` with `static/unifi.js`, `vlist-core.js` and `unifi.css` are the UniFi
+page, mounted by the plugin host at `/plugins/unifi` with the nav entry UniFi under Network. The routes
+`/api/plugins/unifi/devices`, `/clients` and `/protect` need a login session. The Clients table is
+windowed: rows are one fixed height, only the rows in view and a margin are drawn, and spacer rows
+set through a `height` attribute stand for the rest, because the static guard forbids inline styles.
+`vlist-core.js` holds the pure window and filter rules, tested by `tests/js/unifi.test.mjs`. Every
+value is written with `textContent`.
 
 `feed.py` writes the map feed through `InfraService` only. The devices collector calls
 `feed_integration` after it stores the snapshot: each device is a switch keyed by `switch_id` of its
