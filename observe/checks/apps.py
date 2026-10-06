@@ -21,10 +21,13 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
 
+from . import ha_host
 from .base import Check, CheckResult, Result
 from .platforms import AuthFailed, api_ssl_context, pct
 
@@ -73,12 +76,55 @@ class _HttpApiCheck(Check):
 # ============================================================ Home Assistant
 
 
+MAX_HA_BODY = 16 * 1024 * 1024  # a large install lists about 4 MB of states
+
+
 class HomeAssistantCheck(_HttpApiCheck):
+    def __init__(self, monitor: Any, config: Any, store: Any = None,
+                 clock: Callable[[], float] = time.time) -> None:
+        super().__init__(monitor, config)
+        self.store = store
+        self.clock = clock
+
+    async def get_capped(self, path: str) -> Any:
+        """GET with no redirects and a body size cap, for the large /api/states list."""
+        m = self.monitor
+        verify: Any = api_ssl_context(m.verify_tls, m.ca_bundle)
+        async with httpx.AsyncClient(verify=verify, timeout=self.timeout,
+                                     follow_redirects=False) as c:
+            async with c.stream("GET", self.base_url() + path, headers=self.headers()) as r:
+                if r.status_code in (401, 403):
+                    raise AuthFailed(f"HTTP {r.status_code}")
+                if r.status_code == 404:
+                    raise LookupError(f"{path} not found (404)")
+                r.raise_for_status()
+                buf = bytearray()
+                async for chunk in r.aiter_bytes():
+                    buf += chunk
+                    if len(buf) > MAX_HA_BODY:
+                        raise ValueError(f"{path} reply is larger than {MAX_HA_BODY} bytes")
+        return json.loads(buf)
+
+    async def _host(self) -> CheckResult:
+        if self.store is None:
+            return CheckResult.fail("host mode needs the Observe store")
+        cfg = await self.get_capped("/api/config")
+        states = await self.get_capped("/api/states")
+        if not isinstance(cfg, dict) or not isinstance(states, list):
+            return CheckResult.fail("unexpected /api/config or /api/states shape")
+        batch = ha_host.build_batch(self.monitor.host_name, cfg, states, self.clock())
+        await self.store.ingest_batch(batch, {})
+        return CheckResult.ok(
+            f"{self.monitor.host_name}: {len(states)} entities, {len(batch.samples)} readings",
+            value=float(len(states)), detail={"samples": len(batch.samples)})
+
     def headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.credential().token}"}
 
     async def _probe(self) -> CheckResult:
         m = self.monitor
+        if m.mode == "host":
+            return await self._host()
         if m.mode == "api":
             body = await self.get("/api/")
             if body.get("message") != "API running.":

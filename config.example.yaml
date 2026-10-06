@@ -422,6 +422,15 @@ monitors:
     https: false              # HA's default; the token then crosses the LAN in cleartext
     mode: api
 
+  - name: Home Assistant host
+    group: homeassistant
+    type: homeassistant
+    host: ha.lab.example
+    credential: ha-token
+    https: false
+    mode: host                # versions, updates, entity counts and hassio sensors as a host page
+    host_name: homeassistant  # the name shown on the Hosts page; polled every 300 s by default
+
   - name: HA unavailable entities
     group: homeassistant
     type: homeassistant

@@ -758,19 +758,24 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                 "groups": scheduler.rollup.group_states(), "alerts": alerter.status}
 
     pushed = {m.host: m for m in scheduler.monitors if m.type == "pushed_host"}
+    # A Home Assistant monitor in host mode ingests its own batches, so its host page uses that
+    # monitor's polling interval for the stale window.
+    ha_hosts = {m.host_name: m for m in scheduler.monitors
+                if m.type == "homeassistant" and m.mode == "host" and m.enabled}
 
     async def host_view(host: str, row: dict[str, Any] | None) -> dict[str, Any] | None:
         mon = pushed.get(host)
         seen = row is not None
+        ha_mon = ha_hosts.get(host) if mon is None else None
         if row is None:
-            if mon is None:
+            if mon is None and ha_mon is None:
                 return None
             # Listed in the YAML but no batch has ever arrived.
             row = {"host": host, "platform": "", "agent_version": "", "last_seen": 0.0,
                    "confirmed": 1}
             data = None
         now = auth_clock()
-        stale_after = (mon.stale_after or 3 * config.effective(mon, "interval")) if mon             else 3 * config.defaults.interval
+        stale_after = (mon.stale_after or 3 * config.effective(mon, "interval")) if mon             else 3 * config.effective(ha_mon, "interval") if ha_mon             else 3 * config.defaults.interval
         if seen:
             data = await store.latest_host(
                 host, window=max(stale_after, LATEST_WINDOW_S), now=now,
@@ -793,7 +798,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         to its enrolment page. Session only."""
         rows = {r["host"]: r for r in await store.host_rows()}
         out = []
-        for name in sorted({*rows, *pushed}):
+        for name in sorted({*rows, *pushed, *ha_hosts}):
             view = await host_view(name, rows.get(name))
             if view is not None:
                 out.append(hostview.summarize(view))

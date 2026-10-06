@@ -28,6 +28,7 @@ from .store import ABSENT_REASON
 
 _RANK = {GOOD: 0, WARNING: 1, CRITICAL: 2}
 ALERT_WINDOW_S = 86400.0
+HA_UNAVAILABLE_WARN = 25  # unavailable entities at or above this make the HA section Warning
 
 Grader = Callable[[float, dict[str, str]], tuple[str, str]]
 
@@ -141,12 +142,30 @@ RULES: dict[str, dict[tuple[str, str], Grader]] = {
               ("win_storage", "disk_health"): _level_value, ("win_storage", "disk_temp_c"):
               _above(50, 60), ("win_storage", "wear_pct"): _above(80, 95),
               ("win_smartctl", "smart_passed"): lambda v, _l: (GOOD, "") if v else (CRITICAL, "SMART failed"),
-              ("truenas", "disk_temp_c"): _above(50, 60)},
+              ("truenas", "disk_temp_c"): _above(50, 60),
+              ("hassio", "disk_used_pct"): _above(85, 95), ("hassio", "disk_free_gb"): _info,
+              ("hassio", "disk_used_gb"): _info, ("hassio", "disk_total_gb"): _info},
     "ups": {("nut", "ups_status_flag"): _ups_flag,
             ("nut", "battery_charge_pct"): _below(50, 20), ("nut", "battery_runtime_s"): _info,
             ("nut", "input_voltage_v"): _info, ("nut", "ups_load_pct"): _above(80, 95)},
+    "ha": {("homeassistant", "running"):
+           lambda v, _l: (GOOD, "") if v else (CRITICAL, "Home Assistant is not running"),
+           ("homeassistant", "safe_mode"): _nonzero(WARNING, "Home Assistant is in safe mode"),
+           ("homeassistant", "recovery_mode"):
+           _nonzero(WARNING, "Home Assistant is in recovery mode"),
+           ("homeassistant", "update_pending"): _nonzero(WARNING, "an update is pending"),
+           ("homeassistant", "updates_pending"): _info,
+           ("homeassistant", "unavailable_entities"):
+           _above(HA_UNAVAILABLE_WARN, float("inf")),
+           ("homeassistant", "entities_total"): _info, ("homeassistant", "entities"): _info,
+           ("homeassistant", "version"): _info,
+           ("ha_soc", "posture_score"): _info, ("ha_soc", "open_detections"): _info,
+           ("ha_soc", "users_at_risk"): _info, ("ha_soc", "suspicious_activity"): _info},
+    "containers": {("hassio", "cpu_percent"): _above(85, 95),
+                   ("hassio", "memory_percent"): _above(85, 95)},
 }
-SECTIONS = ("cpu", "memory", "power", "temperatures", "fans", "raid", "zfs", "disks", "ups")
+SECTIONS = ("cpu", "memory", "power", "temperatures", "fans", "raid", "zfs", "disks", "ups",
+            "ha", "containers")
 
 
 def _sources_of(section: str) -> list[str]:

@@ -7,7 +7,8 @@ import { statusChip } from "/static/js/chips.js";
 const SECTIONS = [
   ["cpu", "CPU"], ["memory", "Memory"], ["power", "Power"], ["temperatures", "Temperatures"],
   ["fans", "Fans and controller"], ["raid", "RAID"], ["zfs", "ZFS pools"], ["disks", "Disks"],
-  ["ups", "UPS"], ["alerts", "Alerts"],
+  ["ups", "UPS"], ["ha", "Home Assistant"], ["containers", "Containers"],
+  ["alerts", "Alerts"],
 ];
 const KPI_SECTIONS = ["cpu", "temperatures", "fans", "disks"];
 const STATE_TEXT = {

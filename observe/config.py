@@ -551,7 +551,10 @@ class HomeAssistantMonitor(_ApiTarget):
     # HA serves plain HTTP unless you configured TLS. With https: false the
     # token crosses the network in cleartext; see THREAT-MODEL.md.
     https: bool = True
-    mode: Literal["api", "entity", "unavailable", "updates"] = "api"
+    mode: Literal["api", "entity", "unavailable", "updates", "host"] = "api"
+    # host mode: the host name the readings are stored under (the Hosts page). It is polled
+    # every 300 s unless interval is set.
+    host_name: str = Field("homeassistant", min_length=1, max_length=128)
     entity_id: str | None = Field(None, pattern=r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$")
     expect: list[str] | None = None  # entity mode: allowed states
     domains: list[str] = Field(default_factory=list)  # unavailable mode: limit to these
@@ -561,6 +564,8 @@ class HomeAssistantMonitor(_ApiTarget):
     def _mode_args(self) -> "HomeAssistantMonitor":
         if self.mode == "entity" and not self.entity_id:
             raise ValueError("mode entity requires entity_id")
+        if self.mode == "host" and self.interval is None:
+            self.interval = 300
         return self
 
 

@@ -202,10 +202,26 @@ row of its `pushed_host` monitor. It is served by two routes, `GET /api/hosts`
 (one summary row per host) and `GET /api/hosts/{host:path}` (host names may contain slashes; the full document), both
 built by `observe/hostview.py` from the newest sample per series in the store.
 The sections are CPU, memory, power, temperatures, fans with the fan controller
-state, RAID, ZFS pools, disks, UPS, alerts and events, plus the boot state and
+state, RAID, ZFS pools, disks, UPS, Home Assistant, containers, alerts and events, plus the boot state and
 the list of sources. Each section and each reading carries Good, Warning or
 Critical. Built-in limits live in `hostview.py`; thresholds on the monitor in the
 YAML override them, and the agent never sets any.
+
+A `homeassistant` monitor with `mode: host` feeds the same page without an agent. Every 300 s
+(or its `interval`) it reads `/api/config` and `/api/states` with the existing non-admin token,
+maps them in `observe/checks/ha_host.py` to a hostwatch `Batch` for the host named `host_name`
+(default `homeassistant`), and calls `Store.ingest_batch` in process, so grading, staleness and
+retention are the ordinary ones. Sources are `homeassistant` (run state, safe and recovery mode,
+versions, pending updates, entity counts, unavailable count), `hassio` (Core, Supervisor and
+add-on CPU and memory percent, host disk) and `ha_soc` (posture, open detections, users at
+risk, suspicious activity). A source with no matching sensor is reported absent, never as zero.
+`hostview.py` grades the `ha` section (not running Critical; update pending, safe or recovery
+mode, and 25 or more unavailable entities Warning) and the `containers` section (CPU and memory
+percent Warning at 85, Critical at 95); `hassio` disk used percent is graded under disks. The
+stale window of that host is three times the monitor's interval, so a 300 s poll is not stale
+at 180 s. The entity ids of the hassio and HA SOC sensors are unverified against a live install
+and are marked in the module. Richer HA detail arrives from ha_Int_soc pushing batches with its
+own ingest key bound to the same host, never from an HA admin token held by Observe.
 
 Missing data is shown, not hidden. Each section has a `state`: `ok`, `stale`
 (no reading inside the stale window, or the host is silent), `unavailable` (a

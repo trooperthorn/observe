@@ -26,7 +26,7 @@ The source lives at https://github.com/trooperthorn/observe.
 | `truenas` | JSON-RPC WebSocket API: all `pools`, one `pool`, or active `alerts` | % used, alert count |
 | `proxmox` | REST API with a token: `node`, `node_cpu`, `node_memory`, `guest` (VM or CT), `storage` | days up, % |
 | `vsphere` | ESXi or vCenter via pyVmomi: `host`, `host_cpu`, `host_memory`, `datastore`, `vm` | days up, % |
-| `homeassistant` | REST API: `api`, one `entity` (state or number), `unavailable` entity count, pending `updates` | entity value, counts |
+| `homeassistant` | REST API: `api`, one `entity` (state or number), `unavailable` entity count, pending `updates`, `host` (versions, run state, updates, entity counts, hassio CPU, memory and disk sensors and HA SOC sensors shown as a Hosts page, read every 300 s) | entity value, counts |
 | `unifi_network` | Integration API: `devices` online summary, one `device`, `device_cpu`, `device_memory`, `firmware` updates, `ports` per-port speed, state and PoE state of one switch | %, counts |
 | `unifi_protect` | Integration API: `cameras` connected summary, one `camera`, `info` | not-connected count |
 | `technitium` | HTTP API: `stats` (SERVFAIL rate over the last hour or day), `update` available | % SERVFAIL |

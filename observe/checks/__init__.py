@@ -42,6 +42,8 @@ def build_check(monitor: Any, config: Config, store: Any = None) -> Check:
     cls = REGISTRY[monitor.type]
     if cls is PushedHostCheck:
         return PushedHostCheck(monitor, config, store)
+    if cls is HomeAssistantCheck:
+        return HomeAssistantCheck(monitor, config, store)
     return cls(monitor, config)
 
 
