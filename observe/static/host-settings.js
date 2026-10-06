@@ -256,7 +256,7 @@ function drawTokenState() {
   const line = $("token-state");
   const guard = $("guard-note");
   if (!e) { line.textContent = ""; guard.hidden = true; return; }
-  const notice = noticeFor({ ready: settings.reporting && e.token_state === "used", expired: e.token_state === "expired", token_state: e.token_state });
+  const notice = noticeFor({ ready: settings.reporting && e.token_state === "used", expired: e.token_state === "expired", token_state: e.token_state, stalled: e.stalled });
   if (notice) line.textContent = `${notice.title}. ${notice.text}`;
   else if (e.token_state === "valid") line.textContent = `The install command has not been run yet. It works once and expires at ${when(e.expires_at)}.`;
   else line.textContent = "";

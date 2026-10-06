@@ -115,7 +115,8 @@ test("the command notice names expired and used, and stays quiet when ready or w
   assert.equal(noticeFor({ ready: true, token_state: "used" }), null);
   assert.equal(noticeFor({ token_state: "valid" }), null);
   assert.equal(noticeFor({ expired: true, token_state: "expired" }).kind, "expired");
-  const used = noticeFor({ token_state: "used" });
+  assert.equal(noticeFor({ token_state: "used", stalled: false }), null);
+  const used = noticeFor({ token_state: "used", stalled: true });
   assert.equal(used.kind, "used");
   assert.equal(used.button, "Regenerate command");
 });

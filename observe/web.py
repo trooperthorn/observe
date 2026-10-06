@@ -1187,7 +1187,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             if prog is not None:
                 # The state of the install command itself, so the page can say "already used or
                 # expired" and offer Regenerate, or show why the script refused to run.
-                out["enrolment"] = {"token_state": prog["token_state"], "guard": prog["guard"],
+                out["enrolment"] = {"token_state": prog["token_state"], "stalled": prog["stalled"], "guard": prog["guard"],
                                     "expires_at": prog["expires_at"], "state": prog["state"]}
             task = await hosttasks.latest(store, host, now)
             if task is not None and task["state"] == "expired" \

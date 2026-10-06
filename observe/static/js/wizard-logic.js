@@ -156,10 +156,10 @@ export function noticeFor(progress) {
       text: "The install command was not used within its time limit and no longer works. Make a new one; the old one stays dead.",
     };
   }
-  if (progress.token_state === "used") {
+  if (progress.token_state === "used" && progress.stalled) {
     return {
-      kind: "used", title: "Command already used", button: "Regenerate command",
-      text: "This install command works once and has been used, so running it again is refused as already used. If the install is still running, wait. If it stopped, make a new command: that also revokes the keys the old one made.",
+      kind: "used", title: "Install stopped", button: "Regenerate command",
+      text: "This install command was used, but the install has made no progress for 10 minutes or reported a failure. Make a new command: that also revokes the keys the old one made.",
     };
   }
   return null;

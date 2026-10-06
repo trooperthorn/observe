@@ -490,6 +490,9 @@ _STEP_LABELS = {"script": "Script fetched", "data": "First data received",
                 "control": "Control first pull", "ready": "Ready"}
 
 
+STALL_S = 600  # seconds without install activity before a redeemed install counts as stalled
+
+
 async def progress(store: Store, host: str, now: float) -> dict[str, Any] | None:
     """The enrolment's state machine, or None for a host with no enrolment.
 
@@ -548,14 +551,23 @@ async def progress(store: Store, host: str, now: float) -> dict[str, Any] | None
     # The command's own state: valid until it is redeemed or runs out; "used" once redeemed, which
     # is when a second run of it gets 410 and the way out is a regenerated command.
     token_state = "expired" if expired else "used" if fetched_at is not None else "valid"
+    # A redeemed install counts as stalled once nothing has happened for STALL_S or a step
+    # reported failure; only then does the page offer to regenerate, which revokes its keys.
+    report_list = json.loads(reports)
+    activity = [t for t in (fetched_at, data_at, pulled_at, *(r.get("at") for r in report_list))
+                if isinstance(t, (int, float))]
+    stalled = (fetched_at is not None and not ready and not expired and (
+        any(r.get("status") == "failed" for r in report_list)
+        or (activity and now - max(activity) > STALL_S)))
     guard = ({"step": guard_step, "reason": guard_reason, "at": guard_at}
              if fetched_at is None and guard_reason else None)
     return {"host": host, "platform": platform, "agent": bool(agent), "control": bool(control),
             "state": state, "ready": ready, "expired": expired, "token_state": token_state,
+            "stalled": bool(stalled),
             "guard": guard, "created": created,
             "expires_at": expires_at, "steps": steps,
             "install": [{"step": r["step"], "status": r["status"], "note": r["note"],
-                         "at": r["at"]} for r in json.loads(reports)]}
+                         "at": r["at"]} for r in report_list]}
 
 
 def command_text(host: str, platform: str, base_url: str, token: str, pool: str = "") -> str:

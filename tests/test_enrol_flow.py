@@ -72,6 +72,16 @@ def test_a_wrong_machine_guard_failure_leaves_the_token_valid_and_the_wizard_sho
     assert token not in repr(env.rows("SELECT * FROM audit"))
 
 
+def test_a_running_install_is_not_offered_regenerate_until_it_stalls(env):
+    hdr = admin(env)
+    token = token_of(create(env, hdr, name="mediain-svr", control=False, allowlist=None))
+    run_install(env, token)
+    state = progress(env, "mediain-svr")
+    assert state["token_state"] == "used" and state["stalled"] is False
+    env.clock.now += enrol.STALL_S + 1
+    assert progress(env, "mediain-svr")["stalled"] is True
+
+
 def test_the_settings_page_data_shows_the_refusal_and_the_command_state(env):
     hdr = admin(env)
     token = token_of(create(env, hdr))
