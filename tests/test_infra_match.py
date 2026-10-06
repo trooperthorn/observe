@@ -76,7 +76,7 @@ async def test_address_claim_is_a_proposal_until_an_admin_confirms_it(world):
     await m.link_switch(sid, "snmp-edge", "alice", "10.1.1.1")
     assert (await m.effective_matches())[sid] == "snmp-edge"
     assert await m.proposals() == {}
-    (row,) = await infra._run(lambda d: d.execute(
+    (row,) = await infra.read(lambda d: d.execute(
         "SELECT kind, detail FROM audit ORDER BY id").fetchall())
     assert row[0] == "infra_switch_linked" and '"basis": "proposal"' in row[1]
 
@@ -85,7 +85,7 @@ async def test_a_manual_link_that_differs_from_the_proposal_is_audited_as_manual
     _, infra, m = world
     sid = await add(infra, switch_id("de:ad:be:ef:00:02"), mgmt_addresses=["10.0.0.2"])
     await m.link_switch(sid, "ping-dist", "alice")
-    (row,) = await infra._run(lambda d: d.execute("SELECT detail FROM audit").fetchall())
+    (row,) = await infra.read(lambda d: d.execute("SELECT detail FROM audit").fetchall())
     assert '"basis": "manual"' in row[0]
 
 
@@ -129,10 +129,10 @@ async def test_unmatched_switch_is_queued_and_admin_link_is_audited(world):
     assert await m.unlinked() == []
     # A later read keeps the admin's choice.
     assert (await m.effective_matches())[sid] == "ping-dist"
-    (mon,) = [r[0] for r in await infra._run(lambda db: db.execute(
+    (mon,) = [r[0] for r in await infra.read(lambda db: db.execute(
         "SELECT matched_monitor FROM infra_switches WHERE switch_id=?", (sid,)).fetchall())]
     assert mon == "ping-dist"
-    rows = await infra._run(lambda d: d.execute(
+    rows = await infra.read(lambda d: d.execute(
         "SELECT kind, actor, remote, detail FROM audit ORDER BY id").fetchall())
     assert [r[0] for r in rows] == ["infra_switch_linked"]
     assert rows[0][1] == "alice" and rows[0][2] == "10.1.1.1"
@@ -154,13 +154,13 @@ async def test_admin_link_survives_disabled_monitor_and_reads_never_write(tmp_pa
 
         def column(db: Any) -> Any:
             return db.execute("SELECT matched_monitor FROM infra_switches").fetchall()
-        before = await infra._run(column)
+        before = await infra.read(column)
         assert (await off.effective_matches())[sid] == "ping-dist"
         await off.unlinked()
         await off.findings(lambda _m: None)
-        assert await infra._run(column) == before == [("ping-dist",)]
+        assert await infra.read(column) == before == [("ping-dist",)]
         assert (await enabled.effective_matches())[sid] == "ping-dist"
-        kinds = [r[0] for r in await infra._run(lambda d: d.execute(
+        kinds = [r[0] for r in await infra.read(lambda d: d.execute(
             "SELECT kind FROM audit").fetchall())]
         assert kinds == ["infra_switch_linked"]
     finally:
@@ -195,7 +195,7 @@ async def test_bad_links_are_refused_and_audited(world):
         await m.link_switch("name:ghost", "ping-dist", "alice")
     with pytest.raises(InfraError):
         await m.link_switch(sid, "ping-dist", "")
-    kinds = [r[0] for r in await infra._run(lambda d: d.execute(
+    kinds = [r[0] for r in await infra.read(lambda d: d.execute(
         "SELECT kind FROM audit ORDER BY id").fetchall())]
     assert kinds == ["infra_switch_link_failed", "infra_switch_link_failed"]
     assert len(await m.unlinked()) == 1
@@ -309,7 +309,7 @@ async def test_link_routes_need_admin_and_csrf_and_audit(web):
                            headers=csrf).status_code == 422
     assert web.client.post("/api/admin/infra/link", json=payload, headers=csrf).status_code == 200
     assert web.client.get("/api/admin/infra/unlinked").json() == []
-    kinds = [r[0] for r in await web.infra._run(lambda d: d.execute(
+    kinds = [r[0] for r in await web.infra.read(lambda d: d.execute(
         "SELECT kind FROM audit WHERE kind LIKE 'infra_%' ORDER BY id").fetchall())]
     assert kinds == ["infra_switch_link_failed", "infra_switch_linked"]
     assert web.calls == []

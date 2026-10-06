@@ -32,6 +32,7 @@ on how you deploy).
 | Unprivileged ICMP instead of CAP_NET_RAW | enforced by compose | Via the `net.ipv4.ping_group_range` sysctl, namespaced to the container. |
 | Dashboard basic auth | advisory | Off unless configured. Constant-time comparison. By owner decision it opens only the read-only API and `/metrics`; it is never accepted for admin, user, ingest-key or future action routes, which need a session login with CSRF (tested against every admin route). Basic auth over plain HTTP is readable on the wire; put a TLS reverse proxy in front or bind to a management VLAN. |
 | Dependency suppression can hide a real outage | advisory | A wrong `depends_on` (a server marked behind a switch it does not use) suppresses that server's alerts whenever the switch is down. Suppression is always recorded in the event log with the blocking monitor's name, and cycles and unknown parents are rejected at load. Review dependencies like firewall rules. |
+| Database access confined to one layer | enforced | `observe/storage` is the only code that imports a database driver or opens a connection; `tests/test_storage_ban.py` fails the build on a violation. Reads run on connections opened read-only (`mode=ro` and `query_only`), so a read route cannot change data even through a bug, and a read that runs past 2 seconds is interrupted. Every write is one transaction on a single writer, and `foreign_keys` is now enforced. |
 | Network exposure of 8080 | advisory | Compose publishes on all interfaces by default; bind to one address if needed. |
 
 ## Ingest, logins, and control

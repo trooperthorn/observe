@@ -148,7 +148,7 @@ class Matcher:
             return db.execute("SELECT switch_id, name, mgmt_addresses, matched_monitor "
                               "FROM infra_switches ORDER BY first_seen, switch_id").fetchall()
         out: dict[str, str | None] = {}
-        for sid, name, addrs, linked in await self._infra._run(go):
+        for sid, name, addrs, linked in await self._infra.read(go):
             if linked in self._configured:
                 out[sid] = linked
             else:
@@ -163,7 +163,7 @@ class Matcher:
             return db.execute("SELECT switch_id, name, mgmt_addresses "
                               "FROM infra_switches ORDER BY first_seen, switch_id").fetchall()
         out: dict[str, str] = {}
-        for sid, name, addrs in await self._infra._run(go):
+        for sid, name, addrs in await self._infra.read(go):
             if matches.get(sid) is None:
                 hit = self.propose_switch(sid, name, json.loads(addrs))
                 if hit:
@@ -182,7 +182,7 @@ class Matcher:
         return [{"switch_id": r[0], "name": r[1], "mgmt_addresses": json.loads(r[2]),
                  "vendor": r[3], "platform": r[4], "first_seen": r[5], "last_seen": r[6],
                  "proposed_monitor": proposed.get(r[0])}
-                for r in await self._infra._run(go) if matches.get(r[0]) is None]
+                for r in await self._infra.read(go) if matches.get(r[0]) is None]
 
     async def link_switch(self, sid: str, slug: str, actor: str, remote: str = "") -> None:
         """An admin links a queued switch to a configured monitor. Audited."""
@@ -199,7 +199,7 @@ class Matcher:
             cur = db.execute("UPDATE infra_switches SET matched_monitor=? WHERE switch_id=?",
                              (slug, sid))
             return bool(cur.rowcount == 1)
-        if not await self._infra._run(go):
+        if not await self._infra.write(go):
             await self._audit("infra_switch_link_failed", actor, remote, sid, slug,
                               "unknown switch")
             raise InfraError("unknown switch")
@@ -256,7 +256,7 @@ class Matcher:
                 "SELECT s.matched_monitor, s.mgmt_addresses, p.if_index, p.unifi_index "
                 "FROM infra_ports p JOIN infra_switches s USING (switch_id) "
                 "WHERE p.switch_id=? AND p.port_key=?", (sid, key)).fetchone()
-        row = await self._infra._run(go)
+        row = await self._infra.read(go)
         if row is None:
             return []
         return self.match_port(sid, matches.get(sid), json.loads(row[1]), key, row[2], row[3])
@@ -298,7 +298,7 @@ class Matcher:
                 f"FROM port_properties WHERE source != ? AND name IN ({marks})) WHERE rn <= 2",
                 (DEVICE_SOURCE, *TRACKED)).fetchall()
             return ports, props, labels, last_two, device
-        ports, props, labels, last_two, device = await self._infra._run(go)
+        ports, props, labels, last_two, device = await self._infra.read(go)
         fresh: dict[tuple[str, str], dict[str, Any]] = {}
         for sid, key, name, value, verified in device:
             if clock - verified <= DEVICE_MAX_AGE_S:

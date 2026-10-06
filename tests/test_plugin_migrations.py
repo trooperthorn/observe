@@ -13,8 +13,9 @@ from observe.alerts import Alerter
 from observe.plugins import (LoadedPlugins, Migration, NavEntry, PluginBase, PluginError,
                                PluginPage, load_plugins)
 from observe.scheduler import Scheduler
-from observe.store import (MIGRATIONS, PluginSchemaTooNewError, SchemaTooNewError, Store,
-                             migrate_plugins)
+from observe.storage.schema import (MIGRATIONS, PluginSchemaTooNewError, SchemaTooNewError,
+                                    migrate_plugins)
+from observe.store import Store
 from observe.web import create_app
 
 from .conftest import make_config

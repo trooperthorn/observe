@@ -271,6 +271,9 @@ Read connections: opened with `file:/data/observe.db?mode=ro` and `uri=True`, th
 
 ### 2.11 Locks that remain
 
+Implementation status (slice r1): the `Storage` protocol, the SQLite writer and read pool, the pragmas above, the `change_seq` table (migration 17) and the ban test exist. The `rollup` operation of the protocol is a no-op until the rollup tables of slice O-2 exist, the PostgreSQL backend and the `storage.backend` config key are a later slice, and units of work still carry SQLite-flavoured SQL with `?` placeholders that the PostgreSQL backend will adapt.
+
+
 | Lock | Why it stays |
 |---|---|
 | SQLite's own WAL write lock | held only by the writer thread; nothing else writes |
@@ -279,7 +282,7 @@ Read connections: opened with `file:/data/observe.db?mode=ro` and `uri=True`, th
 | Control queue enqueue limits | enforced inside one writer unit, so no extra lock |
 | In-memory caches (series id LRU, change_seq mirror, response cache) | touched only by the writer thread (LRU, seq) or guarded by a `threading.Lock` held for microseconds (response cache) |
 
-`store._lock` and `Store._exec` are removed. `Store` keeps its public method names as thin wrappers during the transition so plugins move at their own pace; a test fails the build if new code touches `store._db` or `store._lock`.
+`store._lock`, `store._db`, `Store._run` and `Store._exec` are removed (slice r1). `Store` keeps its public method names as thin wrappers that build units for `store.storage`, and plugins use `store.storage.write`, `read`, `write_sync` and `read_sync`; `tests/test_storage_ban.py` fails the build if code under `observe/` or `plugins/` imports a driver, opens a connection or touches the removed names. The read deadline in section 2.10 is implemented as a `StorageBusy` error when no connection is free within 2 s and a `StorageTimeout` when a read passes 2 s; mapping them to 503 belongs to the `/api/v2` slice.
 
 ---
 
@@ -767,7 +770,7 @@ Each slice is one agent session where possible, ends with green tests and a shor
 | Slice | Content | Tests |
 |---|---|---|
 | O-0 | Merge or rebase onto `staged/hotfix-perf` and `staged/unifi-ha`; record the bench baseline from the review scripts on the merged tree | Full suite; review `bench.py` rerun saved as baseline |
-| O-1 | `Writer` (single DB thread, queue, units), read pool, pragmas, `change_seq`; `Store` methods delegate to it; ban `_db`/`_lock` outside the store with a test | Concurrency test (100 concurrent writes and reads, no "database is locked"); read connection refuses writes; pragma values asserted; DNS resolution not delayed while a 2 s write unit runs |
+| O-1 (done in slice r1, as the `Storage` protocol of section 12 with the SQLite backend in `observe/storage`) | `Writer` (single DB thread, queue, units), read pool, pragmas, `change_seq`; `Store` methods delegate to it; ban `_db`/`_lock` outside the storage layer with a test | Concurrency test (100 concurrent writes and reads, no "database is locked"); read connection refuses writes; pragma values asserted; DNS resolution not delayed while a 2 s write unit runs |
 | O-2 | `resources`, `scopes`, `series`, `samples`, `latest`, rollups; normalizer; legacy ingest adapter with the section 3.2 mapping; dual write | Golden mapping tests per collector; rollup correctness (avg/min/max/last vs raw for random data); replay idempotency; ingest timing on the review DB (target under 1.5 ms p50 x86) |
 | O-3 | `host_state`, `monitor_state`, pushed-host check and host views read summaries; results into series | Pushed-host poll under 1 ms on the 30-day DB; host grade equality old vs new view on fixtures |
 | O-4 | Backfill job, verification, cut-over, legacy rename; size measurement | Resumable after kill at random chunk; verification catches a deliberately corrupted bucket; measured size before and after on the review's 30-day DB recorded |

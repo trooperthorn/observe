@@ -69,8 +69,41 @@ dashboard basic auth, because agents authenticate with their own key.
 
 ## Storage
 
+### Storage interface
+
+All database access goes through the `Storage` protocol in `observe/storage/base.py`
+(slice r1, design O-1 and section 12 of `docs/DATA-API-DESIGN.md`). `Store` holds one
+(`store.storage`) and its methods only build units of work for it. A write unit is a callable that
+receives the transaction connection; `await storage.write(unit, touches=(...))` runs it on the
+backend's single writer inside one `BEGIN IMMEDIATE ... COMMIT`, in submission order, and rolls
+the whole unit back when it raises. A read unit (`await storage.read(unit)`) runs on a read-only
+connection in one snapshot. The blocking forms `write_sync` and `read_sync` serve code that
+already runs on a worker thread; called from inside a running write unit they join it. A
+constraint failure surfaces as `IntegrityConflict`, and callers never import a driver
+(`DB_ERRORS` names every error a unit can meet). The protocol also carries the change counters
+(`change_seq`, `change_seqs`), the rollup and retention operations (`rollup`,
+`apply_retention`) and plugin DDL (`apply_plugin_migrations`).
+
+The SQLite backend (`observe/storage/sqlite.py`) has one writer thread
+(`ThreadPoolExecutor(max_workers=1)`, so the default pool that `getaddrinfo` uses never waits for the
+database) and a pool of three connections opened with a `mode=ro` URI and `query_only=ON`. A read
+that finds the pool empty for 2 seconds raises `StorageBusy`, and a progress handler interrupts a
+read that runs past 2 seconds (`StorageTimeout`), so a long read cannot hold back WAL
+checkpoints. The writer uses WAL, `synchronous=NORMAL`, `foreign_keys=ON` (now enforced),
+`busy_timeout=5000`, a 16 MB cache, in-memory temp files, a 64 MB mmap, `wal_autocheckpoint=1000`
+and a 64 MB journal size limit; readers use an 8 MB cache each. An in-memory database (tests
+only) runs its reads on the writer connection. Migration 17 adds the `change_seq` table
+(`domain`, `seq`); a unit names the domains it changed in `touches` and the counter is bumped in the
+same transaction and mirrored in memory after the commit. The domains are `metrics`, `hosts`,
+`monitors`, `events`, `map`, `ports`, `unifi`, `ha`, `audit` and `admin`. `store._db`,
+`store._lock`, `Store._run` and `Store._exec` no longer exist, and `tests/test_storage_ban.py`
+fails the build when code under `observe/` or `plugins/` imports a driver, opens a connection
+or reaches for them. The contract tests in `tests/test_storage.py` run against every backend;
+the PostgreSQL cases run only when `OBSERVE_TEST_PG_DSN` is set. The PostgreSQL backend itself
+is a later slice, and `rollup` does nothing until the sample rollup tables arrive.
+
 Pushed data lives in the existing SQLite database, behind a versioned schema.
-A `schema_version` table records the applied version. At startup the store
+A `schema_version` table records the applied version. At startup the storage layer
 applies each missing migration in order, one transaction per step, and rolls a
 failed step back. Every step is additive and guarded with `IF NOT EXISTS`, so
 rerunning one changes nothing. A database created before versioning existed
@@ -79,8 +112,8 @@ rows. A database with a newer version than the code supports raises
 `SchemaTooNewError` and is left untouched.
 
 Plugins keep their own version sequence. `plugin_schema` holds one row per plugin
-with the highest migration applied. After the core steps, `Store` runs the
-migrations of each listed plugin (`migrate_plugins`), one transaction per step,
+with the highest migration applied. After the core steps, the storage layer runs the
+migrations of each listed plugin (`migrate_plugins` in `observe/storage/schema.py`), one transaction per step,
 rolling a failed step back. A plugin whose recorded version is newer than the
 migrations in its code raises `PluginSchemaTooNewError` (a `SchemaTooNewError`),
 and every plugin is checked before any is changed. A plugin that is not listed
@@ -102,7 +135,7 @@ infrastructure tables (see "Infrastructure map core"). Version 9 adds the
 the `allowlist_rev`, `allowlist_saved_at` and `reissued_at` columns of `enrolments` and the `host_tasks` table (see "Host
 settings"). Version 13 adds `ui_layouts` (see "Dashboard layout"). Version 14 adds the `guard_step`, `guard_reason` and
 `guard_at` columns of `enrolments` and the `app_settings` table (see "Host enrolment"). Version 15 adds the
-`host_samples_host_ts` index on `host_samples (host, ts)`. A migration step may
+`host_samples_host_ts` index on `host_samples (host, ts)`. Version 17 adds `change_seq`. A migration step may
 be a function as well as a statement, so an `ALTER TABLE` can check first and
 stay safe to run again. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.

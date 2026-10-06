@@ -17,12 +17,12 @@ a duplicate instead of being stored again.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 from dataclasses import dataclass
 from typing import Literal
 
 from observe.plugins import Migration
+from observe.storage import Conn
 from observe.store import Store
 
 from .derive import Footprint, footprint, recorded_by_for, retract_rows
@@ -85,60 +85,57 @@ class Outcome:
     retracted: Footprint | None = None  # what a replaced revision's retraction removed
 
 
-def _store_sync(store: Store, r: NewReport) -> Outcome:
+def _store(db: Conn, r: NewReport) -> Outcome:
     digest = hashlib.sha256(r.body).hexdigest()
-    with store._lock, store._db:
-        row = store._db.execute(
-            "SELECT revision, key_prefix, body FROM field_reports WHERE source=? AND report_id=?",
-            (r.source, r.report_id)).fetchone()
-        values = (r.revision, r.taken_at_ms, r.reported_taken_at_ms, int(r.clock_corrected),
-                  r.tester_serial, r.status, r.site, r.port_id, digest, r.body, r.key_prefix)
-        if row is None:
-            store._db.execute(
-                "INSERT INTO field_reports (revision, taken_at_ms, reported_taken_at_ms, "
-                "clock_corrected, tester_serial, status, site, port_id, body_sha256, body, "
-                "key_prefix, source, report_id, received_at, updated_at, derive_status) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')",
-                (*values, r.source, r.report_id, r.received_at, r.received_at))
-            return Outcome("accepted", r.revision)
-        stored = int(row[0])
-        if r.revision > stored:
-            # The earlier revision's derived rows go in the same transaction as its replacement,
-            # so live state never mixes two revisions and equals what a rebuild would produce.
-            fp = footprint(row[2])
-            retract_rows(store._db, r.report_id, recorded_by_for(row[1], r.source), fp)
-            store._db.execute(
-                "UPDATE field_reports SET revision=?, taken_at_ms=?, reported_taken_at_ms=?, "
-                "clock_corrected=?, tester_serial=?, status=?, site=?, port_id=?, "
-                "body_sha256=?, body=?, key_prefix=?, body_pruned_at=NULL, updated_at=?, "
-                "derive_status='pending', "
-                "revisions_seen=revisions_seen+1 WHERE source=? AND report_id=?",
-                (*values, r.received_at, r.source, r.report_id))
-            return Outcome("replaced", r.revision, fp)
-        return Outcome("duplicate" if r.revision == stored else "ignored", stored)
+    row = db.execute(
+        "SELECT revision, key_prefix, body FROM field_reports WHERE source=? AND report_id=?",
+        (r.source, r.report_id)).fetchone()
+    values = (r.revision, r.taken_at_ms, r.reported_taken_at_ms, int(r.clock_corrected),
+              r.tester_serial, r.status, r.site, r.port_id, digest, r.body, r.key_prefix)
+    if row is None:
+        db.execute(
+            "INSERT INTO field_reports (revision, taken_at_ms, reported_taken_at_ms, "
+            "clock_corrected, tester_serial, status, site, port_id, body_sha256, body, "
+            "key_prefix, source, report_id, received_at, updated_at, derive_status) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')",
+            (*values, r.source, r.report_id, r.received_at, r.received_at))
+        return Outcome("accepted", r.revision)
+    stored = int(row[0])
+    if r.revision > stored:
+        # The earlier revision's derived rows go in the same transaction as its replacement,
+        # so live state never mixes two revisions and equals what a rebuild would produce.
+        fp = footprint(row[2])
+        retract_rows(db, r.report_id, recorded_by_for(row[1], r.source), fp)
+        db.execute(
+            "UPDATE field_reports SET revision=?, taken_at_ms=?, reported_taken_at_ms=?, "
+            "clock_corrected=?, tester_serial=?, status=?, site=?, port_id=?, "
+            "body_sha256=?, body=?, key_prefix=?, body_pruned_at=NULL, updated_at=?, "
+            "derive_status='pending', "
+            "revisions_seen=revisions_seen+1 WHERE source=? AND report_id=?",
+            (*values, r.received_at, r.source, r.report_id))
+        return Outcome("replaced", r.revision, fp)
+    return Outcome("duplicate" if r.revision == stored else "ignored", stored)
 
 
-def _mark_sync(store: Store, source: str, report_id: str, revision: int, status: str) -> None:
-    with store._lock, store._db:
-        store._db.execute(
-            "UPDATE field_reports SET derive_status=? WHERE source=? AND report_id=? "
-            "AND revision=?", (status, source, report_id, revision))
+def _mark(db: Conn, source: str, report_id: str, revision: int, status: str) -> None:
+    db.execute(
+        "UPDATE field_reports SET derive_status=? WHERE source=? AND report_id=? "
+        "AND revision=?", (status, source, report_id, revision))
 
 
 async def mark_derive_status(store: Store, source: str, report_id: str, revision: int,
                              status: str) -> None:
     """Record how deriving a stored revision went; a newer revision is never touched."""
-    await asyncio.to_thread(_mark_sync, store, source, report_id, revision, status)
+    await store.storage.write(lambda db: _mark(db, source, report_id, revision, status))
 
 
 async def store_report(store: Store, report: NewReport) -> Outcome:
-    return await asyncio.to_thread(_store_sync, store, report)
+    return await store.storage.write(lambda db: _store(db, report))
 
 
 async def prune_evidence(store: Store, now: float, retention_days: int) -> int:
     """Drop bodies not updated for retention_days. Summary rows stay. Returns bodies dropped."""
     cutoff = now - retention_days * 86400
-    return await asyncio.to_thread(
-        store._delete,
+    return await store.storage.write(lambda db: db.execute(
         "UPDATE field_reports SET body=NULL, body_pruned_at=? "
-        "WHERE body IS NOT NULL AND updated_at < ?", (now, cutoff))
+        "WHERE body IS NOT NULL AND updated_at < ?", (now, cutoff)).rowcount)

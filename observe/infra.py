@@ -18,7 +18,6 @@ port that exists, and nothing here creates or changes a monitor.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 import re
@@ -118,12 +117,13 @@ class InfraService:
     def __init__(self, store: Store) -> None:
         self._store = store
 
-    def _tx(self, fn: Callable[[Any], Any]) -> Any:
-        with self._store._lock, self._store._db:
-            return fn(self._store._db)
+    async def write(self, fn: Callable[[Any], Any]) -> Any:
+        """Run `fn(db)` as one write unit on the storage writer."""
+        return await self._store.storage.write(fn, touches=("map",))
 
-    async def _run(self, fn: Callable[[Any], Any]) -> Any:
-        return await asyncio.to_thread(self._tx, fn)
+    async def read(self, fn: Callable[[Any], Any]) -> Any:
+        """Run `fn(db)` on a read-only pooled connection."""
+        return await self._store.storage.read(fn)
 
     # Entities ---------------------------------------------------------------------------
 
@@ -149,7 +149,7 @@ class InfraService:
                 "platform=CASE WHEN excluded.platform != '' THEN excluded.platform ELSE platform END, "
                 "last_seen=MAX(last_seen, excluded.last_seen)",
                 (sid, name, json.dumps(addrs), vendor, platform, ts, ts))
-        await self._run(go)
+        await self.write(go)
         return sid
 
     async def upsert_port(self, sid: str, port: str, *, raw_port_id: str = "",
@@ -179,17 +179,17 @@ class InfraService:
                 "role=CASE WHEN excluded.role != 'unknown' THEN excluded.role ELSE role END, "
                 "last_seen=MAX(last_seen, excluded.last_seen)",
                 (sid, key, raw, if_index, unifi_index, role, ts, ts))
-        await self._run(go)
+        await self.write(go)
         return key
 
     async def switch_exists(self, sid: str) -> bool:
         sid = _norm_switch(sid)
-        return bool(await self._run(lambda db: db.execute(
+        return bool(await self.read(lambda db: db.execute(
             "SELECT 1 FROM infra_switches WHERE switch_id=?", (sid,)).fetchone()))
 
     async def port_exists(self, sid: str, port: str) -> bool:
         sid, key = _norm_switch(sid), _key(port)
-        return bool(await self._run(lambda db: db.execute(
+        return bool(await self.read(lambda db: db.execute(
             "SELECT 1 FROM infra_ports WHERE switch_id=? AND port_key=?", (sid, key)).fetchone()))
 
     async def upsert_jack(self, jack_key: str, *, room: str = "", site: str = "",
@@ -225,7 +225,7 @@ class InfraService:
                 "THEN COALESCE(excluded.port_key, port_key) ELSE port_key END, "
                 "last_seen=MAX(last_seen, excluded.last_seen)",
                 (jack, room, site, sid, key, ts, ts))
-        await self._run(go)
+        await self.write(go)
         return jack
 
     async def upsert_endpoint(self, kind: str, ref: str, *, mac: str = "", address: str = "",
@@ -248,7 +248,7 @@ class InfraService:
                 "last_seen=MAX(last_seen, excluded.last_seen)", (kind, ref, mac, address, ts, ts))
             return int(db.execute("SELECT id FROM infra_endpoints WHERE kind=? AND ref=?",
                                   (kind, ref)).fetchone()[0])
-        return int(await self._run(go))
+        return int(await self.write(go))
 
     @staticmethod
     def port_ref(sid: str, port: str) -> tuple[str, str]:
@@ -310,7 +310,7 @@ class InfraService:
             return int(db.execute(
                 "SELECT id FROM infra_links WHERE a_kind=? AND a_ref=? AND b_kind=? AND b_ref=? "
                 "AND source=?", (*ends[0], *ends[1], source)).fetchone()[0])
-        return int(await self._run(go))
+        return int(await self.write(go))
 
     async def close_link(self, end_a: tuple[str, str], end_b: tuple[str, str], *, source: str,
                          now: float | None = None) -> bool:
@@ -325,7 +325,7 @@ class InfraService:
                 "UPDATE infra_links SET closed_at=? WHERE a_kind=? AND a_ref=? AND b_kind=? "
                 "AND b_ref=? AND source=? AND closed_at IS NULL", (ts, *ends[0], *ends[1], source))
             return bool(cur.rowcount)
-        return bool(await self._run(go))
+        return bool(await self.write(go))
 
     @staticmethod
     def _close_contradicted(db: Any, ends: list[tuple[str, str]], source: str,
@@ -410,7 +410,7 @@ class InfraService:
                  seen))
             return True
 
-        added = bool(await self._run(go))
+        added = bool(await self.write(go))
         if custom:
             await self._store.write_audit(
                 "port_property_custom", actor=recorded_by,
@@ -427,7 +427,7 @@ class InfraService:
                 "recorded_by, last_verified FROM port_properties WHERE id IN ("
                 + current_ids_sql("WHERE switch_id=? AND port_key=?") + ") ORDER BY name",
                 (sid, key)).fetchall()
-        return {r[0]: self._row(r) for r in await self._run(go)}
+        return {r[0]: self._row(r) for r in await self.read(go)}
 
     async def property_history(self, sid: str, port: str, name: str,
                                limit: int = 200) -> list[dict[str, Any]]:
@@ -440,7 +440,7 @@ class InfraService:
                 "SELECT name, value, unit, source, report_id, observed_at, recorded_at, "
                 "recorded_by, last_verified FROM port_properties WHERE switch_id=? AND port_key=? "
                 "AND name=? ORDER BY observed_at DESC, id DESC LIMIT ?", (sid, key, name, limit)).fetchall()
-        return [self._row(r) for r in await self._run(go)]
+        return [self._row(r) for r in await self.read(go)]
 
     @staticmethod
     def _row(r: tuple[Any, ...]) -> dict[str, Any]:

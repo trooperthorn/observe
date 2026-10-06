@@ -8,12 +8,12 @@ a row not seen for `retention_days` is deleted. `unifi_clients` is one row per M
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
 from observe.plugins import Migration
+from observe.storage import Conn
 from observe.store import Store
 
 MIGRATIONS = (
@@ -119,33 +119,27 @@ def parse_device(site_id: str, raw: Any) -> Device | None:
                   _text(raw.get("firmwareVersion")), fu if isinstance(fu, bool) else None, uplink)
 
 
-def _write(store: Store, devices: list[Device], now: float) -> int:
-    with store._lock:
-        db = store._db
-        try:
-            for d in devices:
-                db.execute(
-                    """INSERT INTO unifi_devices (site_id, device_id, mac, name, model, state, ip,
-                       firmware, firmware_updatable, first_seen, last_seen)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                       ON CONFLICT (site_id, device_id) DO UPDATE SET
-                       mac=excluded.mac, name=excluded.name, model=excluded.model,
-                       state=excluded.state, ip=excluded.ip, firmware=excluded.firmware,
-                       firmware_updatable=excluded.firmware_updatable,
-                       last_seen=excluded.last_seen""",
-                    (d.site_id, d.device_id, d.mac, d.name, d.model, d.state, d.ip, d.firmware,
-                     None if d.firmware_updatable is None else int(d.firmware_updatable),
-                     now, now))
-            db.commit()
-        except BaseException:
-            db.rollback()
-            raise
+def _write(db: Conn, devices: list[Device], now: float) -> int:
+    for d in devices:
+        db.execute(
+            """INSERT INTO unifi_devices (site_id, device_id, mac, name, model, state, ip,
+               firmware, firmware_updatable, first_seen, last_seen)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT (site_id, device_id) DO UPDATE SET
+               mac=excluded.mac, name=excluded.name, model=excluded.model,
+               state=excluded.state, ip=excluded.ip, firmware=excluded.firmware,
+               firmware_updatable=excluded.firmware_updatable,
+               last_seen=excluded.last_seen""",
+            (d.site_id, d.device_id, d.mac, d.name, d.model, d.state, d.ip, d.firmware,
+             None if d.firmware_updatable is None else int(d.firmware_updatable),
+             now, now))
     return len(devices)
 
 
 async def save_devices(store: Store, devices: Iterable[Device], now: float) -> int:
     """Upsert the polled devices in one transaction. `first_seen` is kept for a known device."""
-    return await asyncio.to_thread(_write, store, list(devices), now)
+    items = list(devices)
+    return await store.storage.write(lambda db: _write(db, items, now), touches=("unifi",))
 
 
 async def prune_unseen(store: Store, now: float, retention_days: int) -> int:
@@ -153,6 +147,6 @@ async def prune_unseen(store: Store, now: float, retention_days: int) -> int:
     cutoff = now - retention_days * 86400
     total = 0
     for table in ("unifi_devices", "unifi_clients", "unifi_cameras"):
-        total += await asyncio.to_thread(
-            store._delete, f"DELETE FROM {table} WHERE last_seen < ?", (cutoff,))
+        total += await store.storage.write(lambda db, t=table: db.execute(
+            f"DELETE FROM {t} WHERE last_seen < ?", (cutoff,)).rowcount)
     return total

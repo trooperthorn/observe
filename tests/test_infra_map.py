@@ -83,7 +83,7 @@ class World:
         return eid
 
     async def scalar(self, sql: str, *args: Any) -> Any:
-        return await self.infra._run(lambda d: d.execute(sql, args).fetchone()[0])
+        return await self.infra.read(lambda d: d.execute(sql, args).fetchone()[0])
 
 
 @pytest.fixture
@@ -271,7 +271,7 @@ async def test_a_weak_edge_needs_acceptance(w):
     assert pairs(after.as_dict(), "applied") == [("edge-sw", "core-sw")]
     assert after.applied[0]["by"] == "admin"
     assert [p.slug for p in w.cfg.parents(w.cfg.resolve_monitor("edge-sw"))] == ["core-sw"]
-    rows = await w.infra._run(lambda d: d.execute(
+    rows = await w.infra.read(lambda d: d.execute(
         "SELECT kind, actor FROM audit WHERE kind LIKE 'infra_depends%'").fetchall())
     assert rows == [("infra_depends_accepted", "root")]
 
@@ -328,7 +328,7 @@ async def test_a_cycle_is_refused_and_listed(w):
     assert w.cfg.parents(w.cfg.resolve_monitor("core-sw")) == []
     with pytest.raises(InfraError, match="cycle"):
         await w.map.decide("core-sw", "edge-sw", "accepted", "root")
-    kinds = [r[0] for r in await w.infra._run(lambda d: d.execute(
+    kinds = [r[0] for r in await w.infra.read(lambda d: d.execute(
         "SELECT kind FROM audit WHERE kind LIKE 'infra_depends%'").fetchall())]
     assert kinds == ["infra_depends_failed"]
 

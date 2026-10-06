@@ -8,7 +8,9 @@ import time
 
 import pytest
 
-from observe.store import MIGRATIONS, SCHEMA_VERSION, SchemaTooNewError, Store, migrate
+from observe.storage.schema import MIGRATIONS, SCHEMA_VERSION, SchemaTooNewError, migrate
+from observe.store import Store
+from .dbq import run_sql
 
 NEW_TABLES = {"schema_version", "hosts", "host_samples", "host_sources", "host_events",
               "ingest_keys", "users", "sessions", "audit"}
@@ -118,37 +120,37 @@ def test_prune_applies_retention(tmp_path):
     now = time.time()
     old, recent, very_old, audit_old = now - 40 * DAY, now - DAY, now - 400 * DAY, now - 100 * DAY
     for ts in (old, recent):
-        store._exec("INSERT INTO host_samples (ts, host, source, metric) VALUES (?,?,?,?)",
+        run_sql(store, "INSERT INTO host_samples (ts, host, source, metric) VALUES (?,?,?,?)",
                     (ts, "h", "cpu", "temp"))
     for ts in (very_old, old):
-        store._exec("INSERT INTO host_events (host, ts, kind, severity, source, title, dedup_key) "
+        run_sql(store, "INSERT INTO host_events (host, ts, kind, severity, source, title, dedup_key) "
                     "VALUES ('h', ?, 'boot', 'info', 'agent', 't', ?)", (ts, str(ts)))
     for ts in (audit_old, recent):
-        store._exec("INSERT INTO audit (ts, actor, kind) VALUES (?, 'admin', 'login')", (ts,))
-    store._exec("INSERT INTO users (username, hash, created) VALUES ('u', 'x', ?)", (now,))
+        run_sql(store, "INSERT INTO audit (ts, actor, kind) VALUES (?, 'admin', 'login')", (ts,))
+    run_sql(store, "INSERT INTO users (username, hash, created) VALUES ('u', 'x', ?)", (now,))
     for sid, exp in (("dead", now - 10), ("live", now + 3600)):
-        store._exec("INSERT INTO sessions VALUES (?, 1, 'c', ?, ?, ?, 0)", (sid, now, exp, now))
-    store._exec("INSERT INTO results VALUES ('m', ?, 'ok', 1, 1, '')", (old,))
+        run_sql(store, "INSERT INTO sessions VALUES (?, 1, 'c', ?, ?, ?, 0)", (sid, now, exp, now))
+    run_sql(store, "INSERT INTO results VALUES ('m', ?, 'ok', 1, 1, '')", (old,))
 
     removed = asyncio.run(store.prune(30, audit_retention_days=60))
 
     def count(table: str) -> int:
-        return store._exec(f"SELECT COUNT(*) FROM {table}")[0][0]
+        return run_sql(store, f"SELECT COUNT(*) FROM {table}")[0][0]
 
     assert removed == 1
     assert count("host_samples") == 1  # the 40 day old sample is gone at 30 days
-    assert [r[0] for r in store._exec("SELECT ts FROM host_events")] == [old]  # a year minimum
+    assert [r[0] for r in run_sql(store, "SELECT ts FROM host_events")] == [old]  # a year minimum
     assert count("audit") == 1  # audit uses its own, shorter window here
-    assert [r[0] for r in store._exec("SELECT id_hash FROM sessions")] == ["live"]
+    assert [r[0] for r in run_sql(store, "SELECT id_hash FROM sessions")] == ["live"]
     store.close()
 
 
 def test_audit_retention_is_independent_of_sample_retention(tmp_path):
     store = Store(str(tmp_path / "w.db"))
     now = time.time()
-    store._exec("INSERT INTO audit (ts, actor, kind) VALUES (?, 'a', 'login')", (now - 100 * DAY,))
+    run_sql(store, "INSERT INTO audit (ts, actor, kind) VALUES (?, 'a', 'login')", (now - 100 * DAY,))
     asyncio.run(store.prune(7))  # default audit retention is a year
-    assert store._exec("SELECT COUNT(*) FROM audit")[0][0] == 1
+    assert run_sql(store, "SELECT COUNT(*) FROM audit")[0][0] == 1
     store.close()
 
 
@@ -157,7 +159,7 @@ def test_history_over_the_row_limit_returns_the_newest_rows_in_time_order(tmp_pa
     now = time.time()
     for i in range(10):
         db_ts = now - (9 - i) * 60
-        store._exec("INSERT INTO results VALUES ('a', ?, 'ok', ?, 1.0, '')", (db_ts, float(i)))
+        run_sql(store, "INSERT INTO results VALUES ('a', ?, 'ok', ?, 1.0, '')", (db_ts, float(i)))
     hist = asyncio.run(store.history("a", 24 * 30, limit=4))
     store.close()
     assert [h["value"] for h in hist] == [6.0, 7.0, 8.0, 9.0]

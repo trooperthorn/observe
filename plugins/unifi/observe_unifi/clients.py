@@ -22,12 +22,12 @@ so none is read.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
+from observe.storage import Conn
 from observe.store import Store
 
 MAX_ROWS = 5000  # the most clients or cameras a page request returns
@@ -186,27 +186,20 @@ _OFF = """INSERT INTO unifi_clients (site_id, client_id, mac, name, connected, f
   last_seen=CASE WHEN ? IS NULL THEN last_seen ELSE MAX(last_seen, excluded.last_seen) END"""
 
 
-def _write_clients(store: Store, site_id: str, live: list[Client], off: list[Client],
+def _write_clients(db: Conn, site_id: str, live: list[Client], off: list[Client],
                    now: float, classic_ok: bool = True) -> int:
-    with store._lock:
-        db = store._db
-        try:
-            db.executemany(_up_sql(not classic_ok), [
-                (c.site_id, c.client_id, c.mac, c.name, c.ip, c.kind, c.uplink_device_id,
-                 c.connected_at, c.ssid, c.uplink_mac, c.sw_port, int(c.enriched),
-                 now if c.enriched else None, now, now)
-                for c in live])
-            # Anything still marked connected that this poll did not write has left.
-            db.execute("UPDATE unifi_clients SET connected=0 WHERE site_id=? AND connected=1 "
-                       "AND last_seen < ?", (site_id, now))
-            db.executemany(_OFF, [
-                (c.site_id, c.client_id, c.mac, c.name,
-                 c.last_seen if c.last_seen is not None else now,
-                 c.last_seen if c.last_seen is not None else now, c.last_seen) for c in off])
-            db.commit()
-        except BaseException:
-            db.rollback()
-            raise
+    db.executemany(_up_sql(not classic_ok), [
+        (c.site_id, c.client_id, c.mac, c.name, c.ip, c.kind, c.uplink_device_id,
+         c.connected_at, c.ssid, c.uplink_mac, c.sw_port, int(c.enriched),
+         now if c.enriched else None, now, now)
+        for c in live])
+    # Anything still marked connected that this poll did not write has left.
+    db.execute("UPDATE unifi_clients SET connected=0 WHERE site_id=? AND connected=1 "
+               "AND last_seen < ?", (site_id, now))
+    db.executemany(_OFF, [
+        (c.site_id, c.client_id, c.mac, c.name,
+         c.last_seen if c.last_seen is not None else now,
+         c.last_seen if c.last_seen is not None else now, c.last_seen) for c in off])
     return len(live) + len(off)
 
 
@@ -214,18 +207,16 @@ async def save_clients(store: Store, site_id: str, live: list[Client], off: list
                        now: float, classic_ok: bool = True) -> int:
     """Upsert one poll in a single transaction. `first_seen` is kept for a known client. With
     `classic_ok` false (the classic read failed) the stored classic detail is kept."""
-    return await asyncio.to_thread(_write_clients, store, site_id, live, off, now, classic_ok)
+    return await store.storage.write(
+        lambda db: _write_clients(db, site_id, live, off, now, classic_ok), touches=("unifi",))
 
 
 async def device_index(store: Store, site_id: str) -> dict[str, str]:
     """MAC to device id for the devices of a site, to resolve a classic uplink MAC."""
-    def go() -> dict[str, str]:
-        with store._lock:
-            rows = store._db.execute(
-                "SELECT mac, device_id FROM unifi_devices WHERE site_id=? AND mac != ''",
-                (site_id,)).fetchall()
-        return {norm_mac(m): d for m, d in rows if norm_mac(m)}
-    return await asyncio.to_thread(go)
+    rows = await store.storage.read(lambda db: db.execute(
+        "SELECT mac, device_id FROM unifi_devices WHERE site_id=? AND mac != ''",
+        (site_id,)).fetchall())
+    return {norm_mac(m): d for m, d in rows if norm_mac(m)}
 
 
 @dataclass(frozen=True)
@@ -250,28 +241,23 @@ def parse_camera(raw: Any) -> Camera | None:
                   rec if isinstance(rec, bool) else None)
 
 
-def _write_cameras(store: Store, cams: list[Camera], now: float) -> int:
-    with store._lock:
-        db = store._db
-        try:
-            db.executemany(
-                """INSERT INTO unifi_cameras (camera_id, mac, name, model, state, connected,
-                   recording, first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?,?)
-                   ON CONFLICT (camera_id) DO UPDATE SET mac=excluded.mac, name=excluded.name,
-                   model=excluded.model, state=excluded.state, connected=excluded.connected,
-                   recording=excluded.recording, last_seen=excluded.last_seen""",
-                [(c.camera_id, c.mac, c.name, c.model, c.state,
-                  None if c.connected is None else int(c.connected),
-                  None if c.recording is None else int(c.recording), now, now) for c in cams])
-            db.commit()
-        except BaseException:
-            db.rollback()
-            raise
+def _write_cameras(db: Conn, cams: list[Camera], now: float) -> int:
+    db.executemany(
+        """INSERT INTO unifi_cameras (camera_id, mac, name, model, state, connected,
+           recording, first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?,?)
+           ON CONFLICT (camera_id) DO UPDATE SET mac=excluded.mac, name=excluded.name,
+           model=excluded.model, state=excluded.state, connected=excluded.connected,
+           recording=excluded.recording, last_seen=excluded.last_seen""",
+        [(c.camera_id, c.mac, c.name, c.model, c.state,
+          None if c.connected is None else int(c.connected),
+          None if c.recording is None else int(c.recording), now, now) for c in cams])
     return len(cams)
 
 
 async def save_cameras(store: Store, cams: Iterable[Camera], now: float) -> int:
-    return await asyncio.to_thread(_write_cameras, store, list(cams), now)
+    items = list(cams)
+    return await store.storage.write(lambda db: _write_cameras(db, items, now),
+                                     touches=("unifi",))
 
 
 # ---- reads for the pages ----
@@ -279,10 +265,9 @@ async def save_cameras(store: Store, cams: Iterable[Camera], now: float) -> int:
 def read_devices(store: Store) -> list[dict[str, Any]]:
     keys = ("site_id", "device_id", "mac", "name", "model", "state", "ip", "firmware",
             "firmware_updatable", "last_seen")
-    with store._lock:
-        rows = store._db.execute(
-            f"SELECT {', '.join(keys)} FROM unifi_devices "
-            "ORDER BY name COLLATE NOCASE, mac LIMIT ?", (MAX_ROWS,)).fetchall()
+    rows = store.storage.read_sync(lambda db: db.execute(
+        f"SELECT {', '.join(keys)} FROM unifi_devices "
+        "ORDER BY name COLLATE NOCASE, mac LIMIT ?", (MAX_ROWS,)).fetchall())
     out = [dict(zip(keys, r)) for r in rows]
     for d in out:
         fu = d["firmware_updatable"]
@@ -301,8 +286,7 @@ def read_clients(store: Store, now: float | None = None,
 
     With `now` and `stale_after`, a connected row whose last_seen is older than that is flagged
     `stale`, so a stopped collector is not shown as current."""
-    with store._lock:
-        db = store._db
+    def query(db: Conn) -> tuple[int, list[Any]]:
         total = db.execute("SELECT COUNT(*) FROM unifi_clients").fetchone()[0]
         rows = db.execute(
             """SELECT c.client_id, c.mac, c.name, c.ip, c.kind, c.connected, c.connected_at,
@@ -313,6 +297,9 @@ def read_clients(store: Store, now: float | None = None,
                       OR (c.uplink_device_id = '' AND c.uplink_mac != '' AND d.mac = c.uplink_mac))
                ORDER BY c.connected DESC, c.name COLLATE NOCASE, c.mac LIMIT ?""",
             (MAX_ROWS,)).fetchall()
+        return total, rows
+
+    total, rows = store.storage.read_sync(query)
     out = []
     for (cid, mac, name, ip, kind, conn, cat, ssid, port, enr, seen, up_id, up_mac, up_name,
          up_dev_mac, classic_seen) in rows:
@@ -329,10 +316,9 @@ def read_clients(store: Store, now: float | None = None,
 def read_cameras(store: Store, now: float | None = None,
                  stale_after: float | None = None) -> dict[str, Any]:
     keys = ("camera_id", "mac", "name", "model", "state", "connected", "recording", "last_seen")
-    with store._lock:
-        rows = store._db.execute(
-            f"SELECT {', '.join(keys)} FROM unifi_cameras "
-            "ORDER BY name COLLATE NOCASE, camera_id LIMIT ?", (MAX_ROWS,)).fetchall()
+    rows = store.storage.read_sync(lambda db: db.execute(
+        f"SELECT {', '.join(keys)} FROM unifi_cameras "
+        "ORDER BY name COLLATE NOCASE, camera_id LIMIT ?", (MAX_ROWS,)).fetchall())
     cams = []
     for r in rows:
         c = dict(zip(keys, r))

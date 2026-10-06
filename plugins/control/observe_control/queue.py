@@ -16,7 +16,6 @@ Every function that touches the database runs in a worker thread, like the other
 
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 import re
@@ -28,6 +27,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from observe import audit
 from observe.plugins import Migration
+from observe.storage import Conn
 from observe.store import Store
 
 from .signing import sign_command
@@ -110,14 +110,14 @@ def _command_object(row: tuple[Any, ...]) -> dict[str, Any]:
 _COLUMNS = "id, host, action, params, requested_by, issued_at, expires_at, seq"
 
 
-def _expire_sync(store: Store, now: float) -> list[str]:
-    """Mark unanswered expired commands unknown. Returns their ids. Caller holds the lock."""
+def _expire(db: Conn, now: float) -> list[str]:
+    """Mark unanswered expired commands unknown. Returns their ids. Runs inside a write unit."""
     marks = ",".join("?" * len(EXPIRABLE_STATES))
-    ids = [r[0] for r in store._db.execute(
+    ids = [r[0] for r in db.execute(
         f"SELECT id FROM control_commands WHERE state IN ({marks}) AND expires_at <= ?",
         (*EXPIRABLE_STATES, int(now))).fetchall()]
     if ids:
-        store._db.execute(
+        db.execute(
             f"UPDATE control_commands SET state='unknown' WHERE state IN ({marks}) "
             "AND expires_at <= ?", (*EXPIRABLE_STATES, int(now)))
     return ids
@@ -131,10 +131,7 @@ async def _audit_expired(store: Store, ids: list[str]) -> None:
 
 async def expire_commands(store: Store, now: float) -> list[str]:
     """Turn commands that expired without a result into `unknown`, and audit each."""
-    def work() -> list[str]:
-        with store._lock, store._db:
-            return _expire_sync(store, now)
-    ids = await asyncio.to_thread(work)
+    ids = await store.storage.write(lambda db: _expire(db, now))
     await _audit_expired(store, ids)
     return ids
 
@@ -158,40 +155,38 @@ def _check_request(host: str, action: str, params: Any, requested_by: str) -> st
     return text
 
 
-def _enqueue_sync(store: Store, key: Ed25519PrivateKey, limits: Limits, host: str, action: str,
+def _enqueue(db: Conn, key: Ed25519PrivateKey, limits: Limits, host: str, action: str,
                   params_text: str, requested_by: str, now: float) -> tuple[dict[str, Any], str,
                                                                             list[str]]:
     issued = int(now)
-    with store._lock, store._db:
-        expired = _expire_sync(store, now)
-        db = store._db
-        marks = ",".join("?" * len(OPEN_STATES))
-        pending = db.execute(
-            f"SELECT COUNT(*) FROM control_commands WHERE host=? AND action=? "
-            f"AND state IN ({marks})", (host, action, *OPEN_STATES)).fetchone()[0]
-        if pending >= limits.max_pending_per_action:
-            raise QueueError(f"{action} is already pending for this host", 429)
-        hourly = db.execute("SELECT COUNT(*) FROM control_commands WHERE host=? AND issued_at>?",
-                            (host, issued - 3600)).fetchone()[0]
-        if hourly >= limits.max_commands_per_host_per_hour:
-            raise QueueError("too many commands for this host in the last hour", 429)
-        if action == REBOOT:
-            recent = db.execute(
-                "SELECT COUNT(*) FROM control_commands WHERE host=? AND action=? AND issued_at>?",
-                (host, REBOOT, issued - limits.reboot_min_interval_s)).fetchone()[0]
-            if recent:
-                raise QueueError("a reboot was already requested for this host recently", 429)
-        seq = (db.execute("SELECT MAX(seq) FROM control_commands WHERE host=?",
-                          (host,)).fetchone()[0] or 0) + 1
-        command = {"v": 1, "id": str(uuid.uuid4()), "host": host, "action": action,
-                   "params": json.loads(params_text), "requested_by": requested_by,
-                   "issued_at": issued, "expires_at": issued + limits.command_ttl_s, "seq": seq}
-        signature = sign_command(key, command)
-        db.execute(
-            "INSERT INTO control_commands (id, host, action, params, requested_by, issued_at, "
-            "expires_at, seq, state, signature) VALUES (?,?,?,?,?,?,?,?,'requested',?)",
-            (command["id"], host, action, params_text, requested_by, issued,
-             command["expires_at"], seq, signature))
+    expired = _expire(db, now)
+    marks = ",".join("?" * len(OPEN_STATES))
+    pending = db.execute(
+        f"SELECT COUNT(*) FROM control_commands WHERE host=? AND action=? "
+        f"AND state IN ({marks})", (host, action, *OPEN_STATES)).fetchone()[0]
+    if pending >= limits.max_pending_per_action:
+        raise QueueError(f"{action} is already pending for this host", 429)
+    hourly = db.execute("SELECT COUNT(*) FROM control_commands WHERE host=? AND issued_at>?",
+                        (host, issued - 3600)).fetchone()[0]
+    if hourly >= limits.max_commands_per_host_per_hour:
+        raise QueueError("too many commands for this host in the last hour", 429)
+    if action == REBOOT:
+        recent = db.execute(
+            "SELECT COUNT(*) FROM control_commands WHERE host=? AND action=? AND issued_at>?",
+            (host, REBOOT, issued - limits.reboot_min_interval_s)).fetchone()[0]
+        if recent:
+            raise QueueError("a reboot was already requested for this host recently", 429)
+    seq = (db.execute("SELECT MAX(seq) FROM control_commands WHERE host=?",
+                      (host,)).fetchone()[0] or 0) + 1
+    command = {"v": 1, "id": str(uuid.uuid4()), "host": host, "action": action,
+               "params": json.loads(params_text), "requested_by": requested_by,
+               "issued_at": issued, "expires_at": issued + limits.command_ttl_s, "seq": seq}
+    signature = sign_command(key, command)
+    db.execute(
+        "INSERT INTO control_commands (id, host, action, params, requested_by, issued_at, "
+        "expires_at, seq, state, signature) VALUES (?,?,?,?,?,?,?,?,'requested',?)",
+        (command["id"], host, action, params_text, requested_by, issued,
+         command["expires_at"], seq, signature))
     return command, signature, expired
 
 
@@ -205,8 +200,8 @@ async def enqueue_command(store: Store, key: Ed25519PrivateKey, limits: Limits, 
     """
     try:
         params_text = _check_request(host, action, params, requested_by)
-        command, signature, expired = await asyncio.to_thread(
-            _enqueue_sync, store, key, limits, host, action, params_text, requested_by, now)
+        command, signature, expired = await store.storage.write(
+            lambda db: _enqueue(db, key, limits, host, action, params_text, requested_by, now))
     except QueueError as err:
         await audit.record(store, "control_request_refused", actor=requested_by, status=err.status,
                            detail={"host": host, "action": action, "reason": err.reason})
@@ -219,25 +214,24 @@ async def enqueue_command(store: Store, key: Ed25519PrivateKey, limits: Limits, 
     return {"command": command, "signature": signature}
 
 
-def _pull_sync(store: Store, host: str, now: float) -> tuple[list[dict[str, Any]], list[str],
+def _pull(db: Conn, host: str, now: float) -> tuple[list[dict[str, Any]], list[str],
                                                              list[str], list[str]]:
-    with store._lock, store._db:
-        expired = _expire_sync(store, now)
-        marks = ",".join("?" * len(SERVED_STATES))
-        rows = store._db.execute(
-            f"SELECT {_COLUMNS}, signature, state FROM control_commands WHERE host=? "
-            f"AND state IN ({marks}) AND expires_at>? ORDER BY seq",
-            (host, *SERVED_STATES, int(now))).fetchall()
-        fresh = [r[0] for r in rows if r[9] == "requested"]
-        for cid in fresh:
-            store._db.execute("UPDATE control_commands SET state='pulled', pulled_at=? "
-                              "WHERE id=? AND state='requested'", (now, cid))
-        cancel = [r[0] for r in store._db.execute(
-            "SELECT id FROM control_commands WHERE host=? AND state='cancelled' "
-            "AND cancelled_from='scheduled' AND cancelled_at>? AND NOT EXISTS (SELECT 1 FROM "
-            "control_results r WHERE r.command_id=control_commands.id AND r.state='cancelled') "
-            "ORDER BY seq",
-            (host, now - CANCEL_LIST_WINDOW_S)).fetchall()]
+    expired = _expire(db, now)
+    marks = ",".join("?" * len(SERVED_STATES))
+    rows = db.execute(
+        f"SELECT {_COLUMNS}, signature, state FROM control_commands WHERE host=? "
+        f"AND state IN ({marks}) AND expires_at>? ORDER BY seq",
+        (host, *SERVED_STATES, int(now))).fetchall()
+    fresh = [r[0] for r in rows if r[9] == "requested"]
+    for cid in fresh:
+        db.execute("UPDATE control_commands SET state='pulled', pulled_at=? "
+                          "WHERE id=? AND state='requested'", (now, cid))
+    cancel = [r[0] for r in db.execute(
+        "SELECT id FROM control_commands WHERE host=? AND state='cancelled' "
+        "AND cancelled_from='scheduled' AND cancelled_at>? AND NOT EXISTS (SELECT 1 FROM "
+        "control_results r WHERE r.command_id=control_commands.id AND r.state='cancelled') "
+        "ORDER BY seq",
+        (host, now - CANCEL_LIST_WINDOW_S)).fetchall()]
     return ([{"command": _command_object(r[:8]), "signature": r[8]} for r in rows], fresh,
             expired, cancel)
 
@@ -253,7 +247,8 @@ async def pull_commands(store: Store, host: str, key_prefix: str, remote: str,
     Only this host's rows are ever selected. A first delivery is audited (`control_pull`), so a
     5 second poll with an empty queue writes nothing.
     """
-    items, fresh, expired, cancel = await asyncio.to_thread(_pull_sync, store, host, now)
+    items, fresh, expired, cancel = await store.storage.write(
+        lambda db: _pull(db, host, now))
     await _audit_expired(store, expired)
     if fresh:
         await audit.record(store, "control_pull", actor=key_prefix, method="GET",
@@ -292,44 +287,43 @@ def _timing(value: Any, name: str) -> float | None:
     return float(value)
 
 
-def _result_sync(store: Store, host: str, key_prefix: str, command_id: str, state: str,
+def _result(db: Conn, host: str, key_prefix: str, command_id: str, state: str,
                  output: str, started: float | None, finished: float | None,
                  now: float) -> tuple[bool, list[str]]:
-    with store._lock, store._db:
-        expired = _expire_sync(store, now)
-        row = store._db.execute(
-            "SELECT state, action, cancelled_from FROM control_commands WHERE id=? AND host=?",
-            (command_id, host)).fetchone()
-        if row is None:
-            # An unknown id and another host's id look the same, so ids cannot be probed.
-            raise QueueError("no such command for this host", 404)
-        # A reboot cancelled while scheduled: the host acknowledges the cancel, or reports the
-        # truth if the cancel came too late (done or failed). Anything else is refused.
-        after_cancel = row[0] == "cancelled" and row[2] == "scheduled"
-        if state == "cancelled" and not after_cancel:
-            raise QueueError("only a reboot cancelled while scheduled can be reported cancelled", 409)
-        if after_cancel and state not in ("cancelled", "done", "failed"):
-            raise QueueError("the command is already cancelled", 409)
-        if row[0] == "unknown":
-            raise QueueError("the command expired before a result arrived", 409)
-        if row[0] == "requested":
-            raise QueueError("the command has not been pulled by this host", 409)
-        if row[0] not in OPEN_STATES and not after_cancel:
-            raise QueueError(f"the command is already {row[0]}", 409)
-        if state == "scheduled" and row[0] == "scheduled":
-            raise QueueError("the command is already scheduled", 409)
-        if state == "scheduled" and row[1] != REBOOT:
-            raise QueueError("only host.reboot can be scheduled", 422)
-        text, truncated = clean_output(output)
-        duration = finished - started if started is not None and finished is not None else None
-        store._db.execute(
-            "INSERT INTO control_results (command_id, host, state, output, output_truncated, "
-            "started_at, finished_at, duration_s, received_at, key_prefix) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (command_id, host, state, text, int(truncated), started, finished, duration, now,
-             key_prefix))
-        if state != "cancelled":
-            store._db.execute("UPDATE control_commands SET state=? WHERE id=?", (state, command_id))
+    expired = _expire(db, now)
+    row = db.execute(
+        "SELECT state, action, cancelled_from FROM control_commands WHERE id=? AND host=?",
+        (command_id, host)).fetchone()
+    if row is None:
+        # An unknown id and another host's id look the same, so ids cannot be probed.
+        raise QueueError("no such command for this host", 404)
+    # A reboot cancelled while scheduled: the host acknowledges the cancel, or reports the
+    # truth if the cancel came too late (done or failed). Anything else is refused.
+    after_cancel = row[0] == "cancelled" and row[2] == "scheduled"
+    if state == "cancelled" and not after_cancel:
+        raise QueueError("only a reboot cancelled while scheduled can be reported cancelled", 409)
+    if after_cancel and state not in ("cancelled", "done", "failed"):
+        raise QueueError("the command is already cancelled", 409)
+    if row[0] == "unknown":
+        raise QueueError("the command expired before a result arrived", 409)
+    if row[0] == "requested":
+        raise QueueError("the command has not been pulled by this host", 409)
+    if row[0] not in OPEN_STATES and not after_cancel:
+        raise QueueError(f"the command is already {row[0]}", 409)
+    if state == "scheduled" and row[0] == "scheduled":
+        raise QueueError("the command is already scheduled", 409)
+    if state == "scheduled" and row[1] != REBOOT:
+        raise QueueError("only host.reboot can be scheduled", 422)
+    text, truncated = clean_output(output)
+    duration = finished - started if started is not None and finished is not None else None
+    db.execute(
+        "INSERT INTO control_results (command_id, host, state, output, output_truncated, "
+        "started_at, finished_at, duration_s, received_at, key_prefix) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (command_id, host, state, text, int(truncated), started, finished, duration, now,
+         key_prefix))
+    if state != "cancelled":
+        db.execute("UPDATE control_commands SET state=? WHERE id=?", (state, command_id))
     return truncated, expired
 
 
@@ -355,41 +349,35 @@ async def record_result(store: Store, host: str, key_prefix: str, command_id: st
         err.status = 422
         raise
     try:
-        truncated, expired = await asyncio.to_thread(
-            _result_sync, store, host, key_prefix, command_id, state, output, started,
-            finished, now)
+        truncated, expired = await store.storage.write(
+            lambda db: _result(db, host, key_prefix, command_id, state, output, started,
+                               finished, now))
     except QueueError as err:
-        await _audit_expired(store, await asyncio.to_thread(_expired_after, store, now))
+        await _audit_expired(store, await store.storage.write(lambda db: _expire(db, now)))
         raise err
     await _audit_expired(store, expired)
     return {"id": command_id, "state": state, "truncated": truncated}
 
 
-def _expired_after(store: Store, now: float) -> list[str]:
-    with store._lock, store._db:
-        return _expire_sync(store, now)
-
-
-def _list_sync(store: Store, now: float, limit: int,
+def _list(db: Conn, now: float, limit: int,
                host: str | None) -> tuple[list[dict[str, Any]], list[str]]:
-    with store._lock, store._db:
-        expired = _expire_sync(store, now)
-        where, args = ("WHERE host=? ", (host,)) if host else ("", ())
-        rows = store._db.execute(
-            f"SELECT {_COLUMNS}, state, signature FROM control_commands {where}"
-            "ORDER BY issued_at DESC, seq DESC LIMIT ?", (*args, limit)).fetchall()
-        out = []
-        for r in rows:
-            item = _command_object(r[:8])
-            item["state"] = r[8]
-            res = store._db.execute(
-                "SELECT state, output, output_truncated, duration_s, received_at "
-                "FROM control_results WHERE command_id=? ORDER BY id DESC LIMIT 1",
-                (r[0],)).fetchone()
-            item["result"] = None if res is None else {
-                "state": res[0], "output": res[1], "output_truncated": bool(res[2]),
-                "duration_s": res[3], "received_at": res[4]}
-            out.append(item)
+    expired = _expire(db, now)
+    where, args = ("WHERE host=? ", (host,)) if host else ("", ())
+    rows = db.execute(
+        f"SELECT {_COLUMNS}, state, signature FROM control_commands {where}"
+        "ORDER BY issued_at DESC, seq DESC LIMIT ?", (*args, limit)).fetchall()
+    out = []
+    for r in rows:
+        item = _command_object(r[:8])
+        item["state"] = r[8]
+        res = db.execute(
+            "SELECT state, output, output_truncated, duration_s, received_at "
+            "FROM control_results WHERE command_id=? ORDER BY id DESC LIMIT 1",
+            (r[0],)).fetchone()
+        item["result"] = None if res is None else {
+            "state": res[0], "output": res[1], "output_truncated": bool(res[2]),
+            "duration_s": res[3], "received_at": res[4]}
+        out.append(item)
     return out, expired
 
 
@@ -397,30 +385,29 @@ async def list_commands(store: Store, now: float, limit: int = 100,
                         host: str | None = None) -> list[dict[str, Any]]:
     """Recent commands, newest first, with their state and latest result. Expires first.
     `host` limits the list to one host."""
-    items, expired = await asyncio.to_thread(_list_sync, store, now, max(1, min(limit, 500)),
-                                             host)
+    items, expired = await store.storage.write(
+        lambda db: _list(db, now, max(1, min(limit, 500)), host))
     await _audit_expired(store, expired)
     return items
 
 
-def _cancel_sync(store: Store, command_id: str, now: float) -> tuple[str, str, list[str]]:
+def _cancel(db: Conn, command_id: str, now: float) -> tuple[str, str, list[str]]:
     """Returns (host, refusal reason or empty, ids expired). Raises nothing inside the
     transaction, so the expiry it wrote is kept even when the cancel is refused."""
-    with store._lock, store._db:
-        expired = _expire_sync(store, now)
-        row = store._db.execute("SELECT host, action, state FROM control_commands WHERE id=?",
-                                (command_id,)).fetchone()
-        if row is None:
-            return "", "no such command", expired
-        # One guarded UPDATE, so a result that lands at the same moment cannot be overwritten.
-        # Only a reboot can be scheduled, so the state alone decides.
-        changed = store._db.execute(
-            "UPDATE control_commands SET state='cancelled', cancelled_from=state, "
-            "cancelled_at=? WHERE id=? AND state IN ('requested','scheduled')",
-            (now, command_id)).rowcount
-        if not changed:
-            return row[0], (f"the command is {row[2]}, and only a requested or scheduled one "
-                            "can be cancelled"), expired
+    expired = _expire(db, now)
+    row = db.execute("SELECT host, action, state FROM control_commands WHERE id=?",
+                            (command_id,)).fetchone()
+    if row is None:
+        return "", "no such command", expired
+    # One guarded UPDATE, so a result that lands at the same moment cannot be overwritten.
+    # Only a reboot can be scheduled, so the state alone decides.
+    changed = db.execute(
+        "UPDATE control_commands SET state='cancelled', cancelled_from=state, "
+        "cancelled_at=? WHERE id=? AND state IN ('requested','scheduled')",
+        (now, command_id)).rowcount
+    if not changed:
+        return row[0], (f"the command is {row[2]}, and only a requested or scheduled one "
+                        "can be cancelled"), expired
     return row[0], "", expired
 
 
@@ -430,7 +417,8 @@ async def cancel_command(store: Store, command_id: str, requested_by: str,
 
     A command cancelled while scheduled appears in the pull `cancel` list. Audited.
     """
-    host, reason, expired = await asyncio.to_thread(_cancel_sync, store, command_id, now)
+    host, reason, expired = await store.storage.write(
+        lambda db: _cancel(db, command_id, now))
     await _audit_expired(store, expired)
     if reason:
         status = 404 if reason == "no such command" else 409

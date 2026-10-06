@@ -64,7 +64,7 @@ def check_view(view: str) -> None:
 
 
 async def load(store: Store, user_id: int, view: str) -> dict[str, Any]:
-    rows = await store._run("SELECT layout FROM ui_layouts WHERE user_id=? AND view=?",
+    rows = await store.fetch("SELECT layout FROM ui_layouts WHERE user_id=? AND view=?",
                             (user_id, view))
     if not rows:
         return {"view": view, "order": [], "hidden": [], "saved": False}
@@ -78,11 +78,11 @@ async def load(store: Store, user_id: int, view: str) -> dict[str, Any]:
 
 async def save(store: Store, user_id: int, view: str, layout: dict[str, list[str]],
                now: float) -> None:
-    await store._run(
+    await store.execute(
         "INSERT INTO ui_layouts (user_id, view, layout, updated) VALUES (?,?,?,?) "
         "ON CONFLICT(user_id, view) DO UPDATE SET layout=excluded.layout, updated=excluded.updated",
         (user_id, view, json.dumps(layout, sort_keys=True), now))
 
 
 async def reset(store: Store, user_id: int, view: str) -> None:
-    await store._run("DELETE FROM ui_layouts WHERE user_id=? AND view=?", (user_id, view))
+    await store.execute("DELETE FROM ui_layouts WHERE user_id=? AND view=?", (user_id, view))

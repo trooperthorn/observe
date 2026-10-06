@@ -26,8 +26,7 @@ HOSTILE = "<script>alert(1)</script>"
 def env(tmp_path):
     e = Env(tmp_path)
     now = e.clock.now
-    db = e.store._db
-    with e.store._lock, db:
+    def seed(db):
         for host in (HOST, "nas02", HOSTILE):
             db.execute("INSERT INTO hosts (host, first_seen, last_seen) VALUES (?,?,?)",
                        (host, now, now))
@@ -35,6 +34,8 @@ def env(tmp_path):
             db.execute("INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
                        "VALUES (?,?,?,?,?,?,?)",
                        (now, HOST, "thermalctl", "fan_duty", json.dumps({"fan": fan}), 40, "%"))
+
+    e.store.storage.write_sync(seed)
     run(auth.create_user(e.store, e.cfg, "root", PASSWORD, True, now=now))
     run(auth.create_user(e.store, e.cfg, "viewer", PASSWORD, False, now=now))
     yield e

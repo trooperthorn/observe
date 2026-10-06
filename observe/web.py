@@ -1111,7 +1111,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         return body if isinstance(body, dict) else {}
 
     async def enrolment_row(host: str) -> tuple[Any, ...] | None:
-        rows = await store._run(
+        rows = await store.fetch(
             "SELECT platform, agent, control, allowlist, created, created_by, fetched_at, "
             "allowlist_rev FROM enrolments WHERE host=?", (host,))
         return rows[0] if rows else None
@@ -1176,7 +1176,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         now = auth_clock()
         row = await enrolment_row(host)
         reporting = {r["host"]: r for r in await store.host_rows()}.get(host)
-        keys = await store._run(
+        keys = await store.fetch(
             "SELECT COUNT(*) FROM ingest_keys WHERE host=? AND scope IN ('wpi', 'wpc') "
             "AND revoked_at IS NULL", (host,))
         if row is None and reporting is None and host not in pushed and not keys[0][0]:
@@ -1250,7 +1250,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             return await settings_refused(sess, request, "host_allowlist_failed", host, 409,
                                           "the allowlist is unchanged")
         now = auth_clock()
-        saved = await store._run(
+        saved = await store.execute(
             "UPDATE enrolments SET allowlist=?, allowlist_rev=allowlist_rev+1, "
             "allowlist_saved_at=? WHERE host=? RETURNING allowlist_rev",
             (json.dumps(new.allowlist(), sort_keys=True), now, host))
@@ -1323,7 +1323,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         base = await public_url()
         if not base:
             return JSONResponse(URL_NEEDED, status_code=409)
-        row = await store._run("SELECT platform FROM enrolments WHERE host=?", (host,))
+        row = await store.fetch("SELECT platform FROM enrolments WHERE host=?", (host,))
         if not row:
             return await settings_refused(sess, request, "enrol_reissue_failed", host, 404,
                                           "this host was not added through the console")

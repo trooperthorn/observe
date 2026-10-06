@@ -156,7 +156,7 @@ async def test_acknowledge_needs_admin_and_csrf_and_is_audited(web):
     f = web.port()["findings"][0]
     assert f["acknowledged"] is True and f["acked_by"] == "root"
     assert web.port()["state"] == "up"
-    kinds = [r[0] for r in await web.infra._run(lambda d: d.execute(
+    kinds = [r[0] for r in await web.infra.read(lambda d: d.execute(
         "SELECT kind FROM audit WHERE kind LIKE 'infra_finding%' ORDER BY id").fetchall())]
     assert kinds == ["infra_finding_ack_failed", "infra_finding_acknowledged"]
 

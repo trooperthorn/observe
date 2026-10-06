@@ -90,7 +90,7 @@ async def list_rows(store: Store, limit: int = 100, kind: str | None = None,
         where.append("id<?")
         args.append(int(before_id))
     clause = f" WHERE {' AND '.join(where)}" if where else ""
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT id, ts, actor, kind, method, path, status, remote, detail FROM audit"
         f"{clause} ORDER BY id DESC LIMIT ?", (*args, limit))
     out = []

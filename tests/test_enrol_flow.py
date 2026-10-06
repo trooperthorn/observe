@@ -110,9 +110,9 @@ def test_a_guard_report_for_an_unknown_step_used_or_expired_token_changes_nothin
     assert guard(env, token, step="download").status_code == 404
     assert guard(env, token, step="rm -rf").status_code == 404
     assert progress(env)["guard"] is None
-    asyncio.run(env.store._run("UPDATE enrolments SET expires_at=?", (env.clock() - 1,)))
+    asyncio.run(env.store.execute("UPDATE enrolments SET expires_at=?", (env.clock() - 1,)))
     assert guard(env, token).status_code == 404
-    asyncio.run(env.store._run("UPDATE enrolments SET expires_at=?", (env.clock() + 600,)))
+    asyncio.run(env.store.execute("UPDATE enrolments SET expires_at=?", (env.clock() + 600,)))
     run_install(env, token)
     assert guard(env, token).status_code == 404
     assert progress(env)["guard"] is None
@@ -328,7 +328,7 @@ def test_every_command_route_asks_for_the_address_when_it_is_missing(bare):
     asyncio.run(enrol.set_public_url(bare.store, "https://observe.lab", bare.clock()))
     token = token_of(create(bare, hdr))
     run_install(bare, token)
-    asyncio.run(bare.store._run("DELETE FROM app_settings"))
+    asyncio.run(bare.store.execute("DELETE FROM app_settings"))
     for path, body in (("/api/hosts/nas01/enrolment/reissue", {"confirmed": True}),
                        ("/api/hosts/nas01/tasks", {"kind": "cleanup", "confirmed": True})):
         r = bare.client.post(path, json=body, headers=hdr)
@@ -356,7 +356,7 @@ def test_progress_names_the_command_state_valid_used_or_expired(env):
     hdr = admin(env)
     token = token_of(create(env, hdr))
     assert progress(env)["token_state"] == "valid"
-    asyncio.run(env.store._run("UPDATE enrolments SET expires_at=?", (env.clock() - 1,)))
+    asyncio.run(env.store.execute("UPDATE enrolments SET expires_at=?", (env.clock() - 1,)))
     expired = progress(env)
     assert expired["token_state"] == "expired" and expired["expired"] is True
     assert env.client.get("/api/hosts/nas01/settings").json()["enrolment"]["token_state"] == "expired"
@@ -419,7 +419,7 @@ def test_an_enrolled_host_that_has_not_reported_is_listed_as_waiting_with_a_link
 def test_an_expired_command_is_listed_as_waiting_with_the_way_out(env):
     hdr = admin(env)
     create(env, hdr)
-    asyncio.run(env.store._run("UPDATE enrolments SET expires_at=?", (env.clock() - 1,)))
+    asyncio.run(env.store.execute("UPDATE enrolments SET expires_at=?", (env.clock() - 1,)))
     assert hosts(env)["waiting"][0]["note"] == "command expired, regenerate it"
 
 

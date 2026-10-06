@@ -381,7 +381,7 @@ def test_rebuild_after_a_replaced_revision_keeps_the_newest_values_and_drops_old
 
 
 def test_migration_2_upgrades_a_version_1_database_with_rows(tmp_path):
-    from observe.store import migrate_plugins
+    from observe.storage.schema import migrate_plugins
     from observe_pockethernet.reports import MIGRATIONS
 
     db = sqlite3.connect(str(tmp_path / "old.db"))

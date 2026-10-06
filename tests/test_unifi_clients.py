@@ -394,7 +394,7 @@ def test_protect_refuses_a_non_list_answer(tmp_path):
 
 
 def test_schema_upgrades_from_version_1_keeping_rows():
-    from observe.store import migrate_plugins
+    from observe.storage.schema import migrate_plugins
     from observe_unifi.records import MIGRATIONS
     db = sqlite3.connect(":memory:")
     migrate_plugins(db, {"unifi": MIGRATIONS[:1]})

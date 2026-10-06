@@ -121,7 +121,7 @@ def test_lockout_refuses_even_the_right_password(tmp_path):
 def test_disabled_user_cannot_log_in_or_keep_session(env):
     env.user("alice")
     assert env.login("alice").status_code == 200
-    asyncio.run(env.store._run("UPDATE users SET disabled=1"))
+    asyncio.run(env.store.execute("UPDATE users SET disabled=1"))
     assert env.client.get("/api/session").status_code == 401
     assert env.login("alice").status_code == 401
 

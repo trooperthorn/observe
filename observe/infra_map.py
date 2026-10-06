@@ -117,7 +117,7 @@ class MapService:
             eps = {str(r[0]): (r[1], r[2]) for r in db.execute(
                 "SELECT id, kind, ref FROM infra_endpoints").fetchall()}
             return links, roles, eps
-        links, roles, endpoints = await self._infra._run(go)
+        links, roles, endpoints = await self._infra.read(go)
 
         def monitor_of_endpoint(eid: str) -> str | None:
             kind, ref = endpoints.get(eid, ("", ""))
@@ -154,7 +154,7 @@ class MapService:
     async def _decisions(self) -> dict[tuple[str, str], str]:
         def go(db: Any) -> list[Any]:
             return db.execute("SELECT child, parent, decision FROM infra_dependencies").fetchall()
-        return {(c, p): d for c, p, d in await self._infra._run(go)}
+        return {(c, p): d for c, p, d in await self._infra.read(go)}
 
     def _configured_edges(self) -> set[tuple[str, str]]:
         return {(m.slug, p.slug) for m in self._config.monitors
@@ -248,7 +248,7 @@ class MapService:
                 "VALUES (?,?,?,?,?) ON CONFLICT(child, parent) DO UPDATE SET "
                 "decision=excluded.decision, decided_by=excluded.decided_by, "
                 "decided_at=excluded.decided_at", (child, parent, decision, actor, ts))
-        await self._infra._run(go)
+        await self._infra.write(go)
         await audit.record(self._infra._store, kind, actor=actor, method="POST", path=path,
                            status=200, remote=remote, detail=detail)
         return await self.refresh()
@@ -319,7 +319,7 @@ class MapService:
                     "SELECT switch_id, port_key, value FROM port_properties WHERE id IN ("
                     + current_ids_sql("WHERE name='site'") + ")").fetchall(),
             }
-        d = await self._infra._run(go)
+        d = await self._infra.read(go)
 
         edges: list[dict[str, Any]] = []
         for lid, ak, ar, bk, br, source, conf, first, last, closed in d["links"]:
@@ -371,7 +371,7 @@ class MapService:
             def acks(db: Any) -> dict[tuple[str, str, str], str]:
                 return {(k, s, p): m for k, s, p, m in db.execute(
                     "SELECT kind, switch_id, port_key, message FROM infra_finding_acks")}
-            acked = await self._infra._run(acks)
+            acked = await self._infra.read(acks)
             for f in await self._matcher.findings(live):
                 ref = f"{f.switch_id}|{f.port_key}"
                 findings.setdefault(ref, []).append(f.kind)

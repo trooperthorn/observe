@@ -19,7 +19,7 @@ mounting. It can only ask for the stricter admin role.
 Collectors (periodic async jobs with a declared interval of at least 30 seconds and a
 timeout) are validated here and run by the scheduler, each in its own task.
 
-Migrations are applied by the store (observe/store.py, migrate_plugins), and
+Migrations are applied through the storage layer (observe/storage, plugin DDL), and
 pages and static files are served by the app (observe/web.py), both only for
 plugins that are listed. Hooks that later slices consume (monitor types, map
 contributions, key scopes) are declared and validated here so a malformed

@@ -86,7 +86,7 @@ def test_settings_are_admin_only_session_only_and_hold_no_secret(env):
 def test_an_unknown_host_is_404_and_a_host_outside_the_console_is_readable(env):
     admin(env)
     assert settings(env, "ghost").status_code == 404
-    asyncio.run(env.store._run(
+    asyncio.run(env.store.execute(
         "INSERT INTO hosts (host, platform, agent_version, first_seen, last_seen) "
         "VALUES ('legacy', 'Linux', '1.0', 1.0, 2.0)"))
     body = settings(env, "legacy").json()
@@ -199,7 +199,7 @@ def test_without_a_control_plugin_the_allowlist_is_saved_but_no_command_is_made(
     try:
         hdr = admin(e)
         e.client.post("/api/hosts", json={**GOOD, "platform": "linux"}, headers=hdr)
-        asyncio.run(e.store._run("UPDATE enrolments SET fetched_at=1.0"))
+        asyncio.run(e.store.execute("UPDATE enrolments SET fetched_at=1.0"))
         out = put(e, hdr).json()
         assert out["saved"] and out["command"] is None
         assert "control is not set up" in out["command_error"]
@@ -236,7 +236,7 @@ def test_expired_unknown_and_wrong_kind_tokens_are_410(env):
     hdr = admin(env)
     script = enrol_host(env, hdr)
     token = task_token(put(env, hdr))
-    asyncio.run(env.store._run("UPDATE host_tasks SET expires_at=?", (env.clock() - 1,)))
+    asyncio.run(env.store.execute("UPDATE host_tasks SET expires_at=?", (env.clock() - 1,)))
     install_token = secrets_of(script)["STEP_KEY"]
     for t in (token, "wpt_nonsense", "garbage", install_token):
         assert env.client.get(f"/t/{t}").status_code == 410
@@ -286,7 +286,7 @@ def test_an_unfetched_task_expires_and_the_expiry_is_audited_once(env):
     hdr = admin(env)
     enrol_host(env, hdr)
     put(env, hdr)
-    asyncio.run(env.store._run("UPDATE host_tasks SET expires_at=?", (env.clock() - 1,)))
+    asyncio.run(env.store.execute("UPDATE host_tasks SET expires_at=?", (env.clock() - 1,)))
     assert settings(env).json()["task"]["state"] == "expired"
     assert settings(env).json()["task"]["state"] == "expired"
     assert audit_kinds(env).count("host_task_expired") == 1
@@ -431,7 +431,7 @@ def test_cleanup_command_is_headed_and_needs_an_install_and_confirmation(env, tm
     url = "/api/hosts/nas01/tasks"
     r = env.client.post(url, json={"kind": "cleanup", "confirmed": True}, headers=hdr)
     assert r.status_code == 409 and "has not been run" in r.json()["detail"]
-    asyncio.run(env.store._run("UPDATE enrolments SET fetched_at=1.0"))
+    asyncio.run(env.store.execute("UPDATE enrolments SET fetched_at=1.0"))
     for bad in ({"kind": "cleanup"}, {"kind": "cleanup", "confirmed": "true"},
                 {"kind": "reformat", "confirmed": True}, {"confirmed": True}):
         assert env.client.post(url, json=bad, headers=hdr).status_code in (400, 422)
@@ -584,13 +584,14 @@ def test_tasks_helper_remove_host_reports_none_for_an_unknown_host(env):
 
 def test_a_version_11_database_with_enrolments_migrates_to_14(tmp_path):
     import sqlite3
-    from observe.store import MIGRATIONS, SCHEMA_VERSION, Store, migrate
+    from observe.storage.schema import MIGRATIONS, SCHEMA_VERSION, migrate
+    from observe.store import Store
     path = str(tmp_path / "w.db")
     db = sqlite3.connect(path)
     db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
     db.commit()
     newer = {v: m for v, m in MIGRATIONS.items() if v > 11}
-    assert newer and SCHEMA_VERSION == 16
+    assert newer and SCHEMA_VERSION == 17
     for v in newer:
         del MIGRATIONS[v]
     try:
@@ -610,7 +611,7 @@ def test_a_version_11_database_with_enrolments_migrates_to_14(tmp_path):
         assert db.execute("SELECT allowlist_rev, allowlist_saved_at, reissued_at FROM enrolments "
                           "WHERE host='nas01'").fetchone() == (0, None, None)
         assert db.execute("SELECT COUNT(*) FROM host_tasks").fetchone() == (0,)
-        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 16
+        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 17
     finally:
         db.close()
 

@@ -35,12 +35,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
 from observe.infra import InfraError, InfraService
 from observe.portkey import LLDP_SUBTYPES, lldp_port_key, mac_digits, port_key, switch_id
+from observe.storage import DB_ERRORS, Conn
 from observe.store import Store
 
 from .schema import Neighbor, Report, ReportError, parse_report
@@ -194,7 +194,7 @@ def footprint(body: bytes | None) -> Footprint:
     return Footprint((found[1][0], found[2][0]), _jack(report))
 
 
-def retract_rows(db: sqlite3.Connection, report_id: str, recorded_by: str, fp: Footprint) -> None:
+def retract_rows(db: Conn, report_id: str, recorded_by: str, fp: Footprint) -> None:
     """Remove what one report derived: its properties, and the field_report link and jack patch
     of its jack. Other reports that shared those are replayed by replay_siblings. The caller
     holds the store lock and the transaction."""
@@ -211,12 +211,11 @@ def retract_rows(db: sqlite3.Connection, report_id: str, recorded_by: str, fp: F
                    (fp.jack,))
 
 
-def _sibling_rows(store: Store) -> list[tuple[Any, ...]]:
-    with store._lock:
-        return store._db.execute(
-            "SELECT source, report_id, key_prefix, taken_at_ms, updated_at, body "
-            "FROM field_reports WHERE body IS NOT NULL "
-            "ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
+def _sibling_rows(db: Conn) -> list[tuple[Any, ...]]:
+    return db.execute(
+        "SELECT source, report_id, key_prefix, taken_at_ms, updated_at, body "
+        "FROM field_reports WHERE body IS NOT NULL "
+        "ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
 
 
 async def replay_siblings(store: Store, fp: Footprint, own: tuple[str, str]) -> Derived | None:
@@ -227,7 +226,7 @@ async def replay_siblings(store: Store, fp: Footprint, own: tuple[str, str]) -> 
     value matched the retracted report's has no row of its own; replaying it writes the row a
     rebuild would, and replaying in rebuild order gives the same row owners. Returns what
     deriving `own` produced."""
-    rows = await asyncio.to_thread(_sibling_rows, store)
+    rows = await store.storage.read(_sibling_rows)
     infra = InfraService(store)
     result: Derived | None = None
     for source, report_id, key_prefix, taken_ms, updated_at, body in rows:
@@ -308,63 +307,70 @@ class RebuildResult:
 
 
 class _InlineInfra(InfraService):
-    """InfraService that runs on the caller's thread inside the caller's open transaction.
+    """InfraService that runs on the caller's thread inside the caller's open write unit.
 
-    The rebuild holds the store lock and one transaction for its whole run, so each call here
-    must neither take the lock again nor commit.
+    The rebuild is one write unit for its whole run, so each call here must run on the unit's
+    own connection and must neither queue another unit nor commit.
     """
 
-    async def _run(self, fn: Any) -> Any:
-        return fn(self._store._db)
+    def __init__(self, store: Store, db: Conn) -> None:
+        super().__init__(store)
+        self._unit_db = db
+
+    async def write(self, fn: Any) -> Any:
+        return fn(self._unit_db)
+
+    async def read(self, fn: Any) -> Any:
+        return fn(self._unit_db)
 
 
-def _rebuild_sync(store: Store) -> RebuildResult:
+class _KeepOld(Exception):
+    """Raised inside the rebuild unit to roll it back and hand the result to the caller."""
+
+    def __init__(self, result: RebuildResult) -> None:
+        super().__init__("rebuild rolled back")
+        self.result = result
+
+
+def _rebuild_unit(store: Store, db: Conn) -> RebuildResult:
     out = RebuildResult()
-    with store._lock:
-        db = store._db
-        pruned = db.execute("SELECT COUNT(*) FROM field_reports WHERE body IS NULL").fetchone()[0]
-        if pruned:
-            out.pruned = int(pruned)
-            return out
-        rows = db.execute(
-            "SELECT source, report_id, key_prefix, taken_at_ms, updated_at, body "
-            "FROM field_reports ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
-        try:
-            db.execute("DELETE FROM port_properties WHERE source=?", (SOURCE,))
-            jacks = [r[0] for r in db.execute(
-                "SELECT a_ref FROM infra_links WHERE source=? AND a_kind='jack'", (LINK_SOURCE,))]
-            db.execute("DELETE FROM infra_links WHERE source=?", (LINK_SOURCE,))
-            db.executemany(
-                "UPDATE infra_jacks SET switch_id=NULL, port_key=NULL WHERE jack_key=?",
-                [(j,) for j in jacks])
-            infra = _InlineInfra(store)
+    pruned = db.execute("SELECT COUNT(*) FROM field_reports WHERE body IS NULL").fetchone()[0]
+    if pruned:
+        out.pruned = int(pruned)
+        return out
+    rows = db.execute(
+        "SELECT source, report_id, key_prefix, taken_at_ms, updated_at, body "
+        "FROM field_reports ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
+    db.execute("DELETE FROM port_properties WHERE source=?", (SOURCE,))
+    jacks = [r[0] for r in db.execute(
+        "SELECT a_ref FROM infra_links WHERE source=? AND a_kind='jack'", (LINK_SOURCE,))]
+    db.execute("DELETE FROM infra_links WHERE source=?", (LINK_SOURCE,))
+    db.executemany(
+        "UPDATE infra_jacks SET switch_id=NULL, port_key=NULL WHERE jack_key=?",
+        [(j,) for j in jacks])
+    infra = _InlineInfra(store, db)
 
-            async def replay() -> None:
-                for source, report_id, key_prefix, taken_ms, updated_at, body in rows:
-                    out.reports += 1
-                    try:
-                        report = parse_report(bytes(body))
-                        res = await derive_report(infra, report, key_prefix=key_prefix,
-                                                  device=source, taken_ms=taken_ms,
-                                                  now=updated_at)
-                    except (ReportError, InfraError, ValueError, sqlite3.Error):
-                        out.failed += 1
-                        out.failures.append({"source": source, "report_id": report_id})
-                        continue
-                    if res.skipped:
-                        out.skipped += 1
-                    else:
-                        out.derived += 1
+    async def replay() -> None:
+        for source, report_id, key_prefix, taken_ms, updated_at, body in rows:
+            out.reports += 1
+            try:
+                report = parse_report(bytes(body))
+                res = await derive_report(infra, report, key_prefix=key_prefix,
+                                          device=source, taken_ms=taken_ms,
+                                          now=updated_at)
+            except (ReportError, InfraError, ValueError, *DB_ERRORS):
+                out.failed += 1
+                out.failures.append({"source": source, "report_id": report_id})
+                continue
+            if res.skipped:
+                out.skipped += 1
+            else:
+                out.derived += 1
 
-            asyncio.run(replay())
-            if out.failed:
-                db.rollback()  # keep the old derived data; the caller reports the failures
-                return out
-            db.execute("UPDATE field_reports SET derive_status='ok'")
-            db.commit()
-        except BaseException:
-            db.rollback()
-            raise
+    asyncio.run(replay())
+    if out.failed:
+        raise _KeepOld(out)  # keep the old derived data; the caller reports the failures
+    db.execute("UPDATE field_reports SET derive_status='ok'")
     return out
 
 
@@ -377,7 +383,10 @@ async def rebuild(store: Store) -> RebuildResult:
     transaction is rolled back, the old derived data stays and `failures` names the reports.
     Refused with a nonzero `pruned` when retention dropped any body.
     """
-    return await asyncio.to_thread(_rebuild_sync, store)
+    try:
+        return await store.storage.write(lambda db: _rebuild_unit(store, db))
+    except _KeepOld as kept:
+        return kept.result
 
 
 @dataclass
@@ -398,17 +407,11 @@ class RetryResult:
         return d
 
 
-def _pending_sync(store: Store) -> list[tuple[Any, ...]]:
-    with store._lock:
-        return store._db.execute(
-            "SELECT source, report_id, revision, key_prefix, taken_at_ms, updated_at, body "
-            "FROM field_reports WHERE derive_status = 'failed' "
-            "ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
-
-
-def _retract_sync(store: Store, report_id: str, recorded_by: str, fp: Footprint) -> None:
-    with store._lock, store._db:
-        retract_rows(store._db, report_id, recorded_by, fp)
+def _pending(db: Conn) -> list[tuple[Any, ...]]:
+    return db.execute(
+        "SELECT source, report_id, revision, key_prefix, taken_at_ms, updated_at, body "
+        "FROM field_reports WHERE derive_status = 'failed' "
+        "ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
 
 
 async def retry_failed(store: Store) -> RetryResult:
@@ -418,7 +421,8 @@ async def retry_failed(store: Store) -> RetryResult:
 
     out = RetryResult()
     infra = InfraService(store)
-    for source, report_id, revision, key_prefix, taken_ms, updated_at, body in             await asyncio.to_thread(_pending_sync, store):
+    pending = await store.storage.read(_pending)
+    for source, report_id, revision, key_prefix, taken_ms, updated_at, body in pending:
         out.retried += 1
         try:
             if body is None:
@@ -426,8 +430,8 @@ async def retry_failed(store: Store) -> RetryResult:
             report = parse_report(bytes(body))
             # Rows a half-finished attempt left are retracted first, so the retry is idempotent.
             fp = footprint(body)
-            await asyncio.to_thread(_retract_sync, store, report_id,
-                                    recorded_by_for(key_prefix, source), fp)
+            by = recorded_by_for(key_prefix, source)
+            await store.storage.write(lambda db: retract_rows(db, report_id, by, fp))
             res = await replay_siblings(store, fp, (source, report_id))
             if res is None:  # the report's own row is always replayed; guard anyway
                 res = await derive_report(infra, report, key_prefix=key_prefix, device=source,

@@ -61,7 +61,7 @@ def test_plaintext_is_never_stored(store, tmp_path):
     assert key not in [c for r in rows for c in r]
     assert all(secret not in str(c) for r in rows for c in r)
     assert stored_hash != secret and len(stored_hash) == 64
-    store._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    store.close()  # the last connection closing folds the write-ahead log into the file
     raw = (tmp_path / "w.db").read_bytes()
     assert secret.encode() not in raw and key.encode() not in raw
 

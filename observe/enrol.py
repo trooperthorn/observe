@@ -26,18 +26,17 @@ controls. It is `server.public_url`, or an address an admin confirmed in the wiz
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import re
 import secrets
-import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
 from . import audit
 from .config import normalise_public_url
 from .ingest.keys import create_key
+from .storage import Conn, IntegrityConflict
 from .store import Store
 
 TOKEN_MARKER = "wpe"
@@ -199,17 +198,17 @@ async def create_enrolment(store: Store, spec: Spec, created_by: str, now: float
 
     Raises EnrolError(409) when the name is already enrolled or already reporting.
     """
-    if await store._run("SELECT 1 FROM hosts WHERE host=?", (spec.name,)):
+    if await store.fetch("SELECT 1 FROM hosts WHERE host=?", (spec.name,)):
         raise EnrolError("a host with this name already exists", 409)
     token = new_token()
     try:
-        await store._run(
+        await store.execute(
             "INSERT INTO enrolments (host, platform, agent, control, allowlist, token_hash, "
             "created, created_by, expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (spec.name, spec.platform, int(spec.agent), int(spec.control),
              json.dumps(spec.allowlist(), sort_keys=True), _digest(token), now, created_by,
              now + TOKEN_TTL_S))
-    except sqlite3.IntegrityError as err:
+    except IntegrityConflict as err:
         raise EnrolError("a host with this name already exists", 409) from err
     return token
 
@@ -223,7 +222,7 @@ async def regenerate_enrolment(store: Store, host: str, now: float) -> tuple[str
     The conditional UPDATE means a fetch that wins the race leaves nothing to replace.
     """
     token = new_token()
-    rows = await store._run(
+    rows = await store.execute(
         "UPDATE enrolments SET token_hash=?, created=?, expires_at=?, expiry_audited=0, "
         "guard_step=NULL, guard_reason=NULL, guard_at=NULL "
         "WHERE host=? AND fetched_at IS NULL RETURNING platform, agent, control, allowlist",
@@ -244,27 +243,26 @@ async def reissue_enrolment(store: Store, host: str, now: float) -> tuple[str, S
     """
     token = new_token()
 
-    def work() -> tuple[tuple[Any, ...], int] | None:
-        with store._lock, store._db:
-            row = store._db.execute(
-                "SELECT platform, agent, control, allowlist FROM enrolments WHERE host=?",
-                (host,)).fetchone()
-            if row is None:
-                return None
-            revoked = store._db.execute(
-                "UPDATE ingest_keys SET revoked_at=? WHERE host=? AND scope IN ('wpi', ?) "
-                "AND revoked_at IS NULL", (now, host, CONTROL_SCOPE)).rowcount
-            store._db.execute(
-                "UPDATE enrolments SET token_hash=?, created=?, expires_at=?, expiry_audited=0, "
-                "fetched_at=NULL, step_hash=NULL, reports='[]', agent_prefix=NULL, "
-                "control_prefix=NULL, reissued_at=?, guard_step=NULL, guard_reason=NULL, "
-                "guard_at=NULL WHERE host=?",
-                (_digest(token), now, now + TOKEN_TTL_S, now, host))
-            # An update command made for the old install is dead in the same transaction.
-            store._db.execute("DELETE FROM host_tasks WHERE host=? AND fetched_at IS NULL", (host,))
-            return row, revoked
+    def work(db: Conn) -> tuple[tuple[Any, ...], int] | None:
+        row = db.execute(
+            "SELECT platform, agent, control, allowlist FROM enrolments WHERE host=?",
+            (host,)).fetchone()
+        if row is None:
+            return None
+        revoked = db.execute(
+            "UPDATE ingest_keys SET revoked_at=? WHERE host=? AND scope IN ('wpi', ?) "
+            "AND revoked_at IS NULL", (now, host, CONTROL_SCOPE)).rowcount
+        db.execute(
+            "UPDATE enrolments SET token_hash=?, created=?, expires_at=?, expiry_audited=0, "
+            "fetched_at=NULL, step_hash=NULL, reports='[]', agent_prefix=NULL, "
+            "control_prefix=NULL, reissued_at=?, guard_step=NULL, guard_reason=NULL, "
+            "guard_at=NULL WHERE host=?",
+            (_digest(token), now, now + TOKEN_TTL_S, now, host))
+        # An update command made for the old install is dead in the same transaction.
+        db.execute("DELETE FROM host_tasks WHERE host=? AND fetched_at IS NULL", (host,))
+        return row, revoked
 
-    made = await asyncio.to_thread(work)
+    made = await store.storage.write(work, touches=("admin",))
     if made is None:
         return None
     (platform, agent, control, allowlist), revoked = made
@@ -301,7 +299,7 @@ async def peek(store: Store, token: str, now: float) -> tuple[str, bool] | None:
     """
     if not isinstance(token, str) or not token.startswith(TOKEN_MARKER + "_"):
         return None
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT platform, control FROM enrolments WHERE token_hash=? AND fetched_at IS NULL "
         "AND expires_at>?", (_digest(token), now))
     return (rows[0][0], bool(rows[0][1])) if rows else None
@@ -316,7 +314,7 @@ async def preview(store: Store, token: str, now: float) -> Redeemed | None:
     """
     if not isinstance(token, str) or not token.startswith(TOKEN_MARKER + "_"):
         return None
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT host, platform, agent, control, allowlist FROM enrolments WHERE token_hash=? "
         "AND fetched_at IS NULL AND expires_at>?", (_digest(token), now))
     if not rows:
@@ -340,7 +338,7 @@ async def redeem(store: Store, token: str, now: float, remote: str = "") -> Rede
         await audit.record(store, "enrol_fetch_failed", method="GET", path=path, status=404,
                            remote=remote, detail={"reason": "not a token"})
         return None
-    rows = await store._run(
+    rows = await store.execute(
         "UPDATE enrolments SET fetched_at=?, guard_step=NULL, guard_reason=NULL, guard_at=NULL "
         "WHERE token_hash=? AND fetched_at IS NULL "
         "AND expires_at>? RETURNING host, platform, agent, control, allowlist, created_by",
@@ -353,15 +351,15 @@ async def redeem(store: Store, token: str, now: float, remote: str = "") -> Rede
     agent_key = control_key = None
     if agent:
         agent_key, info = await create_key(store, host, created_by=created_by)
-        await store._run("UPDATE enrolments SET agent_prefix=? WHERE host=?",
+        await store.execute("UPDATE enrolments SET agent_prefix=? WHERE host=?",
                          (info.prefix, host))
     if control:
         control_key, info = await create_key(store, host, created_by=created_by,
                                              scope=CONTROL_SCOPE)
-        await store._run("UPDATE enrolments SET control_prefix=? WHERE host=?",
+        await store.execute("UPDATE enrolments SET control_prefix=? WHERE host=?",
                          (info.prefix, host))
     step_key = f"{STEP_MARKER}_{secrets.token_urlsafe(32)}"
-    await store._run("UPDATE enrolments SET step_hash=? WHERE host=?", (_digest(step_key), host))
+    await store.execute("UPDATE enrolments SET step_hash=? WHERE host=?", (_digest(step_key), host))
     await audit.record(store, "enrol_fetched", method="GET", path=path, status=200,
                        remote=remote, detail={"host": host, "platform": platform,
                                               "agent": bool(agent), "control": bool(control)})
@@ -388,7 +386,7 @@ async def record_guard_failure(store: Store, token: str, step: str, found: str,
             or not token.startswith(TOKEN_MARKER + "_"):
         return None
     found = _FOUND.sub("", found if isinstance(found, str) else "")[:64]
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT host FROM enrolments WHERE token_hash=? AND fetched_at IS NULL AND expires_at>?",
         (_digest(token), now))
     if not rows:
@@ -396,7 +394,7 @@ async def record_guard_failure(store: Store, token: str, step: str, found: str,
     host = rows[0][0]
     reason = (f"ran on {found}, expected {host}" if step == "hostname" and found
               else f"{GUARD_REASONS[step]} (expected {host})")
-    await store._run(
+    await store.execute(
         "UPDATE enrolments SET guard_step=?, guard_reason=?, guard_at=? WHERE host=? "
         "AND fetched_at IS NULL", (step, reason, now, host))
     return host
@@ -407,7 +405,7 @@ async def get_public_url(store: Store, configured: str | None) -> tuple[str, str
     address an admin saved from the wizard ("saved"). ("", "") when neither is set."""
     if configured:
         return configured, "config"
-    rows = await store._run("SELECT value FROM app_settings WHERE key='public_url'")
+    rows = await store.fetch("SELECT value FROM app_settings WHERE key='public_url'")
     if rows:
         try:
             return normalise_public_url(rows[0][0]), "saved"
@@ -423,7 +421,7 @@ async def set_public_url(store: Store, raw: Any, now: float) -> str:
         url = normalise_public_url(raw)
     except ValueError as err:
         raise EnrolError(str(err)) from err
-    await store._run(
+    await store.execute(
         "INSERT INTO app_settings (key, value, updated) VALUES ('public_url', ?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
         (url, now))
@@ -435,7 +433,7 @@ async def waiting_hosts(store: Store, now: float) -> list[dict[str, Any]]:
     arrived, so the host has no row in `hosts`. Each row names the host and how far the enrolment
     is, so the hosts list and the dashboard can say "waiting for first data" and link to the
     enrolment page. A host that reported once is an ordinary host from then on."""
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT e.host, e.platform, e.control, e.created, e.expires_at, e.fetched_at, "
         "e.guard_reason FROM enrolments e LEFT JOIN hosts h ON h.host=e.host "
         "WHERE e.agent=1 AND h.host IS NULL ORDER BY e.created, e.host")
@@ -465,7 +463,7 @@ async def record_step(store: Store, step_key: str, step: str, status: str, note:
     """
     if not isinstance(step_key, str) or not step_key.startswith(STEP_MARKER + "_"):
         return None
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT host, reports FROM enrolments WHERE step_hash=? AND fetched_at IS NOT NULL "
         "AND fetched_at+?>?", (_digest(step_key), STEP_TTL_S, now))
     if not rows:
@@ -474,13 +472,13 @@ async def record_step(store: Store, step_key: str, step: str, status: str, note:
     note = "".join(c for c in audit.redact_secrets(note) if c.isprintable())[:MAX_NOTE]
     reports = [r for r in json.loads(raw) if r["step"] != step]
     reports.append({"step": step, "status": status, "note": note, "at": now})
-    await store._run("UPDATE enrolments SET reports=? WHERE host=?", (json.dumps(reports), host))
+    await store.execute("UPDATE enrolments SET reports=? WHERE host=?", (json.dumps(reports), host))
     return host
 
 
 async def claim_expiry_audit(store: Store, host: str, now: float) -> bool:
     """True exactly once for an enrolment whose token expired unused, so the audit row is single."""
-    rows = await store._run(
+    rows = await store.execute(
         "UPDATE enrolments SET expiry_audited=1 WHERE host=? AND fetched_at IS NULL "
         "AND expires_at<=? AND expiry_audited=0 RETURNING host", (host, now))
     return bool(rows)
@@ -500,14 +498,14 @@ async def progress(store: Store, host: str, now: float) -> dict[str, Any] | None
     or expired (the script was never fetched before the token ran out). `state` is the last
     step reached: waiting, script_fetched, first_data, control_pulled, ready or expired.
     """
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT platform, agent, control, created, expires_at, fetched_at, control_prefix, reports, "
         "reissued_at, guard_step, guard_reason, guard_at FROM enrolments WHERE host=?", (host,))
     if not rows:
         return None
     (platform, agent, control, created, expires_at, fetched_at, control_prefix, reports,
      reissued_at, guard_step, guard_reason, guard_at) = rows[0]
-    first = await store._run("SELECT first_seen, last_seen FROM hosts WHERE host=?", (host,))
+    first = await store.fetch("SELECT first_seen, last_seen FROM hosts WHERE host=?", (host,))
     data_at = first[0][0] if fetched_at is not None and first else None
     if reissued_at is not None and data_at is not None:
         # A reissued command starts a new install on a host that may already have reported, so
@@ -515,7 +513,7 @@ async def progress(store: Store, host: str, now: float) -> dict[str, Any] | None
         data_at = first[0][1] if first[0][1] >= reissued_at else None
     pulled_at = None
     if fetched_at is not None and control_prefix:
-        used = await store._run("SELECT last_used FROM ingest_keys WHERE prefix=?",
+        used = await store.fetch("SELECT last_used FROM ingest_keys WHERE prefix=?",
                                 (control_prefix,))
         pulled_at = used[0][0] if used else None
     expired = fetched_at is None and now >= expires_at

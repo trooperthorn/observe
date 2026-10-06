@@ -17,7 +17,6 @@ derived from those reports and from the control key's last use.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import secrets
@@ -26,6 +25,7 @@ from typing import Any
 
 from . import audit
 from .enrol import PLATFORMS, STEP_MARKER, STEP_TTL_S, TOKEN_TTL_S, MAX_NOTE
+from .storage import Conn
 from .store import Store
 
 TASK_MARKER = "wpt"
@@ -61,17 +61,16 @@ async def create_task(store: Store, host: str, kind: str, platform: str,
     works and the older token is dead."""
     token = new_token()
 
-    def work() -> None:
-        with store._lock, store._db:
-            store._db.execute("DELETE FROM host_tasks WHERE host=? AND kind=? AND fetched_at IS NULL",
-                              (host, kind))
-            store._db.execute(
-                "INSERT INTO host_tasks (host, kind, platform, allowlist, rev, token_hash, created, "
-                "created_by, expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                (host, kind, platform, json.dumps(allowlist, sort_keys=True), rev,
-                 _digest(token), now, created_by, now + TOKEN_TTL_S))
+    def work(db: Conn) -> None:
+        db.execute("DELETE FROM host_tasks WHERE host=? AND kind=? AND fetched_at IS NULL",
+                   (host, kind))
+        db.execute(
+            "INSERT INTO host_tasks (host, kind, platform, allowlist, rev, token_hash, created, "
+            "created_by, expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (host, kind, platform, json.dumps(allowlist, sort_keys=True), rev,
+             _digest(token), now, created_by, now + TOKEN_TTL_S))
 
-    await asyncio.to_thread(work)
+    await store.storage.write(work, touches=("admin",))
     return token
 
 
@@ -81,7 +80,7 @@ async def peek(store: Store, token: str,
     spending it, so the route can render a dry run before the token is burned."""
     if not isinstance(token, str) or not token.startswith(TASK_MARKER + "_"):
         return None
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT kind, platform, host, allowlist FROM host_tasks WHERE token_hash=? "
         "AND fetched_at IS NULL AND expires_at>?", (_digest(token), now))
     if not rows:
@@ -100,7 +99,7 @@ async def redeem(store: Store, token: str, now: float, remote: str = "") -> Rede
                            remote=remote, detail={"reason": "not a task token"})
         return None
     step_key = f"{STEP_MARKER}_{secrets.token_urlsafe(32)}"
-    rows = await store._run(
+    rows = await store.execute(
         "UPDATE host_tasks SET fetched_at=?, step_hash=? WHERE token_hash=? AND fetched_at IS NULL "
         "AND expires_at>? RETURNING host, kind, platform, allowlist, rev",
         (now, _digest(step_key), _digest(token), now))
@@ -121,7 +120,7 @@ async def record_step(store: Store, step_key: str, step: str, status: str, note:
     redacted and capped, as for install reports."""
     if not isinstance(step_key, str) or not step_key.startswith(STEP_MARKER + "_"):
         return None
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT id, host, reports FROM host_tasks WHERE step_hash=? AND fetched_at IS NOT NULL "
         "AND fetched_at+?>?", (_digest(step_key), STEP_TTL_S, now))
     if not rows:
@@ -130,12 +129,12 @@ async def record_step(store: Store, step_key: str, step: str, status: str, note:
     note = "".join(c for c in audit.redact_secrets(note) if c.isprintable())[:MAX_NOTE]
     reports = [r for r in json.loads(raw) if r["step"] != step]
     reports.append({"step": step, "status": status, "note": note, "at": now})
-    await store._run("UPDATE host_tasks SET reports=? WHERE id=?", (json.dumps(reports), task_id))
+    await store.execute("UPDATE host_tasks SET reports=? WHERE id=?", (json.dumps(reports), task_id))
     return str(host)
 
 
 async def claim_expiry_audit(store: Store, task_id: int, now: float) -> bool:
-    rows = await store._run(
+    rows = await store.execute(
         "UPDATE host_tasks SET expiry_audited=1 WHERE id=? AND fetched_at IS NULL "
         "AND expires_at<=? AND expiry_audited=0 RETURNING id", (task_id, now))
     return bool(rows)
@@ -155,7 +154,7 @@ def _state(fetched_at: float | None, expires_at: float, reports: list[dict[str, 
 async def latest(store: Store, host: str, now: float) -> dict[str, Any] | None:
     """The newest task of the host with its state: waiting (command shown, not run), fetched
     (the script is running), done, failed (a step failed or was refused) or expired."""
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT id, kind, platform, rev, created, expires_at, fetched_at, reports "
         "FROM host_tasks WHERE host=? ORDER BY id DESC LIMIT 1", (host,))
     if not rows:
@@ -179,7 +178,7 @@ async def allowlist_status(store: Store, host: str) -> dict[str, Any] | None:
     update counts as written only when its script reported the restart and no step of that task
     failed, because the daemon reads control.toml only at start. `applied_at` is that pull.
     """
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT control, allowlist_rev, allowlist_saved_at, created, fetched_at, control_prefix, "
         "reissued_at, reports FROM enrolments WHERE host=?", (host,))
     if not rows:
@@ -197,7 +196,7 @@ async def allowlist_status(store: Store, host: str) -> dict[str, Any] | None:
     if fetched_at is not None and not install_failed and (fetched_at > saved or (rev == 0 and fetched_at >= saved)):
         written = fetched_at
     if rev:
-        tasks = await store._run(
+        tasks = await store.fetch(
             "SELECT reports FROM host_tasks WHERE host=? AND kind='update' AND rev=? "
             "AND fetched_at IS NOT NULL AND created>=? ORDER BY id DESC",
             (host, rev, reissued_at if reissued_at is not None else 0.0))
@@ -214,7 +213,7 @@ async def allowlist_status(store: Store, host: str) -> dict[str, Any] | None:
     out["written_at"] = written
     pulled = None
     if prefix:
-        used = await store._run("SELECT last_used FROM ingest_keys WHERE prefix=?", (prefix,))
+        used = await store.fetch("SELECT last_used FROM ingest_keys WHERE prefix=?", (prefix,))
         pulled = used[0][0] if used else None
     if written is None:
         out["state"] = "pending"
@@ -248,7 +247,7 @@ def task_command_text(host: str, platform: str, kind: str, base_url: str, token:
 
 async def revoke_host_keys(store: Store, host: str, now: float) -> int:
     """Revoke every unrevoked agent and control key bound to the host. Returns how many."""
-    rows = await store._run(
+    rows = await store.execute(
         "UPDATE ingest_keys SET revoked_at=? WHERE host=? AND scope IN ('wpi', 'wpc') "
         "AND revoked_at IS NULL RETURNING id", (now, host))
     return len(rows)
@@ -259,20 +258,18 @@ async def remove_host(store: Store, host: str, now: float) -> dict[str, int] | N
     tasks and its stored hardware data (the host row, samples, sources, events and batch ids).
     The audit log and the control command history are kept. Returns the counts, or None when
     nothing was known about the host."""
-    def work() -> dict[str, int] | None:
-        with store._lock, store._db:
-            db = store._db
-            counts = {"keys": db.execute(
-                "UPDATE ingest_keys SET revoked_at=? WHERE host=? AND scope IN ('wpi', 'wpc') "
-                "AND revoked_at IS NULL", (now, host)).rowcount}
-            for name, sql in (("enrolments", "DELETE FROM enrolments WHERE host=?"),
-                              ("tasks", "DELETE FROM host_tasks WHERE host=?"),
-                              ("hosts", "DELETE FROM hosts WHERE host=?"),
-                              ("samples", "DELETE FROM host_samples WHERE host=?"),
-                              ("sources", "DELETE FROM host_sources WHERE host=?"),
-                              ("events", "DELETE FROM host_events WHERE host=?"),
-                              ("batches", "DELETE FROM ingest_batches WHERE host=?")):
-                counts[name] = db.execute(sql, (host,)).rowcount
-            return counts if (counts["enrolments"] or counts["hosts"] or counts["keys"]) else None
+    def work(db: Conn) -> dict[str, int] | None:
+        counts = {"keys": db.execute(
+            "UPDATE ingest_keys SET revoked_at=? WHERE host=? AND scope IN ('wpi', 'wpc') "
+            "AND revoked_at IS NULL", (now, host)).rowcount}
+        for name, sql in (("enrolments", "DELETE FROM enrolments WHERE host=?"),
+                          ("tasks", "DELETE FROM host_tasks WHERE host=?"),
+                          ("hosts", "DELETE FROM hosts WHERE host=?"),
+                          ("samples", "DELETE FROM host_samples WHERE host=?"),
+                          ("sources", "DELETE FROM host_sources WHERE host=?"),
+                          ("events", "DELETE FROM host_events WHERE host=?"),
+                          ("batches", "DELETE FROM ingest_batches WHERE host=?")):
+            counts[name] = db.execute(sql, (host,)).rowcount
+        return counts if (counts["enrolments"] or counts["hosts"] or counts["keys"]) else None
 
-    return await asyncio.to_thread(work)
+    return await store.storage.write(work, touches=("hosts", "metrics", "events", "admin"))

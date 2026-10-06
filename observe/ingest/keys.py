@@ -28,10 +28,10 @@ import hashlib
 import hmac
 import re
 import secrets
-import sqlite3
 import time
 from dataclasses import dataclass
 
+from ..storage import IntegrityConflict
 from ..store import Store
 from .schema import MAX_NAME
 
@@ -93,11 +93,11 @@ async def create_key(store: Store, host: str, created_by: str = "",
         prefix = secrets.token_hex(PREFIX_BYTES)
         secret = secrets.token_urlsafe(SECRET_BYTES)
         try:
-            await store._run(
+            await store.execute(
                 "INSERT INTO ingest_keys (prefix, hash, host, created, created_by, scope) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (prefix, _digest(secret), host, now, created_by, scope))
-        except sqlite3.IntegrityError:
+        except IntegrityConflict:
             continue  # prefix collision, vanishingly rare; draw again
         return (f"{scope}_{prefix}_{secret}",
                 KeyInfo(prefix, host, now, created_by, None, None, scope))
@@ -107,14 +107,14 @@ async def create_key(store: Store, host: str, created_by: str = "",
 async def revoke_key(store: Store, prefix: str, now: float | None = None) -> bool:
     """Revoke by prefix. Returns False if the prefix is unknown or already revoked."""
     ts = time.time() if now is None else now
-    rows = await store._run(
+    rows = await store.execute(
         "UPDATE ingest_keys SET revoked_at = ? WHERE prefix = ? AND revoked_at IS NULL "
         "RETURNING id", (ts, prefix))
     return bool(rows)
 
 
 async def list_keys(store: Store) -> list[KeyInfo]:
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT prefix, host, created, created_by, revoked_at, last_used, scope "
         "FROM ingest_keys ORDER BY id")
     return [KeyInfo(*r) for r in rows]
@@ -130,7 +130,7 @@ async def verify_key(store: Store, key: str, host: str, now: float | None = None
     if parts is None:
         return False
     prefix, secret = parts
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT hash, host, revoked_at, scope FROM ingest_keys WHERE prefix = ?", (prefix,))
     stored, bound, revoked, row_scope = rows[0] if rows else (_DUMMY_DIGEST, None, 1.0, "")
     digest_ok = hmac.compare_digest(stored, _digest(secret))
@@ -138,7 +138,7 @@ async def verify_key(store: Store, key: str, host: str, now: float | None = None
         bound.encode("utf-8"), host.encode("utf-8"))
     if not (digest_ok and host_ok and revoked is None and row_scope == scope):
         return False
-    await store._run("UPDATE ingest_keys SET last_used = ? WHERE prefix = ?",
+    await store.execute("UPDATE ingest_keys SET last_used = ? WHERE prefix = ?",
                      (time.time() if now is None else now, prefix))
     return True
 
@@ -153,7 +153,7 @@ async def key_host(store: Store, key: str, scope: str = MARKER) -> tuple[str, st
     if parts is None:
         return None
     prefix, secret = parts
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT hash, host, revoked_at, scope FROM ingest_keys WHERE prefix = ?", (prefix,))
     stored, bound, revoked, row_scope = rows[0] if rows else (_DUMMY_DIGEST, None, 1.0, "")
     if (hmac.compare_digest(stored, _digest(secret)) and bound is not None

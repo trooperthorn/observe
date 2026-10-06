@@ -12,9 +12,11 @@ from pathlib import Path
 import pytest
 
 from observe import layout
-from observe.store import MIGRATIONS, SCHEMA_VERSION, Store
+from observe.storage.schema import MIGRATIONS, SCHEMA_VERSION
+from observe.store import Store
 
 from .test_auth import Env
+from .dbq import run_sql
 
 ROOT = Path(__file__).parent.parent
 STATIC = ROOT / "observe" / "static"
@@ -95,7 +97,7 @@ def test_stale_and_malformed_ids_are_dropped_and_repeats_removed(env):
 def test_an_old_row_with_bad_ids_is_cleaned_on_read(env):
     login(env, "alice")
     (uid,) = env.rows("SELECT id FROM users")[0]
-    env.store._exec("INSERT INTO ui_layouts VALUES (?, 'dashboard', ?, 0)",
+    run_sql(env.store, "INSERT INTO ui_layouts VALUES (?, 'dashboard', ?, 0)",
                     (uid, '{"order": ["events", "junk", "events"], "hidden": 5}'))
     got = env.client.get(URL).json()
     assert got["order"] == ["events"] and got["hidden"] == []
@@ -219,7 +221,7 @@ def test_a_version_12_database_migrates_to_13(tmp_path):
     db = sqlite3.connect(path)
     db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
     db.commit()
-    from observe.store import migrate
+    from observe.storage.schema import migrate
     newer = {v: m for v, m in MIGRATIONS.items() if v > 12}
     assert newer
     for v in newer:

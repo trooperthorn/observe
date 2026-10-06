@@ -65,7 +65,7 @@ async def _joined_by_ports(infra: InfraService, a: str, b: str) -> bool:
             "SELECT a_ref, b_ref FROM infra_links WHERE a_kind='port' AND b_kind='port' "
             "AND closed_at IS NULL AND (a_ref LIKE ? OR b_ref LIKE ?)",
             (f"{a}|%", f"{a}|%")).fetchall()
-    for ra, rb in await infra._run(go):
+    for ra, rb in await infra.read(go):
         sa, _, ka = ra.partition("|")
         sb, _, kb = rb.partition("|")
         placeholder = any(k == UPLINK_PORT or k.startswith("to-") for k in (ka, kb))

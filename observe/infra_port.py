@@ -38,7 +38,7 @@ class PortPages:
         def go(db: Any) -> list[Any]:
             return db.execute("SELECT kind, message, acked_by, acked_at FROM infra_finding_acks "
                               "WHERE switch_id=? AND port_key=?", (sid, key)).fetchall()
-        acks = {r[0]: r for r in await self._infra._run(go)}
+        acks = {r[0]: r for r in await self._infra.read(go)}
         out = []
         for f in found:
             row: dict[str, Any] = dict(f.as_dict())
@@ -63,7 +63,7 @@ class PortPages:
                 "p.role, p.raw_port_id, p.first_seen, p.last_seen "
                 "FROM infra_ports p JOIN infra_switches s USING (switch_id) "
                 "WHERE p.switch_id=? AND p.port_key=?", (sid, key)).fetchone()
-        row = await self._infra._run(go)
+        row = await self._infra.read(go)
         if row is None:
             return None
         name, addrs, vendor, platform, role, raw, first, last = row
@@ -122,6 +122,6 @@ class PortPages:
                 "acked_at) VALUES (?,?,?,?,?,?) ON CONFLICT(kind, switch_id, port_key) DO UPDATE "
                 "SET message=excluded.message, acked_by=excluded.acked_by, "
                 "acked_at=excluded.acked_at", (kind, sid, key, match["message"], actor, now))
-        await self._infra._run(go)
+        await self._infra.write(go)
         await audit.record(self._infra._store, "infra_finding_acknowledged", actor=actor,
                            method="POST", path=path, status=200, remote=remote, detail=detail)

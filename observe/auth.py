@@ -118,10 +118,10 @@ async def create_user(store: Store, cfg: Config, username: str, password: str,
     username = _check_new(username, password)
     stored = hash_password(cfg, password)
     try:
-        rows = await store._run(
+        rows = await store.execute(
             "INSERT INTO users (username, hash, is_admin, created) VALUES (?,?,?,?) RETURNING id",
             (username, stored, int(is_admin), time.time() if now is None else now))
-    except Exception as err:  # sqlite3.IntegrityError on the UNIQUE username
+    except Exception as err:  # IntegrityConflict on the UNIQUE username
         if "UNIQUE" in str(err):
             raise AuthError("that username already exists") from err
         raise
@@ -129,14 +129,14 @@ async def create_user(store: Store, cfg: Config, username: str, password: str,
 
 
 async def list_users(store: Store) -> list[dict[str, Any]]:
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT id, username, is_admin, disabled, created FROM users ORDER BY id")
     return [{"id": r[0], "username": r[1], "is_admin": bool(r[2]), "disabled": bool(r[3]),
              "created": r[4]} for r in rows]
 
 
 async def count_admins(store: Store) -> int:
-    rows = await store._run("SELECT COUNT(*) FROM users WHERE is_admin=1 AND disabled=0")
+    rows = await store.fetch("SELECT COUNT(*) FROM users WHERE is_admin=1 AND disabled=0")
     return int(rows[0][0])
 
 
@@ -148,14 +148,14 @@ async def set_user_flag(store: Store, user_id: int, column: str, value: bool) ->
     once because load_session reads the flag on every request."""
     if column not in ("disabled", "is_admin"):
         raise ValueError(column)
-    rows = await store._run("SELECT id FROM users WHERE id=?", (user_id,))
+    rows = await store.fetch("SELECT id FROM users WHERE id=?", (user_id,))
     if not rows:
         return "missing"
     removes_admin = (column == "disabled" and value) or (column == "is_admin" and not value)
     guard = (" AND NOT (is_admin=1 AND disabled=0 AND "
              "(SELECT COUNT(*) FROM users WHERE is_admin=1 AND disabled=0) <= 1)"
              if removes_admin else "")
-    done = await store._run(
+    done = await store.execute(
         f"UPDATE users SET {column}=? WHERE id=?{guard} RETURNING id", (int(value), user_id))
     return "ok" if done else "last_admin"
 
@@ -169,7 +169,7 @@ async def check_login(store: Store, cfg: Config, username: str, password: str,
     if len(password) > MAX_PASSWORD or len(username) > MAX_USERNAME:
         _burn(cfg, "x")
         return LoginResult(False, "bad_credentials")
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT id, hash, is_admin, disabled, failed_count, locked_until FROM users "
         "WHERE username=?", (username,))
     if not rows:
@@ -185,13 +185,13 @@ async def check_login(store: Store, cfg: Config, username: str, password: str,
     if not verify_password(cfg, stored, password):
         failed += 1
         lock = now + cfg.server.login_lock_s if failed >= cfg.server.login_max_failures else None
-        await store._run(
+        await store.execute(
             "UPDATE users SET failed_count=?, locked_until=? WHERE id=?",
             (0 if lock else failed, lock, uid))
         return LoginResult(False, "locked" if lock else "bad_credentials", uid, username)
-    await store._run("UPDATE users SET failed_count=0, locked_until=NULL WHERE id=?", (uid,))
+    await store.execute("UPDATE users SET failed_count=0, locked_until=NULL WHERE id=?", (uid,))
     if make_hasher(cfg).check_needs_rehash(stored):
-        await store._run("UPDATE users SET hash=? WHERE id=?", (hash_password(cfg, password), uid))
+        await store.execute("UPDATE users SET hash=? WHERE id=?", (hash_password(cfg, password), uid))
     return LoginResult(True, "ok", uid, username, bool(is_admin))
 
 
@@ -201,7 +201,7 @@ async def create_session(store: Store, cfg: Config, user_id: int,
     now = time.time() if now is None else now
     token = secrets.token_urlsafe(32)
     csrf = csrf_for(token)
-    await store._run(
+    await store.execute(
         "INSERT INTO sessions (id_hash, user_id, csrf_hash, created, expires, last_seen) "
         "VALUES (?,?,?,?,?,?)",
         (_digest(token), user_id, _digest(csrf), now, now + cfg.server.session_absolute_s, now))
@@ -215,21 +215,21 @@ async def load_session(store: Store, cfg: Config, token: str | None,
     if not token or len(token) > 128:
         return None
     now = time.time() if now is None else now
-    rows = await store._run(
+    rows = await store.fetch(
         "SELECT s.expires, s.last_seen, s.revoked, u.id, u.username, u.is_admin, u.disabled "
         "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash=?", (_digest(token),))
     if not rows:
         return None
     expires, last_seen, revoked, uid, username, is_admin, disabled = rows[0]
     if revoked or disabled or expires <= now or now - last_seen > cfg.server.session_idle_s:
-        await store._run("UPDATE sessions SET revoked=1 WHERE id_hash=?", (_digest(token),))
+        await store.execute("UPDATE sessions SET revoked=1 WHERE id_hash=?", (_digest(token),))
         return None
-    await store._run("UPDATE sessions SET last_seen=? WHERE id_hash=?", (now, _digest(token)))
+    await store.execute("UPDATE sessions SET last_seen=? WHERE id_hash=?", (now, _digest(token)))
     return Session(uid, username, bool(is_admin), csrf_for(token))
 
 
 async def revoke_session(store: Store, token: str) -> None:
-    await store._run("UPDATE sessions SET revoked=1 WHERE id_hash=?", (_digest(token),))
+    await store.execute("UPDATE sessions SET revoked=1 WHERE id_hash=?", (_digest(token),))
 
 
 @dataclass(frozen=True)

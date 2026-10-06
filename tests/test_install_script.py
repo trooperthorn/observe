@@ -253,7 +253,7 @@ def test_redeem_refuses_an_unknown_or_malformed_token(env, body):
 def test_redeem_refuses_an_expired_token(env):
     hdr = admin(env)
     token = token_of(create(env, hdr, platform="linux"))
-    asyncio.run(env.store._run("UPDATE enrolments SET expires_at=?", (env.clock() - 1,)))
+    asyncio.run(env.store.execute("UPDATE enrolments SET expires_at=?", (env.clock() - 1,)))
     assert env.client.post("/api/enrol/redeem", json={"token": token}).status_code == 410
     assert env.rows("SELECT COUNT(*) FROM ingest_keys") == [(0,)]
 
@@ -293,7 +293,7 @@ def test_fetched_script_carries_this_servers_guard_values(env):
 def test_expired_unknown_and_garbage_tokens_are_410(env):
     hdr = admin(env)
     token = token_of(create(env, hdr, platform="linux"))
-    asyncio.run(env.store._run("UPDATE enrolments SET expires_at=?", (env.clock() - 1,)))
+    asyncio.run(env.store.execute("UPDATE enrolments SET expires_at=?", (env.clock() - 1,)))
     for t in (token, "wpe_nonsense", "garbage"):
         assert env.client.get(f"/i/{t}").status_code == 410
     assert env.rows("SELECT COUNT(*) FROM ingest_keys") == [(0,)]

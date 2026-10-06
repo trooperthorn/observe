@@ -463,6 +463,12 @@ builds no action that changes a host. The design and its limits are in
 this README describe the read-only behavior of the current release; they are
 updated as each phase lands.
 
+All database access goes through one storage interface (`observe/storage`): a single writer
+thread runs every write as one transaction, reads use a pool of three read-only WAL connections
+with a 2 second deadline, and a test fails the build if code outside that package opens a
+database. Only the SQLite backend exists so far; see `docs/ARCHITECTURE.md`, "Storage interface".
+Plugins read and write through `store.storage` (`write`, `read`, `write_sync`, `read_sync`).
+
 The SQLite store is now versioned. On startup Observe applies any missing
 additive migrations, keeps all existing history, and refuses to open a
 database written by a newer version. `server.retention_days` governs poll
