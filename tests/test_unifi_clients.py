@@ -260,6 +260,73 @@ def test_a_rejected_key_backs_off_the_clients_collector_too(tmp_path):
     assert len(console.requests) == sent
 
 
+def test_a_failed_classic_poll_keeps_the_stored_client_detail_and_its_time(tmp_path):
+    console = Full([client_row(3, uplinkDeviceId="")])
+    console.active = [{"mac": "02:00:00:00:00:03", "is_wired": True, "sw_mac": "AA:BB:CC:00:00:01",
+                       "sw_port": 7, "essid": "Lab"}]
+    env = classic_env(tmp_path, console)
+    run(env.plugin.collect_devices(env.store))
+    run(env.plugin.collect_clients(env.store))
+    cid = "02:00:00:00:00:03"
+    assert (col(env, "ssid", cid), col(env, "sw_port", cid), col(env, "classic_seen", cid)) == (
+        "Lab", 7, 1000.0)
+    for status in (500, 403):
+        env.now += 300
+        console.classic_status = status
+        env.plugin.classic = None  # a fresh client, so an earlier pause does not hide the status
+        run(env.plugin.collect_clients(env.store))
+        assert env.plugin.classic_note is not None
+        assert (col(env, "ssid", cid), col(env, "sw_port", cid), col(env, "uplink_mac", cid),
+                col(env, "enriched", cid)) == ("Lab", 7, "aa:bb:cc:00:00:01", 1)
+        assert col(env, "classic_seen", cid) == 1000.0  # the time of the last good detail
+        assert col(env, "last_seen", cid) == env.now
+    env.now += 300
+    console.classic_status = 200
+    env.plugin.classic = None
+    console.active = [{"mac": cid, "is_wired": False, "ap_mac": "AA:BB:CC:00:00:02",
+                       "essid": "Guest"}]
+    run(env.plugin.collect_clients(env.store))
+    assert (col(env, "ssid", cid), col(env, "sw_port", cid), col(env, "classic_seen", cid)) == (
+        "Guest", None, env.now)
+
+
+def test_a_403_on_classic_reads_is_logged_once_as_a_permission_problem(tmp_path, caplog):
+    console = Full([client_row(1)])
+    console.classic_status = 403
+    env = classic_env(tmp_path, console)
+    with caplog.at_level("WARNING", logger="observe_unifi"):
+        for _ in range(3):
+            env.plugin.classic = None
+            run(env.plugin.collect_clients(env.store))
+            env.now += 1000
+    msgs = [r for r in caplog.records if "may not read" in r.getMessage()]
+    assert len(msgs) == 1
+    assert env.plugin.classic_note == "classic detail unavailable: ClassicForbidden"
+
+
+def test_an_offline_client_without_last_seen_is_not_refreshed_and_is_pruned(tmp_path):
+    console = Full([])
+    console.known = [{"mac": "02:00:00:00:09:09", "name": "Ghost"}]  # no last_seen, no first_seen
+    env = classic_env(tmp_path, console)
+    run(env.plugin.collect_clients(env.store))
+    mac = "02:00:00:00:09:09"
+    assert (col(env, "first_seen", mac), col(env, "last_seen", mac)) == (1000.0, 1000.0)
+    env.now = 1000.0 + 20 * 86400
+    run(env.plugin.collect_clients(env.store))
+    assert col(env, "last_seen", mac) == 1000.0  # not refreshed on every poll
+    assert run(env.plugin.prune(env.store, 1000.0 + 31 * 86400)) == 1
+    assert mac not in clients(env)
+
+
+def test_an_offline_client_without_last_seen_is_aged_by_the_console_first_seen():
+    from observe_unifi.clients import offline_clients
+    now = 100 * 86400.0
+    rows = [{"mac": "02:00:00:00:09:01", "first_seen": 1.0},
+            {"mac": "02:00:00:00:09:02", "first_seen": now - 86400.0}]
+    out = offline_clients("s", rows, set(), now, 30)
+    assert [c.client_id for c in out] == ["02:00:00:00:09:02"] and out[0].last_seen is None
+
+
 # ----------------------------------------------------------------------- prune
 
 
@@ -336,14 +403,14 @@ def test_schema_upgrades_from_version_1_keeping_rows():
     db.commit()
     assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == 1
     migrate_plugins(db, {"unifi": MIGRATIONS})
-    assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == 2
+    assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == 3
     cols = {r[1] for r in db.execute("PRAGMA table_info(unifi_clients)")}
     assert {"connected", "connected_at", "ssid", "uplink_mac", "sw_port", "enriched"} <= cols
     row = db.execute("SELECT name, connected, ssid, enriched FROM unifi_clients").fetchone()
     assert row == ("Old", None, "", 0)  # the old row survives; connected is unknown, not false
     assert db.execute("SELECT COUNT(*) FROM unifi_cameras").fetchone()[0] == 0
     migrate_plugins(db, {"unifi": MIGRATIONS})  # a second run changes nothing
-    assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == 2
+    assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == 3
 
 
 def test_connected_rows_not_refreshed_lately_are_flagged_stale(tmp_path):

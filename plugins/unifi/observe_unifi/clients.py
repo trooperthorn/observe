@@ -141,49 +141,68 @@ def enrich(clients: list[Client], active: dict[str, dict[str, Any]],
 def offline_clients(site_id: str, rows: Iterable[dict[str, Any]], connected: set[str],
                     now: float, retention_days: int) -> list[Client]:
     """Known but not connected clients from `parse_offline_clients`. One older than the retention
-    is left out, so the prune does not delete it only for the next poll to add it back."""
+    is left out, so the prune does not delete it only for the next poll to add it back. A client
+    with no `last_seen` is aged by the console's `first_seen` instead; with neither, it is kept
+    with `last_seen` None, which the store does not refresh, so the prune can remove it."""
     cutoff = now - retention_days * 86400
     out = []
     for r in rows:
         mac = norm_mac(r.get("mac"))
         seen = _num(r.get("last_seen"))  # UNVERIFIED: epoch seconds
-        if not mac or mac in connected or (seen is not None and seen < cutoff):
+        first = _num(r.get("first_seen"))  # UNVERIFIED: epoch seconds
+        age_from = seen if seen is not None else first
+        if not mac or mac in connected or (age_from is not None and age_from < cutoff):
             continue
         out.append(Client(site_id, mac, mac, _text(r.get("name")), connected=False,
-                          last_seen=seen if seen is not None else now))
+                          last_seen=seen))
     return out
 
 
-_UP = """INSERT INTO unifi_clients (site_id, client_id, mac, name, ip, kind, uplink_device_id,
-  connected, connected_at, ssid, uplink_mac, sw_port, enriched, first_seen, last_seen)
-  VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?,?,?)
+def _up_sql(keep_classic: bool) -> str:
+    """The upsert of a connected client. With `keep_classic`, a row without classic detail keeps
+    the ssid, uplink MAC, switch port and their time already stored, because the classic read
+    failed and a blank would be wrong. Otherwise the poll's values replace them."""
+    def col(name: str) -> str:
+        if not keep_classic:
+            return f"{name}=excluded.{name}"
+        return f"{name}=CASE WHEN excluded.enriched=1 THEN excluded.{name} ELSE {name} END"
+    return f"""INSERT INTO unifi_clients (site_id, client_id, mac, name, ip, kind, uplink_device_id,
+  connected, connected_at, ssid, uplink_mac, sw_port, enriched, classic_seen, first_seen, last_seen)
+  VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)
   ON CONFLICT (site_id, client_id) DO UPDATE SET mac=excluded.mac, name=excluded.name,
-  ip=excluded.ip, kind=excluded.kind, uplink_device_id=excluded.uplink_device_id, connected=1,
-  connected_at=excluded.connected_at, ssid=excluded.ssid, uplink_mac=excluded.uplink_mac,
-  sw_port=excluded.sw_port, enriched=excluded.enriched, last_seen=excluded.last_seen"""
-# An offline row keeps what is already known and moves only the name and the last seen time.
+  ip=excluded.ip, kind=excluded.kind, connected=1, connected_at=excluded.connected_at,
+  uplink_device_id=excluded.uplink_device_id,
+  {col('ssid')}, {col('uplink_mac')}, {col('sw_port')},
+  {col('enriched')}, {col('classic_seen')}, last_seen=excluded.last_seen"""
+
+
+# An offline row keeps what is already known and moves only the name and the last seen time. When
+# the console gave no last seen time (`?` is NULL), the stored time is not refreshed, so the row
+# ages out by retention instead of looking new on every poll.
 _OFF = """INSERT INTO unifi_clients (site_id, client_id, mac, name, connected, first_seen,
   last_seen) VALUES (?,?,?,?,0,?,?)
   ON CONFLICT (site_id, client_id) DO UPDATE SET connected=0,
   name=CASE WHEN excluded.name != '' THEN excluded.name ELSE name END,
-  last_seen=MAX(last_seen, excluded.last_seen)"""
+  last_seen=CASE WHEN ? IS NULL THEN last_seen ELSE MAX(last_seen, excluded.last_seen) END"""
 
 
 def _write_clients(store: Store, site_id: str, live: list[Client], off: list[Client],
-                   now: float) -> int:
+                   now: float, classic_ok: bool = True) -> int:
     with store._lock:
         db = store._db
         try:
-            db.executemany(_UP, [
+            db.executemany(_up_sql(not classic_ok), [
                 (c.site_id, c.client_id, c.mac, c.name, c.ip, c.kind, c.uplink_device_id,
-                 c.connected_at, c.ssid, c.uplink_mac, c.sw_port, int(c.enriched), now, now)
+                 c.connected_at, c.ssid, c.uplink_mac, c.sw_port, int(c.enriched),
+                 now if c.enriched else None, now, now)
                 for c in live])
             # Anything still marked connected that this poll did not write has left.
             db.execute("UPDATE unifi_clients SET connected=0 WHERE site_id=? AND connected=1 "
                        "AND last_seen < ?", (site_id, now))
-            seen = [c.last_seen if c.last_seen is not None else now for c in off]
-            db.executemany(_OFF, [(c.site_id, c.client_id, c.mac, c.name, s, s)
-                                  for c, s in zip(off, seen)])
+            db.executemany(_OFF, [
+                (c.site_id, c.client_id, c.mac, c.name,
+                 c.last_seen if c.last_seen is not None else now,
+                 c.last_seen if c.last_seen is not None else now, c.last_seen) for c in off])
             db.commit()
         except BaseException:
             db.rollback()
@@ -192,9 +211,10 @@ def _write_clients(store: Store, site_id: str, live: list[Client], off: list[Cli
 
 
 async def save_clients(store: Store, site_id: str, live: list[Client], off: list[Client],
-                       now: float) -> int:
-    """Upsert one poll in a single transaction. `first_seen` is kept for a known client."""
-    return await asyncio.to_thread(_write_clients, store, site_id, live, off, now)
+                       now: float, classic_ok: bool = True) -> int:
+    """Upsert one poll in a single transaction. `first_seen` is kept for a known client. With
+    `classic_ok` false (the classic read failed) the stored classic detail is kept."""
+    return await asyncio.to_thread(_write_clients, store, site_id, live, off, now, classic_ok)
 
 
 async def device_index(store: Store, site_id: str) -> dict[str, str]:
@@ -287,7 +307,7 @@ def read_clients(store: Store, now: float | None = None,
         rows = db.execute(
             """SELECT c.client_id, c.mac, c.name, c.ip, c.kind, c.connected, c.connected_at,
                c.ssid, c.sw_port, c.enriched, c.last_seen, c.uplink_device_id, c.uplink_mac,
-               d.name, d.mac FROM unifi_clients c
+               d.name, d.mac, c.classic_seen FROM unifi_clients c
                LEFT JOIN unifi_devices d ON d.site_id = c.site_id
                  AND ((c.uplink_device_id != '' AND d.device_id = c.uplink_device_id)
                       OR (c.uplink_device_id = '' AND c.uplink_mac != '' AND d.mac = c.uplink_mac))
@@ -295,10 +315,11 @@ def read_clients(store: Store, now: float | None = None,
             (MAX_ROWS,)).fetchall()
     out = []
     for (cid, mac, name, ip, kind, conn, cat, ssid, port, enr, seen, up_id, up_mac, up_name,
-         up_dev_mac) in rows:
+         up_dev_mac, classic_seen) in rows:
         out.append({"client_id": cid, "mac": mac, "name": name, "ip": ip, "kind": kind,
                     "connected": None if conn is None else bool(conn), "connected_at": cat,
                     "ssid": ssid, "sw_port": port, "enriched": bool(enr), "last_seen": seen,
+                    "classic_seen": classic_seen,
                     "stale": _stale(conn, seen, now, stale_after),
                     "uplink_device_id": up_id, "uplink_name": up_name or "",
                     "uplink_mac": up_dev_mac or up_mac})

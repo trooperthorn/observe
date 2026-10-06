@@ -106,6 +106,23 @@ def test_the_page_is_a_static_shell_and_the_data_needs_a_login(env):
         assert env.client.get(API + path).status_code == 200
 
 
+def test_the_devices_page_marks_data_stale_after_twice_the_interval(env):
+    env.login()
+    plugin = env.inner.plugin
+    interval = plugin.settings.interval
+    got = env.client.get(API + "/devices").json()
+    assert got["stale"] is False and got["last_update"] == 1000.0
+    env.inner.now = 1000.0 + 2 * interval - 1
+    assert env.client.get(API + "/devices").json()["stale"] is False
+    env.inner.now = 1000.0 + 2 * interval + 1
+    got = env.client.get(API + "/devices").json()
+    assert got["stale"] is True and got["last_update"] == 1000.0
+    js = (PKG / "static" / "unifi.js").read_text(encoding="utf-8")
+    assert "d.stale" in js and "d.last_update" in js
+    run(plugin.collect_devices(env.store))  # a good poll clears the marker
+    assert env.client.get(API + "/devices").json()["stale"] is False
+
+
 def test_navigation_entry_sits_under_network(env):
     env.login()
     body = env.client.get("/api/plugins").json()

@@ -15,8 +15,9 @@ import pytest
 from observe.plugins import GROUP, load_plugins
 from observe.store import Store
 from observe_unifi import UniFiPlugin, plugin as unifi_plugin
-from observe_unifi.classic import (MAX_BODY_BYTES, ClassicBackedOff, ClassicClient, parse_devices,
-                                   parse_offline_clients, parse_wan_health)
+from observe_unifi.classic import (MAX_BACKOFF_S, MAX_BODY_BYTES, ClassicBackedOff, ClassicClient,
+                                   ClassicForbidden, parse_devices, parse_offline_clients,
+                                   parse_ports, parse_wan_health)
 from observe_unifi.client import AuthRejected, UniFiError
 
 from .conftest import make_config
@@ -199,6 +200,85 @@ def test_a_rejected_login_backs_off_and_doubles():
     assert len(console.requests) == 2
 
 
+def test_reads_that_get_403_after_a_good_login_back_off_with_growing_gaps():
+    console = Console()
+    console.status_override = 403
+    now = [0.0]
+    c = client(console, now)
+    with pytest.raises(ClassicForbidden):
+        run(c.get("stat/device"))
+    assert console.logins == 1  # a new login cannot fix a missing permission
+    gaps = []
+    for _ in range(4):
+        start = now[0]
+        with pytest.raises(ClassicBackedOff):
+            run(c.get("stat/device"))
+        while True:  # advance one second at a time to find where the pause ends
+            now[0] += 1
+            try:
+                run(c.get("stat/device"))
+            except ClassicBackedOff:
+                continue
+            except ClassicForbidden:
+                break
+        gaps.append(now[0] - start)
+    assert gaps == sorted(gaps) and len(set(gaps)) == 4 and gaps[3] > 4 * gaps[0]
+    assert console.logins == 1
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_a_login_answered_429_or_5xx_backs_off_and_doubles(status):
+    console = Console()
+    console.login_status = status
+    now = [0.0]
+    c = client(console, now)
+    with pytest.raises(UniFiError):
+        run(c.get("stat/device"))
+    sent = len(console.requests)
+    now[0] = 119
+    with pytest.raises(ClassicBackedOff):
+        run(c.get("stat/device"))
+    assert len(console.requests) == sent
+    now[0] = 121
+    with pytest.raises(UniFiError):
+        run(c.get("stat/device"))
+    now[0] = 121 + 239  # the second pause is 240 s
+    with pytest.raises(ClassicBackedOff):
+        run(c.get("stat/device"))
+    assert len(console.requests) == sent + 1
+    now[0] = 121 + 241
+    console.login_status = 200
+    assert run(c.get("stat/sta")) == ACTIVE  # a good read resets the pause
+
+
+def test_the_pause_is_capped_at_thirty_minutes():
+    console = Console()
+    console.login_status = 503
+    now = [0.0]
+    c = client(console, now)
+    pause = 0.0
+    for _ in range(12):
+        with pytest.raises(UniFiError):
+            run(c.get("stat/device"))
+        pause = c._retry_at - now[0]
+        now[0] = c._retry_at + 1
+    assert MAX_BACKOFF_S == 1800.0 and pause == MAX_BACKOFF_S
+
+
+def test_a_down_port_has_no_current_link_speed():
+    ports = parse_ports({"port_table": [
+        {"port_idx": 1, "up": True, "speed": 1000},
+        {"port_idx": 2, "up": False, "speed": 1000},
+        {"port_idx": 3, "speed": 100}]})
+    assert ports["1"]["speed_mbps"] == 1000
+    assert ports["2"]["speed_mbps"] is None and ports["3"]["speed_mbps"] is None
+
+
+def test_offline_parsing_carries_first_seen():
+    (row,) = parse_offline_clients([{"mac": "aa:aa:aa:00:00:09", "first_seen": 50}], [])
+    assert row["first_seen"] == 50.0 and row["last_seen"] is None
+
+
 def test_redirects_are_not_followed_and_oversize_is_refused():
     console = Console()
     c = client(console)
@@ -250,7 +330,7 @@ def test_fixture_parsing_of_wan_health_and_offline_clients():
                                         "uptime_s": 3600.0, "gateways": ["UDM"]}
     assert parse_wan_health([{"subsystem": "lan"}]) is None
     assert parse_offline_clients(KNOWN, ACTIVE) == [
-        {"mac": "aa:aa:aa:00:00:01", "name": "Phone", "last_seen": 1700000000.0}]
+        {"mac": "aa:aa:aa:00:00:01", "name": "Phone", "last_seen": 1700000000.0, "first_seen": None}]
 
 
 # ---------------------------------------------------------------- through the plugin

@@ -880,13 +880,18 @@ an absent value is stored as NULL.
 `unifi_classic` credential (`POST /api/auth/login`), keeps the `TOKEN` cookie and `X-CSRF-Token` in
 memory only, and reads only `stat/device`, `stat/sta`, `rest/user` and `stat/health` under
 `/proxy/network/api/s/{site}` with GET (any other path is refused before a request). A 401 triggers
-one re-login and one retry; a second rejection, or a rejected login, backs off for one interval,
-doubled per failure up to 3600 s, and `ClassicBackedOff` is raised without a request. Redirects are
+one re-login and one retry; a second rejection, a rejected login, or a login answered 429, a 5xx
+or anything but 200, backs off for one interval, doubled per failure up to 1800 s, and
+`ClassicBackedOff` is raised without a request. A 403 on a read raises `ClassicForbidden` without a
+re-login and backs off. The failure count resets only when a read succeeds, so a good login with
+refused reads keeps growing its pause. The plugin logs a `ClassicForbidden` once until a read works
+again. Redirects are
 refused and a body is capped at 8 MB. `logout()` posts `/api/auth/logout` and forgets the session;
 the plugin's `close()` calls it, but the plugin host has no shutdown hook yet, so nothing calls it
 automatically. The parsers return per-port PoE watts and class, native and tagged VLAN fields, the
 LLDP neighbour table, the uplink MAC with local and remote port numbers, the WAN health row and the
-known clients that are not active. `UniFiPlugin.classic_snapshot()` returns all of these. Every
+known clients that are not active, with the console's `first_seen`. A port that is down has
+`speed_mbps` None. `UniFiPlugin.classic_snapshot()` returns all of these. Every
 classic field name is unverified against a live console, because ha_Int_soc does not read this API.
 
 `clients.py` holds the clients and cameras code. Migration 2 adds `connected`, `connected_at`, `ssid`,
@@ -900,14 +905,20 @@ offline rows, which keep the stored address and kind and never move `last_seen` 
 client last seen before `retention_days` is skipped so the prune does not remove it only for the next
 poll to add it back. The uplink MAC from `ap_mac` or `sw_mac` resolves to a device id through
 `unifi_devices`. A classic failure (a `UniFiError`, a 401 or an HTTP error) leaves the Integration
-rows stored and sets `classic_note`, which the page shows. The `protect` collector (`protect: true`,
+rows stored and sets `classic_note`, which the page shows; the write then passes `classic_ok=False`,
+so the upsert keeps the stored `ssid`, `uplink_mac`, `sw_port` and `enriched`. Migration 3 adds
+`classic_seen`, the time the classic detail was last read, which `/clients` returns. An offline client with
+no `last_seen` is stored with `last_seen` set at first sight and not refreshed, and is skipped when
+the console's `first_seen` is older than `retention_days`, so the prune can remove it. The `protect` collector (`protect: true`,
 `protect_interval` 120 s) reads the unpaginated `GET {protect_base_path}/cameras` with the same key and
 its own backoff, so a rejected Protect key does not pause the network collectors. `isRecording` is
 stored only when it is a boolean, because `recordingSettings.mode` on other firmwares is unverified.
 
 `pages.py` and `pages/unifi.html` with `static/unifi.js`, `vlist-core.js` and `unifi.css` are the UniFi
 page, mounted by the plugin host at `/plugins/unifi` with the nav entry UniFi under Network. The routes
-`/api/plugins/unifi/devices`, `/clients` and `/protect` need a login session. The Clients table is
+`/api/plugins/unifi/devices`, `/clients` and `/protect` need a login session. `/devices` also
+returns `last_update` (the last good devices poll, or the newest stored `last_seen` after a restart)
+and `stale`, true when that is older than twice `interval`; the Devices tab shows both. The Clients table is
 windowed: rows are one fixed height, only the rows in view and a margin are drawn, and spacer rows
 set through a `height` attribute stand for the rest, because the static guard forbids inline styles.
 `vlist-core.js` holds the pure window and filter rules, tested by `tests/js/unifi.test.mjs`. Every

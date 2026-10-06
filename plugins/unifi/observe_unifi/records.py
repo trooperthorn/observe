@@ -70,6 +70,11 @@ MIGRATIONS = (
 )""",
         "CREATE INDEX IF NOT EXISTS unifi_cameras_seen ON unifi_cameras (last_seen)",
     )),
+    # Version 3: when the classic detail (ssid, uplink MAC, switch port) was last read. A failed
+    # classic poll keeps the old detail and this time instead of erasing it.
+    Migration(3, (
+        "ALTER TABLE unifi_clients ADD COLUMN classic_seen REAL",
+    )),
 )
 
 

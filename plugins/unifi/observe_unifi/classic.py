@@ -9,8 +9,11 @@ local view-only account. The rules:
 - The session cookie and the X-CSRF-Token live in this object's memory only. They are never
   written to disk, logged, put in a row, or put in an error message; neither is the password.
 - A 401 on a GET triggers one fresh login and one retry. If that fails too, or the login itself is
-  rejected, the client backs off (a pause that doubles up to an hour) and sends nothing until the
-  pause is over.
+  rejected, the client backs off (a pause that doubles up to 30 minutes) and sends nothing until
+  the pause is over. A login answered 429, a 5xx or anything else but 200 backs off the same way.
+  A 403 on a read after a good login is a permission problem, so it is not retried with a fresh
+  login; it backs off and raises ClassicForbidden. The failure count resets only when a read
+  succeeds, so a login that works but whose reads are refused keeps growing its pause.
 - Redirects are never followed and each response is capped at MAX_BODY_BYTES.
 
 Field names under the classic API (port_table, poe_power, lldp_table, uplink and so on) are NOT
@@ -31,7 +34,7 @@ import httpx
 from .client import AuthRejected, UniFiError, ssl_context
 
 MAX_BODY_BYTES = 8_000_000
-MAX_BACKOFF_S = 3600.0
+MAX_BACKOFF_S = 1800.0
 READ_PATHS = ("stat/device", "stat/sta", "rest/user", "stat/health")
 SITE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 LOGIN_PATH = "/api/auth/login"
@@ -40,6 +43,10 @@ LOGOUT_PATH = "/api/auth/logout"
 
 class ClassicBackedOff(UniFiError):
     """The client is pausing after a rejected login and sent no request."""
+
+
+class ClassicForbidden(AuthRejected):
+    """The console accepted the login but refused a read with 403: the account lacks permission."""
 
 
 class ClassicClient:
@@ -99,7 +106,8 @@ class ClassicClient:
         if 300 <= r.status_code < 400:
             raise UniFiError(f"login answered a redirect (HTTP {r.status_code}); "
                              "redirects are not followed")
-        if r.status_code != 200:
+        if r.status_code != 200:  # 429, 5xx and the rest: pause instead of retrying every poll
+            self._back_off()
             raise UniFiError(f"classic login failed (HTTP {r.status_code})")
         token = r.cookies.get("TOKEN")
         csrf = r.headers.get("x-csrf-token")
@@ -107,9 +115,7 @@ class ClassicClient:
             self._back_off()
             raise UniFiError("classic login answered without a session cookie and CSRF token")
         self._cookie = f"TOKEN={token}"
-        self._csrf = csrf
-        self._failures = 0
-        self._retry_at = 0.0
+        self._csrf = csrf  # the failure count resets only when a read succeeds
 
     async def logout(self) -> None:
         """Best effort; the session is forgotten even if the console cannot be reached."""
@@ -130,8 +136,10 @@ class ClassicClient:
         url = f"{self.base_url}/proxy/network/api/s/{self.site}/{path}"
         async with self._session() as c:
             async with c.stream("GET", url, headers=headers) as r:
-                if r.status_code in (401, 403):
-                    raise AuthRejected(f"HTTP {r.status_code}")
+                if r.status_code == 403:
+                    raise ClassicForbidden("HTTP 403: the classic account may not read this")
+                if r.status_code == 401:
+                    raise AuthRejected("HTTP 401")
                 if 300 <= r.status_code < 400:
                     raise UniFiError(f"{path} answered a redirect (HTTP {r.status_code}); "
                                      "redirects are not followed")
@@ -163,16 +171,23 @@ class ClassicClient:
         if self._cookie is None:
             await self.login()
         try:
-            return await self._get_once(path)
-        except AuthRejected:
-            pass
-        await self.login()  # one re-login; a rejection here backs off and raises
-        try:
-            return await self._get_once(path)
-        except AuthRejected:
-            self._cookie = self._csrf = None
-            self._back_off()
+            data = await self._get_once(path)
+        except ClassicForbidden:
+            self._back_off()  # a new login cannot fix a missing permission
             raise
+        except AuthRejected:
+            data = None
+        if data is None:
+            await self.login()  # one re-login; a rejection here backs off and raises
+            try:
+                data = await self._get_once(path)
+            except AuthRejected:
+                self._cookie = self._csrf = None
+                self._back_off()
+                raise
+        self._failures = 0
+        self._retry_at = 0.0
+        return data
 
 
 # ---- parsers. Every field name below is unverified against a live console. ----
@@ -212,7 +227,8 @@ def parse_ports(device: dict[str, Any]) -> dict[str, dict[str, Any]]:
         out[str(p["port_idx"])] = {
             "name": _str(p.get("name")),
             "up": p.get("up") if isinstance(p.get("up"), bool) else None,
-            "speed_mbps": _int(p.get("speed")),
+            # A port that is down has no current link speed; the console may keep the last one.
+            "speed_mbps": _int(p.get("speed")) if p.get("up") is True else None,
             "poe_w": _num(p.get("poe_power")),
             "poe_class": _str(p.get("poe_class")) or None,
             "poe_enabled": p.get("poe_enable") if isinstance(p.get("poe_enable"), bool) else None,
@@ -282,5 +298,6 @@ def parse_offline_clients(known: list[Any], active: list[Any]) -> list[dict[str,
         mac = _str(u.get("mac")).lower()
         if mac and mac not in live:
             out.append({"mac": mac, "name": _str(u.get("name")) or _str(u.get("hostname")),
-                        "last_seen": _num(u.get("last_seen"))})
+                        "last_seen": _num(u.get("last_seen")),
+                        "first_seen": _num(u.get("first_seen"))})
     return out

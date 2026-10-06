@@ -26,6 +26,19 @@ HERE = Path(__file__).parent
 PAGE_PATH = "/plugins/unifi"
 # A row is stale when its last_seen is older than this many poll intervals.
 STALE_FACTOR = 2.5
+# The devices list is stale when the devices collector has not succeeded within this many
+# intervals.
+DEVICES_STALE_FACTOR = 2.0
+
+
+def devices_freshness(rows: list[dict[str, Any]], ok_at: float | None, now: float,
+                      interval: float) -> tuple[float | None, bool]:
+    """The time of the last good devices poll and whether it is older than twice the interval.
+    After a restart the in-memory time is unknown, so the newest stored last_seen stands in."""
+    last = ok_at
+    if last is None and rows:
+        last = max(r["last_seen"] for r in rows)
+    return last, last is not None and now - last > DEVICES_STALE_FACTOR * interval
 
 
 def page_files() -> list[PluginPage]:
@@ -38,7 +51,9 @@ def build_pages_router(plugin: UniFiPlugin) -> APIRouter:
     @router.get("/devices")
     async def devices(request: Request) -> dict[str, Any]:
         rows = await asyncio.to_thread(read_devices, request.app.state.plugin_store)
-        return {"devices": rows}
+        last, stale = devices_freshness(rows, plugin.devices_ok_at, plugin.wall(),
+                                        plugin.settings.interval)
+        return {"devices": rows, "last_update": last, "stale": stale}
 
     @router.get("/clients")
     async def clients(request: Request) -> dict[str, Any]:

@@ -65,6 +65,11 @@ function devicesView(d) {
   const t = sortableTable({ columns, rows, caption: "UniFi devices",
     empty: "No UniFi devices yet. They appear after the first poll of the console." });
   const frag = document.createDocumentFragment();
+  if (d.stale) {
+    frag.append(el("p", "note stale", `Stale: the console has not been read successfully since ${when(d.last_update)}. The devices below may be out of date.`));
+  } else if (d.last_update) {
+    frag.append(el("p", "note muted", `Updated ${when(d.last_update)}`));
+  }
   frag.append(kpis, section("Devices", t.root));
   return frag;
 }

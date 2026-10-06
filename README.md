@@ -767,14 +767,22 @@ read because no route for it is verified.
 
 The **UniFi** page under Network (`/plugins/unifi`, signed in users only) has Devices, Clients and
 Protect tabs. The Clients tab filters by text, kind and state and draws only the rows in view, so
-a few thousand clients stay fast. The page shows what the last poll stored, not live data.
+a few thousand clients stay fast. The page shows what the last poll stored, not live data. The
+Devices tab shows when it was last updated and a stale marker when the devices collector has not
+succeeded within twice its interval.
 The collector sends only GET requests, never follows a redirect, refuses a response over 4 MB
 and a list over 50 pages. After a 401 or 403 it stops sending requests, waits one interval, and
 doubles the wait on each further rejection up to one hour, so a revoked key is not hammered.
 The optional classic account is a dedicated local view-only account. With it the plugin can log in
 and read PoE watts, per-port VLAN, LLDP neighbours, uplink port numbers, WAN health and offline
 clients. It sends only the login and logout POSTs and GETs of four read views, keeps the session in
-memory, re-logs in once on a 401 and then backs off, and never follows a redirect. The values are
+memory, re-logs in once on a 401 and then backs off, and never follows a redirect. A login answered
+429, a 5xx or any other failure also backs off, doubling up to 30 minutes, and the pause resets only
+when a read succeeds. A 403 on a read after a good login is logged once as a permission problem and
+backs off the same way instead of retrying every poll. If a classic read fails, a client keeps the
+SSID, switch port and uplink last read, with the time of that read, instead of losing them. A port
+that is down reports no link speed. An offline client the console gives no last seen time for is
+not refreshed on every poll and ages out with the retention. The values are
 used by a second collector, `classic`, that runs only when `classic_credential` is set. It adds
 each port of each device to the map (`Port N`, with the UniFi port index), writes link speed, PoE
 class, PoE watts and VLAN as port properties with the source `unifi` only when a value changes,

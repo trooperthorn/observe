@@ -24,6 +24,7 @@ views never stops the Integration rows; the pages say the enrichment is unavaila
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -36,7 +37,7 @@ from observe.plugins import (Collector, Migration, NavEntry, PluginBase, PluginE
                              PluginPage, PluginRouter)
 from observe.store import Store
 
-from .classic import (ClassicClient, parse_devices, parse_offline_clients,
+from .classic import (ClassicClient, ClassicForbidden, parse_devices, parse_offline_clients,
                       parse_wan_health)
 from .clients import (device_index, enrich, offline_clients, parse_active_clients,
                       parse_camera, parse_client, save_cameras, save_clients)
@@ -49,6 +50,7 @@ __version__ = "0.1.0"
 
 
 MAX_BACKOFF_S = 3600.0
+log = logging.getLogger(__name__)
 
 
 class UniFiSettings(BaseModel):
@@ -98,6 +100,9 @@ class UniFiPlugin(PluginBase):
         self._protect_retry_at = 0.0
         # Why the last clients poll had no classic detail, or None. Shown on the pages.
         self.classic_note: str | None = None
+        self._forbidden_reported = False
+        # Wall time of the last devices poll that succeeded, for the devices page.
+        self.devices_ok_at: float | None = None
 
     def config_model(self) -> type[BaseModel]:
         return UniFiSettings
@@ -112,6 +117,8 @@ class UniFiPlugin(PluginBase):
         self._protect_failures = 0
         self._protect_retry_at = 0.0
         self.classic_note = None
+        self._forbidden_reported = False
+        self.devices_ok_at = None
 
     def bind_credentials(self, credentials: Mapping[str, Any]) -> None:
         s = self.settings
@@ -141,16 +148,30 @@ class UniFiPlugin(PluginBase):
                 float(s.interval))
         return self.classic
 
+    async def _classic_get(self, c: ClassicClient, path: str) -> list[Any]:
+        """One classic read. A 403 after a good login is a permission problem and is logged once
+        until a read succeeds again; the client's backoff already stops the retries."""
+        try:
+            rows = await c.get(path)
+        except ClassicForbidden:
+            if not self._forbidden_reported:
+                self._forbidden_reported = True
+                log.warning("unifi classic account is logged in but may not read the "
+                            "controller views; check that it has view access to Network")
+            raise
+        self._forbidden_reported = False
+        return rows
+
     async def classic_snapshot(self) -> dict[str, Any]:
         """Read the four classic views and parse them. Raises UniFiError, AuthRejected or
         ClassicBackedOff; returns an empty dict when no classic credential is set."""
         c = self._classic_client()
         if c is None:
             return {}
-        devices = await c.get("stat/device")
-        active = await c.get("stat/sta")
-        known = await c.get("rest/user")
-        health = await c.get("stat/health")
+        devices = await self._classic_get(c, "stat/device")
+        active = await self._classic_get(c, "stat/sta")
+        known = await self._classic_get(c, "rest/user")
+        health = await self._classic_get(c, "stat/health")
         return {"devices": parse_devices(devices), "wan": parse_wan_health(health),
                 "offline_clients": parse_offline_clients(known, active)}
 
@@ -237,6 +258,7 @@ class UniFiPlugin(PluginBase):
         now = self.wall()
         stored = await save_devices(store, devices, now)
         await feed_integration(store, devices, now)
+        self.devices_ok_at = now
         return stored
 
     async def collect_classic(self, store: Store) -> int:
@@ -257,19 +279,20 @@ class UniFiPlugin(PluginBase):
         known: list[dict[str, Any]] = []
         active: dict[str, dict[str, Any]] = {}
         self.classic_note = None
+        classic_ok = True  # false keeps the stored ssid, uplink and port instead of blanking them
         if self._classic_client() is not None:
             try:
                 snap = await self.classic_clients()
                 active, known = snap["active"], snap["offline"]
-            except (UniFiError, AuthRejected) as err:
+            except (UniFiError, AuthRejected, httpx.HTTPError) as err:
                 # Only the error class goes to the page; the message may name a path or status.
-                self.classic_note = f"classic detail unavailable: {type(err).__name__}"
-            except httpx.HTTPError as err:  # a 5xx, a timeout or a refused connection
+                # An HTTPError is a 5xx, a timeout or a refused connection.
+                classic_ok = False
                 self.classic_note = f"classic detail unavailable: {type(err).__name__}"
         live = enrich(live, active, await device_index(store, site_id))
         off = offline_clients(site_id, known, {c.mac for c in live if c.mac}, now,
                               self.settings.retention_days)
-        return await save_clients(store, site_id, live, off, now)
+        return await save_clients(store, site_id, live, off, now, classic_ok)
 
     async def classic_clients(self) -> dict[str, Any]:
         """The two classic views the clients poll needs: connected detail by MAC and the known
@@ -277,8 +300,8 @@ class UniFiPlugin(PluginBase):
         c = self._classic_client()
         if c is None:
             return {"active": {}, "offline": []}
-        active = await c.get("stat/sta")
-        known = await c.get("rest/user")
+        active = await self._classic_get(c, "stat/sta")
+        known = await self._classic_get(c, "rest/user")
         return {"active": parse_active_clients(active),
                 "offline": parse_offline_clients(known, active)}
 
