@@ -96,6 +96,12 @@ add-on over SNMPv3 and give them the same `host_name` as the `homeassistant` hos
 monitor (default `homeassistant`); the Probe reports the filesystems mounted into its own
 container.
 
+Richer Home Assistant detail (containers, integration health, repairs, backups, Supervisor health,
+watchdog breaches and crash classifications) arrives when ha_Int_soc pushes a hostwatch-schema batch
+every 60 s to `/internal/v1/ingest` with a `wpi` key created for the host `homeassistant`. The key
+cannot push any other host. The contract is in `docs/ARCHITECTURE.md` under "Home Assistant push
+contract", and the metric names are unverified against a live push.
+
 **Windows (WinRM and WMI).** Both use WS-Management on 5986 with TLS
 validation on by default. Point `ca_bundle` at your internal root if the
 listener certificate is from your own CA. The monitoring account needs

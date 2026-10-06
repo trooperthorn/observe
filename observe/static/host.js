@@ -8,6 +8,7 @@ const SECTIONS = [
   ["cpu", "CPU"], ["memory", "Memory"], ["power", "Power"], ["temperatures", "Temperatures"],
   ["fans", "Fans and controller"], ["raid", "RAID"], ["zfs", "ZFS pools"], ["disks", "Disks"],
   ["ups", "UPS"], ["ha", "Home Assistant"], ["containers", "Containers"],
+  ["integrations", "Integration health"], ["repairs", "Repairs"], ["backups", "Backups"],
   ["network", "Network interfaces"],
   ["alerts", "Alerts"],
 ];
@@ -182,6 +183,12 @@ function render(h) {
   const n = notice(h);
   if (n) frag.append(n);
   for (const [key, title] of SECTIONS) frag.append(section(title, h[key], key === "alerts"));
+  const crashes = h.events.filter((e) => e.kind.startsWith("boot.") && !e.kind.startsWith("boot.clean"));
+  if (crashes.length) {
+    const cr = card("Crash events");
+    cr.append(eventsList(crashes));
+    frag.append(cr);
+  }
   const ev = card("Recent events");
   ev.append(h.events.length ? eventsList(h.events) : el("p", "card-sub", "No events reported."));
   frag.append(ev, sourcesTable(h.sources));

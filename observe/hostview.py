@@ -106,6 +106,22 @@ _SYNC_ACTIONS = {"idle": GOOD, "check": GOOD}
 _POOL_STATES = {"online": GOOD, "degraded": CRITICAL, "faulted": CRITICAL,
                 "unavail": CRITICAL, "suspended": CRITICAL}
 
+def _count_by_label(table: dict[str, str], key: str) -> Grader:
+    """A count labelled by class: zero is Good, otherwise the label picks the level."""
+    def fn(v: float, labels: dict[str, str]) -> tuple[str, str]:
+        if v <= 0:
+            return GOOD, ""
+        name = labels.get(key, "unknown")
+        level = table.get(name.lower(), WARNING)
+        return level, "" if level == GOOD else f"{v:g} with {key} {name}"
+    return fn
+
+
+_INTEGRATION_CATEGORIES = {"failing": CRITICAL, "credential": WARNING, "communication": WARNING,
+                           "collection": WARNING, "errors": WARNING, "debug_logging": GOOD,
+                           "disabled": GOOD}
+_REPAIR_SEVERITIES = {"critical": CRITICAL, "error": WARNING, "warning": WARNING}
+
 # section -> {(source, metric): grader}. Sources are the hostwatch collector ids.
 RULES: dict[str, dict[tuple[str, str], Grader]] = {
     "cpu": {("cpu", "utilization_pct"): _above(90, 98), ("cpu", "load"): _info,
@@ -164,10 +180,36 @@ RULES: dict[str, dict[tuple[str, str], Grader]] = {
            _above(HA_UNAVAILABLE_WARN, float("inf")),
            ("homeassistant", "entities_total"): _info, ("homeassistant", "entities"): _info,
            ("homeassistant", "version"): _info,
+           ("ha_supervisor", "healthy"):
+           lambda v, _l: (GOOD, "") if v else (CRITICAL, "Supervisor reports an unhealthy system"),
+           ("ha_supervisor", "supported"):
+           lambda v, _l: (GOOD, "") if v else (WARNING, "Supervisor reports an unsupported system"),
+           ("ha_supervisor", "unhealthy_reasons"): _info,
            ("ha_soc", "posture_score"): _info, ("ha_soc", "open_detections"): _info,
            ("ha_soc", "users_at_risk"): _info, ("ha_soc", "suspicious_activity"): _info},
+    # ha_container, ha_watchdog, ha_integrations, ha_repairs, ha_backup and ha_supervisor are the
+    # sources pushed by ha_Int_soc (docs/ARCHITECTURE.md, "Home Assistant push contract"). The
+    # metric names and label values are shaped from the ha_Int_soc code and are unverified
+    # against a live push.
     "containers": {("hassio", "cpu_percent"): _above(85, 95),
-                   ("hassio", "memory_percent"): _above(85, 95)},
+                   ("hassio", "memory_percent"): _above(85, 95),
+                   ("ha_container", "cpu_percent"): _above(85, 95),
+                   ("ha_container", "memory_percent"): _above(85, 95),
+                   ("ha_container", "memory_usage_bytes"): _info,
+                   ("ha_container", "memory_limit_bytes"): _info,
+                   ("ha_container", "running"):
+                   lambda v, _l: (GOOD, "") if v else (WARNING, "container is not running"),
+                   ("ha_watchdog", "breach_count"):
+                   _nonzero(WARNING, "sustained resource breach counted by the watchdog")},
+    "integrations": {("ha_integrations", "issue"): _count_by_label(_INTEGRATION_CATEGORIES, "category"),
+                     ("ha_integrations", "issues_total"): _info,
+                     ("ha_integrations", "loaded_total"): _info},
+    "repairs": {("ha_repairs", "open"): _count_by_label(_REPAIR_SEVERITIES, "severity"),
+                ("ha_repairs", "open_total"): _info},
+    "backups": {("ha_backup", "last_success_age_hours"): _above(36, 72),
+                ("ha_backup", "last_backup_ok"):
+                lambda v, _l: (GOOD, "") if v else (WARNING, "the last backup failed"),
+                ("ha_backup", "backups_total"): _info},
     # Interfaces read over SNMP. An interface the admin chose to watch that is not up is a
     # Warning, never silently zero traffic.
     "network": {("snmp", "if_up"): lambda v, _l: (GOOD, "") if v else (WARNING, "interface is down"),
@@ -175,7 +217,7 @@ RULES: dict[str, dict[tuple[str, str], Grader]] = {
                 ("snmp", "if_speed_mbps"): _info, ("snmp", "if_util_pct"): _above(70, 90)},
 }
 SECTIONS = ("cpu", "memory", "power", "temperatures", "fans", "raid", "zfs", "disks", "ups",
-            "ha", "containers", "network")
+            "ha", "containers", "integrations", "repairs", "backups", "network")
 
 
 def _sources_of(section: str) -> list[str]:

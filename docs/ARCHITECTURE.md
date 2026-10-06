@@ -239,6 +239,47 @@ at 180 s. The entity ids of the hassio and HA SOC sensors are unverified against
 and are marked in the module. Richer HA detail arrives from ha_Int_soc pushing batches with its
 own ingest key bound to the same host, never from an HA admin token held by Observe.
 
+### Home Assistant push contract
+
+ha_Int_soc (HA SOC, same owner) pushes a hostwatch-schema `Batch` to `POST /internal/v1/ingest`
+every 60 s with `Authorization: Bearer <key>`. The key is an ordinary `wpi` ingest key created
+for the host name `homeassistant`, so it is bound to that host: a batch whose `host` is anything
+else is refused with 403, and a key bound to another host cannot push as `homeassistant`. The
+batch is the unchanged schema (`schema_version` 1, `platform` `homeassistant`), with a fresh
+`batch_id` per cycle that is reused on a resend. It must stay inside the ordinary bounds (body
+1 MiB, 5000 samples, 500 events, 256 sources, 32 labels per sample). A push needs about five
+samples per container and a handful per other source, so a 60 s cycle is far inside them. Observe
+never holds an HA admin token; the pull monitor (`mode: host`) keeps using the non-admin token,
+and both write to the same host, because series are keyed by source, metric and labels.
+
+| Source | Metrics (unit) | Labels | Graded under |
+| --- | --- | --- | --- |
+| `ha_container` | `cpu_percent` (%), `memory_percent` (%), `memory_usage_bytes` (B), `memory_limit_bytes` (B), `running` (0 or 1) | `slug` (Supervisor slug, `core`, `supervisor` or an add-on slug) | Containers: percent Warning at 85, Critical at 95; not running Warning |
+| `ha_watchdog` | `breach_count` (count) | `slug` | Containers: any breach Warning |
+| `ha_integrations` | `loaded_total`, `issues_total` (count); `issue` (1 per integration with a problem); `error_count_24h` (count) | `issue`: `domain`, `title`, `category`, `state`; `error_count_24h`: `domain` | Integration health: category `failing` Critical, `credential`, `communication`, `collection`, `errors` Warning, `debug_logging` and `disabled` Good |
+| `ha_repairs` | `open_total` (count); `open` (count) | `severity` (`critical`, `error`, `warning`) | Repairs: `critical` Critical, others Warning, zero Good |
+| `ha_backup` | `backups_total` (count), `last_success_age_hours` (h), `last_backup_ok` (0 or 1) | none | Backups: age Warning at 36 h, Critical at 72 h; failed Warning |
+| `ha_supervisor` | `healthy`, `supported` (0 or 1), `unhealthy_reasons` (count) | none | Home Assistant: unhealthy Critical, unsupported Warning |
+
+Events carry the same `Event` schema. `ha_watchdog.breach` (source `ha_watchdog`, severity
+`warning`, `detail.slug`, `detail.action`) is sent when a sustained breach triggers an action.
+Crash classifications from ha_Int_soc `docs/CRASH-FORENSICS.md` travel as `boot.<class>` events
+from the source `ha_crash_forensics`, with the previous run's boot id as `boot_id` and the
+heartbeat key as `dedup_key`: `boot.clean_reboot` is clean, `boot.kernel_fault` and
+`boot.silent_stop` are crashes, and `boot.core_restart` (Core alone stopped, no host reboot) is
+unknown, so it is listed and alerts but never marks the host cleanly shut down or crashed. The host
+page lists boot events that are not clean under Crash events, and warning and critical events under
+Alerts for 24 h. The page sections Integration health, Repairs and Backups are new, and the existing
+Containers and Home Assistant sections take the new sources beside the pulled `hassio` and
+`homeassistant` ones. A source that has never reported shows `not_reported`, never zero.
+
+Unverified: ha_Int_soc does not push yet. The metric names, the label values, the backup and
+Supervisor health sources, and the `ha_watchdog.breach` and `ha_crash_forensics` names are
+proposed here from the ha_Int_soc code (`containers.py`, `resource_watchdog.py`, `health.py`,
+`crash_forensics.py`) and are not a recording of a live push. The fixture
+`tests/fixtures/ha_soc/push_batch.json` and `tests/test_ha_push.py` fix the contract; ha_Int_soc
+should be changed to match them, or this section and the fixture changed together.
+
 Missing data is shown, not hidden. Each section has a `state`: `ok`, `stale`
 (no reading inside the stale window, or the host is silent), `unavailable` (a
 source reported a failure, with its reason), `absent` (the agent says the host
