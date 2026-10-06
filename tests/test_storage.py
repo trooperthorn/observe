@@ -407,3 +407,71 @@ def test_a_database_written_by_a_newer_release_is_refused(tmp_path):
 def test_an_unknown_backend_is_refused():
     with pytest.raises(StorageError):
         open_storage(":memory:", backend="mysql")
+
+
+# ---- contract: the application queries return the same Python types on every backend --------
+
+def _store_on(storage):
+    from observe.store import Store
+    st = Store.__new__(Store)
+    st.storage = storage
+    return st
+
+
+async def test_hourly_series_returns_plain_floats_on_every_backend(storage):
+    from observe.checks.base import CheckResult, Result
+    st = _store_on(storage)
+    base = (time.time() // 3600 - 2) * 3600
+    for i, (res, val) in enumerate([(Result.OK, 10.0), (Result.OK, 20.0),
+                                    (Result.FAIL, 999.0), (Result.OK, None)]):
+        await st.record("m", base + i * 60 + 0.5, CheckResult(res, "", value=val))
+    await st.record("m", base + 3600 + 5, CheckResult(Result.WARN, "", value=40.0))
+    got = await st.hourly_series("m", 1)
+    assert got == [(base + 1800, 15.0), (base + 5400, 40.0)]
+    assert all(type(t) is float and type(v) is float for t, v in got)
+
+
+async def test_availability_is_a_plain_float_percentage_on_every_backend(storage):
+    from observe.checks.base import CheckResult, Result
+    st = _store_on(storage)
+    now = time.time()
+    for i, res in enumerate([Result.OK, Result.OK, Result.WARN, Result.FAIL]):
+        await st.record("m", now - 10 - i, CheckResult(res, ""))
+    got = await st.availability("m", 1)
+    assert got == 75.0 and type(got) is float
+    assert await st.availability("none", 1) is None
+
+
+async def test_the_summary_views_return_plain_ints_and_floats_on_every_backend(storage):
+    now = time.time()
+    base = _recent_hour(now)
+    await _samples(storage, base, [(10, 10.0), (20, 30.0), (310, 5.0)])
+    await storage.rollup(now)
+    for view in ("metric_5m", "metric_hourly"):
+        rows = await storage.fetchall(f"SELECT n, sum_v, min_v, max_v, avg_v FROM {view}")
+        assert rows
+        for n, sum_v, min_v, max_v, avg_v in rows:
+            assert type(n) is int
+            assert all(type(x) is float for x in (sum_v, min_v, max_v, avg_v))
+    total = await storage.fetchall("SELECT SUM(n) FROM metric_5m")
+    assert int(total[0][0]) == 3
+
+
+async def test_latest_host_picks_the_newest_row_and_breaks_a_tie_by_insertion_order(storage):
+    st = _store_on(storage)
+    now = time.time()
+    await storage.execute("INSERT INTO hosts (host, first_seen, last_seen, clean_shutdown) "
+                          "VALUES ('h', 1, ?, 1)", (now,))
+    for value in (1.0, 2.0, 3.0):  # one timestamp: the row inserted last wins
+        await storage.execute(
+            "INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
+            "VALUES (?, 'h', 'cpu', 'temp', '{}', ?, 'C')", (now - 5, value))
+    await storage.execute(
+        "INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
+        "VALUES (?, 'h', 'disk', 'used', '{}', 7.5, '%')", (now - 5000,))
+    got = await st.latest_host("h", window=60, now=now, series=(("disk", "used"),))
+    by_metric = {(s["source"], s["metric"]): s for s in got["samples"]}
+    assert by_metric[("cpu", "temp")]["value"] == 3.0
+    assert by_metric[("disk", "used")]["value"] == 7.5  # silent series still read
+    assert type(got["last_seen"]) is float and got["clean_shutdown"] in (0, 1)
+    assert await st.latest_host("nobody") is None

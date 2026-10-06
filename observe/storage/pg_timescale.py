@@ -17,6 +17,18 @@ from __future__ import annotations
 from .rollups import WIDTH_1D, WIDTH_1H, WIDTH_5M, RetentionLevels
 
 HYPERTABLE_CHUNK_S = 86400
+INTEGER_NOW_FUNC = "observe_now_s"
+
+
+def integer_now_statement(relation: str, *, tolerant: bool = False) -> str:
+    """Register the integer_now function, which every policy on an integer time column needs.
+    A continuous aggregate normally inherits it from its source, so for those the call may be
+    refused as already set and is then ignored."""
+    call = (f"set_integer_now_func('{relation}', '{INTEGER_NOW_FUNC}', replace_if_exists => TRUE)")
+    if not tolerant:
+        return f"SELECT {call}"
+    return f"DO $$ BEGIN PERFORM {call}; EXCEPTION WHEN others THEN NULL; END $$"
+
 
 SETUP = (
     "ALTER TABLE host_samples ADD COLUMN IF NOT EXISTS ts_s BIGINT",
@@ -31,7 +43,7 @@ SETUP = (
     "if_not_exists => TRUE, migrate_data => TRUE)",
     "CREATE OR REPLACE FUNCTION observe_now_s() RETURNS bigint LANGUAGE sql STABLE AS "
     "$$ SELECT floor(extract(epoch FROM now()))::bigint $$",
-    "SELECT set_integer_now_func('host_samples', 'observe_now_s', replace_if_exists => TRUE)",
+    integer_now_statement("host_samples"),
     "ALTER TABLE host_samples SET (timescaledb.compress, "
     "timescaledb.compress_segmentby = 'host, source, metric', "
     "timescaledb.compress_orderby = 'ts_s DESC')",
@@ -52,6 +64,17 @@ SETUP = (
     f"GROUP BY host, source, metric, labels, time_bucket({WIDTH_1D}::bigint, bucket) WITH NO DATA",
 )
 
+def apply_setup(conn) -> None:
+    """Run SETUP on a raw driver connection. Continuous aggregates cannot be created inside a
+    transaction block, so any open transaction is committed and autocommit is switched on first,
+    and the connection is left in autocommit."""
+    if not getattr(conn, "autocommit", False):
+        conn.commit()
+        conn.autocommit = True
+    for stmt in SETUP:
+        conn.execute(stmt)
+
+
 IS_HYPERTABLE = ("SELECT 1 FROM timescaledb_information.hypertables "
                  "WHERE hypertable_name = 'host_samples'")
 
@@ -61,10 +84,16 @@ def refresh_start_offsets(levels: RetentionLevels) -> dict[str, int]:
     the retention of its source, or the aggregate would be rebuilt from nothing and lose the
     buckets whose source rows are gone, so each is at most half the source's retention."""
     raw_s = levels.raw_days * 86400
+
+    def aligned(seconds: int, width: int) -> int:
+        # A multiple of the bucket width, and at least three buckets so the window always holds
+        # whole buckets after the end offset of one bucket is taken off.
+        return max(3 * width, seconds // width * width)
+
     return {
-        "rollup_5m": max(3 * WIDTH_5M, min(86400, raw_s // 2)),
-        "rollup_1h": max(3 * WIDTH_1H, min(7 * 86400, levels.rollup_5m_days * 86400 // 2)),
-        "rollup_1d": max(3 * WIDTH_1D, min(30 * 86400, levels.hourly_days * 86400 // 2)),
+        "rollup_5m": aligned(min(86400, raw_s // 2), WIDTH_5M),
+        "rollup_1h": aligned(min(7 * 86400, levels.rollup_5m_days * 86400 // 2), WIDTH_1H),
+        "rollup_1d": aligned(min(30 * 86400, levels.hourly_days * 86400 // 2), WIDTH_1D),
     }
 
 
@@ -72,7 +101,9 @@ def policy_statements(levels: RetentionLevels) -> list[str]:
     """Remove and add every policy from the retention levels, so the call is repeatable."""
     starts = refresh_start_offsets(levels)
     raw_s = levels.raw_days * 86400
-    out: list[str] = []
+    out: list[str] = [integer_now_statement("host_samples")]
+    for view in ("rollup_5m", "rollup_1h", "rollup_1d"):
+        out.append(integer_now_statement(view, tolerant=True))
     for view, width, every in (("rollup_5m", WIDTH_5M, "5 minutes"), ("rollup_1h", WIDTH_1H,
                                                                       "1 hour"),
                                ("rollup_1d", WIDTH_1D, "1 day")):
@@ -97,7 +128,7 @@ def refresh_statements(now: float, levels: RetentionLevels) -> list[str]:
     out = []
     for view, width in (("rollup_5m", WIDTH_5M), ("rollup_1h", WIDTH_1H), ("rollup_1d", WIDTH_1D)):
         end = complete // width * width
-        start = (int(now) - starts[view]) // width * width
+        start = min((int(now) - starts[view]) // width * width, end - width)
         out.append(f"CALL refresh_continuous_aggregate('{view}', {start}, {end})")
     return out
 

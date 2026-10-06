@@ -27,6 +27,7 @@ _TYPE_WORDS = (
 )
 _PRAGMA_TABLE_INFO = re.compile(r"^\s*PRAGMA\s+table_info\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;?\s*$",
                                 re.IGNORECASE)
+_ROWID = re.compile(r"\browid\b", re.IGNORECASE)
 _SCALAR_FUNCS = re.compile(r"\b(MAX|MIN)\s*\(", re.IGNORECASE)
 
 
@@ -98,6 +99,8 @@ def translate_sql(sql: str, *, has_args: bool = True) -> str:
             for pattern, repl in _TYPE_WORDS:
                 text = pattern.sub(repl, text)
         text = _scalar_minmax(text)
+        if not ddl:
+            text = _ROWID.sub("ctid", text)  # insertion-order tie break; PostgreSQL has no rowid
         if has_args:
             text = text.replace("%", "%%").replace("?", "%s")
         out.append(text)

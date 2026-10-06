@@ -125,22 +125,24 @@ class Store:
         """Hourly means of non-null values: [(bucket midpoint ts, mean)]."""
         since = time.time() - days * 86400
         rows = await self.fetch(
-            "SELECT CAST(ts / 3600 AS INTEGER) AS h, AVG(value) FROM results "
-            "WHERE monitor=? AND ts>=? AND value IS NOT NULL AND result != 'fail' "
-            "GROUP BY h ORDER BY h",
+            "SELECT CAST(FLOOR(ts / 3600) AS BIGINT) AS h, CAST(AVG(value) AS DOUBLE PRECISION) "
+            "FROM results WHERE monitor=? AND ts>=? AND value IS NOT NULL AND result != 'fail' "
+            "GROUP BY CAST(FLOOR(ts / 3600) AS BIGINT) ORDER BY h",
             (monitor, since),
         )
-        return [(h * 3600 + 1800.0, float(v)) for h, v in rows]
+        return [(int(h) * 3600 + 1800.0, float(v)) for h, v in rows]
 
     async def availability(self, monitor: str, hours: float) -> float | None:
         """Percent of polls in the window that were not FAIL."""
         since = time.time() - hours * 3600
         rows = await self.fetch(
-            "SELECT COUNT(*), SUM(result != 'fail') FROM results WHERE monitor=? AND ts>=?",
+            "SELECT CAST(COUNT(*) AS BIGINT), "
+            "CAST(COALESCE(SUM(CASE WHEN result != 'fail' THEN 1 ELSE 0 END), 0) AS BIGINT) "
+            "FROM results WHERE monitor=? AND ts>=?",
             (monitor, since),
         )
         total, ok = rows[0]
-        return None if not total else round(ok / total * 100, 3)
+        return None if not total else round(int(ok) / int(total) * 100, 3)
 
     def _ingest_unit(self, db: Conn, batch: Batch, boots: dict[int, tuple[str, int | None]],
                      now: float) -> tuple[int, int, bool]:
@@ -232,7 +234,7 @@ class Store:
             "SELECT source, metric, labels, value, unit, ts FROM ("
             "SELECT source, metric, labels, value, unit, ts, ROW_NUMBER() OVER ("
             "PARTITION BY source, metric, labels ORDER BY ts DESC, rowid DESC) AS n "
-            "FROM host_samples WHERE host=? AND ts>=?) WHERE n=1", (host, since)).fetchall()
+            "FROM host_samples WHERE host=? AND ts>=?) AS newest WHERE n=1", (host, since)).fetchall()
         if not samples and newest_fallback:
             # Nothing inside the window: return the single newest row (one index
             # lookup) so a host that has gone quiet still reads as stale, not empty.
@@ -251,7 +253,7 @@ class Store:
                     "SELECT source, metric, labels, value, unit, ts, ROW_NUMBER() OVER ("
                     "PARTITION BY labels ORDER BY ts DESC, rowid DESC) AS n "
                     "FROM host_samples WHERE host=? AND source=? AND metric=? AND ts<?) "
-                    "WHERE n=1", (host, src, metric, since)).fetchall()
+                    "AS newest WHERE n=1", (host, src, metric, since)).fetchall()
         sources = db.execute(
             "SELECT source, available, reason FROM host_sources WHERE host=?",
             (host,)).fetchall()

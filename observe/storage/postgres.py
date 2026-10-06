@@ -264,8 +264,7 @@ class PgStorage:
         repeatable, so a failed start is run again."""
         assert self._admin is not None and self._wraw is not None
         self._wraw.commit()
-        for stmt in pg_timescale.SETUP:
-            self._admin.raw.execute(stmt)
+        pg_timescale.apply_setup(self._admin.raw)
         for stmt in (rollups.ROLLUP_TABLES[-1], *rollups.METRIC_VIEWS):
             self._admin.execute(stmt)
 

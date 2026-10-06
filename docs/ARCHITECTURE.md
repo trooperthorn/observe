@@ -142,6 +142,17 @@ the shared incremental rollups run unchanged. The choice is made when the databa
 a database created without TimescaleDB is refused under `on`, and a TimescaleDB database is
 refused when the extension is off, because there is no migration path; destroy and redeploy.
 
+Application queries are written once and return the same Python types on both backends. Counts
+and sums that feed arithmetic are cast to `BIGINT` and averages to `DOUBLE PRECISION` in the SQL,
+so PostgreSQL never hands back a `Decimal`; a boolean is never summed (a `CASE` counts instead);
+an hour bucket uses `FLOOR`, because PostgreSQL rounds a cast where SQLite truncates; every
+derived table has an alias; and `rowid`, which the newest-row tie break uses, is rewritten to
+`ctid` by the PostgreSQL dialect. The contract suite in `tests/test_storage.py` runs these
+queries on both backends and asserts plain `int` and `float` results. The TimescaleDB setup runs
+on a connection switched to autocommit (`pg_timescale.apply_setup`), refresh windows and policy
+offsets are multiples of their bucket width, and the policies are preceded by registering the
+`observe_now_s` integer_now function for the hypertable and the aggregates.
+
 The connection string has no password. `storage.password_file` names a secret file that is read
 when the database opens and passed to the driver on its own. Every error, log record from
 `psycopg.pool` and repr that could carry the string or the password is scrubbed

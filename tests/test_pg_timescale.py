@@ -92,3 +92,52 @@ def test_a_refresh_covers_complete_buckets_in_level_order():
     for call in calls:
         start, end = (int(x) for x in call.rstrip(")").rsplit(",", 2)[1:])
         assert start < end <= 1_000_000_000 - 60
+
+
+class FakeAdmin(FakeRaw):
+    """A raw connection that records whether autocommit was on for every statement."""
+
+    def __init__(self, autocommit=False):
+        super().__init__()
+        self.autocommit = autocommit
+        self.commits = 0
+        self.modes = []
+
+    def commit(self):
+        self.commits += 1
+
+    def execute(self, sql, args=None):
+        self.modes.append(self.autocommit)
+        return super().execute(sql, args)
+
+
+def test_the_setup_runs_in_autocommit_after_closing_any_open_transaction():
+    raw = FakeAdmin(autocommit=False)
+    pg_timescale.apply_setup(raw)
+    assert raw.commits == 1 and raw.autocommit is True
+    assert len(raw.calls) == len(pg_timescale.SETUP)
+    assert all(raw.modes)
+    cagg = [sql for sql, _ in raw.calls if "timescaledb.continuous" in sql]
+    assert len(cagg) == 3 and all(m for sql, m in zip(raw.calls, raw.modes) if "continuous" in sql[0])
+
+
+def test_integer_now_is_registered_before_any_policy_is_added():
+    stmts = pg_timescale.policy_statements(RetentionLevels())
+    first_add = next(i for i, s in enumerate(stmts) if "add_" in s and "_policy" in s)
+    registered = [i for i, s in enumerate(stmts) if "set_integer_now_func('host_samples'" in s]
+    assert registered and registered[0] < first_add
+    setup = pg_timescale.SETUP
+    assert (next(i for i, s in enumerate(setup) if "set_integer_now_func" in s)
+            < next(i for i, s in enumerate(setup) if "timescaledb.compress" in s))
+
+
+@pytest.mark.parametrize("raw_days", [1, 3, 7, 45])
+def test_refresh_windows_and_policy_offsets_are_multiples_of_the_bucket_width(raw_days):
+    levels = RetentionLevels(raw_days=raw_days, rollup_5m_days=11, hourly_days=13)
+    widths = {"rollup_5m": 300, "rollup_1h": 3600, "rollup_1d": 86400}
+    for view, start in pg_timescale.refresh_start_offsets(levels).items():
+        assert start % widths[view] == 0
+    for call in pg_timescale.refresh_statements(1_000_000_123.0, levels):
+        view = call.split("'")[1]
+        start, end = (int(x) for x in call.rstrip(")").rsplit(",", 2)[1:])
+        assert start % widths[view] == 0 and end % widths[view] == 0 and start < end

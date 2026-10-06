@@ -87,3 +87,9 @@ def test_every_core_schema_step_translates_without_leaving_sqlite_forms():
             out = translate_sql(step, has_args=False)
             for token in ("AUTOINCREMENT", "INSERT OR", "WITHOUT ROWID", " REAL", " BLOB"):
                 assert token not in out.upper().replace("DOUBLE PRECISION", ""), (version, out)
+
+
+def test_rowid_becomes_ctid_in_queries_but_not_in_ddl():
+    assert translate_sql("SELECT a FROM t ORDER BY ts DESC, rowid DESC") == (
+        "SELECT a FROM t ORDER BY ts DESC, ctid DESC")
+    assert "ctid" not in translate_sql("CREATE TABLE t (a INTEGER) WITHOUT ROWID")
