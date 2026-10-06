@@ -22,6 +22,7 @@
   /* status roles, never used as series colours */
   --o-up: #0c7a0c; --o-up-bg: #e6f4e6;
   --o-warn: #8a5d00; --o-warn-bg: #fdf1d6;
+  --o-degraded: #8f4a00; --o-degraded-bg: #fde6cf;
   --o-serious: #a94718; --o-serious-bg: #fbe9e0;
   --o-down: #c22f2f; --o-down-bg: #fbe5e5;
   --o-pending: #5d6676; --o-pending-bg: #eef0f3;
@@ -45,6 +46,7 @@
   --o-border-input: #6b7686;
     --o-up: #4cc77f; --o-up-bg: rgba(76, 199, 127, .14);
     --o-warn: #f0b429; --o-warn-bg: rgba(240, 180, 41, .14);
+    --o-degraded: #ffa94d; --o-degraded-bg: rgba(255, 169, 77, .18);
     --o-serious: #f08a5d; --o-serious-bg: rgba(240, 138, 93, .14);
     --o-down: #f06a6a; --o-down-bg: rgba(240, 106, 106, .14);
     --o-pending: #98a2b3; --o-pending-bg: rgba(152, 162, 179, .12);
@@ -63,6 +65,7 @@
   --o-border-input: #6b7686;
   --o-up: #4cc77f; --o-up-bg: rgba(76, 199, 127, .14);
   --o-warn: #f0b429; --o-warn-bg: rgba(240, 180, 41, .14);
+  --o-degraded: #ffa94d; --o-degraded-bg: rgba(255, 169, 77, .18);
   --o-serious: #f08a5d; --o-serious-bg: rgba(240, 138, 93, .14);
   --o-down: #f06a6a; --o-down-bg: rgba(240, 106, 106, .14);
   --o-pending: #98a2b3; --o-pending-bg: rgba(152, 162, 179, .12);

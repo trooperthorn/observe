@@ -16,6 +16,7 @@ ul.group { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--o-
 .mon .name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mon .sub, .mon .msg, .mon .fc, .mon .more { margin-left: 0; }
 .mon .sub { color: var(--o-text-muted); font-size: var(--o-fs-sm); margin-top: var(--o-s1); }
+.mon .held { color: var(--o-degraded); font-size: var(--o-fs-sm); margin-top: var(--o-s1); }
 .mon .fc { color: var(--o-text-muted); }
 .mon .fc.soon { color: var(--o-warn); }
 .mon .fc.now { color: var(--o-down); }

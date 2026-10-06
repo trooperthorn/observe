@@ -77,3 +77,37 @@ def test_dashboard_files_are_served_with_lf_endings(tmp_path: Path):
 def test_dashboard_css_uses_tokens_only():
     css = (STATIC / "css" / "dashboard.css").read_text(encoding="utf-8")
     assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(", css)
+
+
+def test_api_monitors_reports_degraded_and_held_child(tmp_path: Path):
+    from observe.state import State
+    path = str(tmp_path / "d.db")
+    store = Store(path)
+    cfg = make_config([{"name": "core", "type": "ping", "host": "10.0.0.1"},
+                       {"name": "edge", "type": "ping", "host": "10.0.0.2",
+                        "depends_on": ["core"]}], server={"db_path": path})
+    sched = Scheduler(cfg, store, Alerter(cfg))
+    from observe.web import create_app
+    client = TestClient(create_app(cfg, store, sched, Alerter(cfg)),
+                        base_url="https://testserver")
+    core = sched.states["core"]
+    core.state, core.degraded = State.WARN, True
+    by = {m["slug"]: m for m in client.get("/api/monitors").json()["monitors"]}
+    assert by["core"]["degraded"] is True and by["core"]["held_by"] is None
+    assert by["edge"]["degraded"] is False and by["edge"]["held_by"] == "core"
+    core.state, core.degraded = State.DOWN, False
+    edge = sched.states["edge"]
+    edge.state = State.DOWN
+    by = {m["slug"]: m for m in client.get("/api/monitors").json()["monitors"]}
+    assert by["edge"]["blocked_by"] == "core" and by["edge"]["held_by"] is None
+    assert by["edge"]["effective_state"] == "unreachable"
+
+
+def test_dashboard_has_degraded_chip_and_held_note_for_both_themes():
+    js = (STATIC / "app.js").read_text(encoding="utf-8")
+    assert '"degraded"' in js and "m.held_by" in js and "Alert held" in js
+    assert 'class="held"' in (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "degraded:" in (STATIC / "js" / "chip-states.js").read_text(encoding="utf-8")
+    assert ".chip.s-degraded" in (STATIC / "css" / "components.css").read_text(encoding="utf-8")
+    tokens = (STATIC / "css" / "tokens.css").read_text(encoding="utf-8")
+    assert tokens.count("--o-degraded:") == 3 and tokens.count("--o-degraded-bg:") == 3

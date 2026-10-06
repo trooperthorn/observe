@@ -7,6 +7,7 @@ export const STATES = {
   warn: { role: "warn", icon: "triangle", word: "Warning" },
   warning: { role: "warn", icon: "triangle", word: "Warning" },
   serious: { role: "serious", icon: "diamond", word: "Soon full" },
+  degraded: { role: "degraded", icon: "half", word: "Degraded" },
   down: { role: "down", icon: "cross", word: "Down" },
   critical: { role: "down", icon: "cross", word: "Critical" },
   unreachable: { role: "unreach", icon: "broken", word: "Unreachable" },
@@ -27,6 +28,7 @@ export const ICONS = {
   cross: [["circle", { cx: 8, cy: 8, r: 6.5 }], ["path", { d: "M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" }]],
   broken: [["path", { d: "M6.5 9.5l-2 2a2.1 2.1 0 0 1-3-3l2-2M9.5 6.5l2-2a2.1 2.1 0 0 1 3 3l-2 2M6 10l1-1M10 6L9 7" }]],
   hollow: [["circle", { cx: 8, cy: 8, r: 6.5 }]],
+  half: [["circle", { cx: 8, cy: 8, r: 6.5 }], ["path", { d: "M8 1.5a6.5 6.5 0 0 1 0 13z" }]],
   clock: [["circle", { cx: 8, cy: 8, r: 6.5 }], ["path", { d: "M8 4.6V8l2.4 1.6" }]],
 };
 

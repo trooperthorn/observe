@@ -90,7 +90,7 @@ function fcText(f) {
 
 function updateRow(node, m) {
   node.className = `mon ${m.effective_state}`;
-  node.querySelector(".state-slot").replaceChildren(statusChip(m.effective_state));
+  node.querySelector(".state-slot").replaceChildren(statusChip(m.degraded && m.effective_state === "warn" ? "degraded" : m.effective_state));
   node.querySelector(".name").textContent = m.name;
   node.querySelector(".val").textContent = fmtVal(m);
   node.querySelector(".type").textContent = m.mode ? `${m.type}/${m.mode}` : m.type;
@@ -98,6 +98,9 @@ function updateRow(node, m) {
   node.querySelector(".target").textContent =
     `${m.target}  ·  ${st} since ${ago(m.since)}  ·  polled ${ago(m.last_at)}` +
     (m.critical ? "" : "  ·  non-critical");
+  const held = node.querySelector(".held");
+  held.hidden = !m.held_by;
+  held.textContent = m.held_by ? `Alert held: ${m.held_by} is being re-checked` : "";
   const link = node.querySelector(".hostlink");
   link.hidden = m.type !== "pushed_host";
   if (m.type === "pushed_host") link.href = `/host?name=${encodeURIComponent(m.target)}`;

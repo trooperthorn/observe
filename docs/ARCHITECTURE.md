@@ -383,6 +383,12 @@ is itself in a re-check (`Rollup.degraded_parent`), the child's alert is held wi
 event; when the ancestor recovers, `_release_children` polls the child again and alerts if it
 still fails.
 
+The dashboard shows this. `/api/monitors` returns `degraded` for a monitor in its re-check and
+`held_by` (the name of the re-checking ancestor, null when none or when an ancestor is Down and
+`blocked_by` applies). `app.js` draws a Degraded chip, its own `degraded` role and colour tokens
+in the light and both dark blocks, instead of the plain Warning chip, and a "Alert held" note on
+the child row.
+
 ## Status integration
 
 A pushed host becomes a monitor of type `pushed_host` when it is listed in the

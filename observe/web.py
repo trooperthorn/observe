@@ -81,6 +81,7 @@ def _monitor_view(mon: Any, st: Any, sched: Any) -> dict[str, Any]:
         "degraded": st.degraded,
         "effective_state": effective,
         "blocked_by": blocker,
+        "held_by": None if blocker else sched.rollup.degraded_parent(mon.slug),
         "depends_on": [p.name for p in sched.config.parents(mon)],
         "critical": mon.critical,
         "forecast": fc.as_dict() if fc else None,

@@ -38,6 +38,7 @@ button.kpi:hover { background: var(--o-surface-subtle); border-color: var(--o-ac
 .tile .tile-count { font-size: var(--o-fs-h); font-weight: 650; font-variant-numeric: tabular-nums; }
 .tile.s-up { background: var(--o-up-bg); color: var(--o-up); }
 .tile.s-warn { background: var(--o-warn-bg); color: var(--o-warn); }
+.tile.s-degraded { background: var(--o-degraded-bg); color: var(--o-degraded); }
 .tile.s-serious { background: var(--o-serious-bg); color: var(--o-serious); }
 .tile.s-down { background: var(--o-down-bg); color: var(--o-down); }
 .tile.s-pending { background: var(--o-pending-bg); color: var(--o-pending); }
@@ -51,6 +52,7 @@ button.kpi:hover { background: var(--o-surface-subtle); border-color: var(--o-ac
              stroke-linecap: round; stroke-linejoin: round; }
 .chip.s-up, .toast.s-up { background: var(--o-up-bg); color: var(--o-up); }
 .chip.s-warn, .toast.s-warn { background: var(--o-warn-bg); color: var(--o-warn); }
+.chip.s-degraded, .toast.s-degraded { background: var(--o-degraded-bg); color: var(--o-degraded); }
 .chip.s-serious, .toast.s-serious { background: var(--o-serious-bg); color: var(--o-serious); }
 .chip.s-down, .toast.s-down { background: var(--o-down-bg); color: var(--o-down); }
 .chip.s-pending, .toast.s-pending { background: var(--o-pending-bg); color: var(--o-pending); }

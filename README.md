@@ -62,7 +62,9 @@ set on any monitor; a monitor's own value beats the default, and a
 
 The Degraded notice and the recovery from it are not alerted. An alert target
 receives them only with `notify_degraded: true`. The start, the recovery and its
-duration are in the event history.
+duration are in the event history. The dashboard shows a monitor in its re-check with a
+Degraded chip, separate from Warning, and a child whose parent is being re-checked carries a
+note that its alert is held.
 
 A pushed host does not answer polls. When no batch arrives within
 `stale_after`, the host is Degraded, and each re-check pings the host (or opens
