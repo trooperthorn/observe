@@ -116,6 +116,58 @@ class Store:
 
         await self.storage.write(unit, touches=("monitors", "metrics"))
 
+    async def backfill_monitor_series(self, batch: int = 2000) -> int:
+        """Copy poll rows older than a monitor's first series point into the series. Before the
+        series existed every poll was only a row in results, and availability and the forecast now
+        read the series, so an upgraded install would otherwise show no history. Newest rows go
+        first, so an interrupted run leaves no gap and the next start continues below the oldest
+        point already copied. Returns the number of rows copied."""
+        monitors = [r[0] for r in await self.fetch("SELECT DISTINCT monitor FROM results")]
+        copied = 0
+        for monitor in monitors:
+            while True:
+                first = await self.fetch(
+                    "SELECT MIN(sm.ts) FROM samples sm JOIN series s ON s.id = sm.series_id "
+                    "JOIN resources r ON r.id = s.resource_id JOIN scopes sc ON sc.id = s.scope_id "
+                    "WHERE r.kind = 'monitor' AND r.name = ? AND sc.name = ? AND s.metric = ?",
+                    (monitor, MONITOR_SCOPE, "monitor.up"))
+                cutoff = first[0][0] if first and first[0][0] is not None else None
+                if cutoff is None:
+                    rows = await self.fetch(
+                        "SELECT ts, result, value, latency_ms FROM results WHERE monitor = ? "
+                        "ORDER BY ts DESC LIMIT ?", (monitor, batch))
+                else:
+                    rows = await self.fetch(
+                        "SELECT ts, result, value, latency_ms FROM results WHERE monitor = ? "
+                        "AND ts < ? ORDER BY ts DESC LIMIT ?", (monitor, cutoff / 1000.0, batch))
+                if not rows:
+                    break
+                await self.storage.write(
+                    lambda db, rows=rows, monitor=monitor: self._backfill_unit(db, monitor, rows),
+                    touches=("monitors", "metrics"))
+                copied += len(rows)
+        return copied
+
+    def _backfill_unit(self, db: Conn, monitor: str, rows: list[tuple[Any, ...]]) -> None:
+        points: list[series.Point] = []
+        newest = 0.0
+        for ts, result, value, latency in rows:
+            res = Result(result)
+            ms = series.to_ms(ts)
+            newest = max(newest, ts)
+
+            def point(metric: str, unit: str, v: float, ms: int = ms) -> series.Point:
+                return series.Point(MONITOR_SCOPE, metric, unit, "{}", ms, v)
+
+            points.append(point("monitor.up", "1", 0.0 if res is Result.FAIL else 1.0))
+            points.append(point("monitor.result", "1", RESULT_CODE[res]))
+            if value is not None and res is not Result.FAIL:
+                points.append(point("monitor.value", "", value))
+            if latency is not None:
+                points.append(point("monitor.latency", "ms", latency))
+        series.record_points(db, kind="monitor", name=monitor, points=points, now=newest,
+                             rollups=self.storage.incremental_rollups)
+
     async def last_result(self, monitor: str) -> tuple[float, Result] | None:
         """The newest poll result of a monitor and when it was taken, from the latest table."""
         rows = await self.fetch(

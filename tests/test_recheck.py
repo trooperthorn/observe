@@ -434,8 +434,46 @@ async def test_a_restart_restores_the_state_from_the_latest_result(storage):
     fresh = Scheduler(env.cfg, env.store, Alerter(env.cfg), clock=env.clock)
     for slug in ("a", "b"):
         await fresh.restore(fresh.by_slug[slug])
-    assert fresh.states["a"].state is State.UP and fresh.states["b"].state is State.WARN
+    assert fresh.states["a"].state is State.UP
+    assert fresh.states["b"].state is State.PENDING  # a problem is evaluated again and alerts
     env.clock.now += 3600  # a stale result is not trusted
     await fresh.restore(fresh.by_slug["old"])
     assert fresh.states["old"].state is State.PENDING
     assert not fresh.states["b"].alert_open
+
+
+async def test_a_problem_that_continues_across_a_restart_still_alerts(storage):
+    env = Env(storage, [mon("a")], failures_to_down=1, recheck_window=0)
+    env.probes["a"].result = CheckResult.fail("refused")
+    await env.poll("a")
+    env.sent.clear()
+    fresh = Scheduler(env.cfg, env.store, Alerter(env.cfg), clock=env.clock)
+    sent = []
+
+    async def record(monitor, tr):
+        sent.append(tr.current.value)
+
+    fresh.alerter.notify = record
+    fresh.checks["a"] = env.probes["a"]
+    await fresh.restore(fresh.by_slug["a"])
+    await fresh.poll_once(fresh.by_slug["a"])
+    await settle(storage)
+    assert sent == ["down"]
+
+
+async def test_history_from_before_the_series_existed_is_backfilled(storage):
+    """A database from the previous version has poll rows and no monitor series."""
+    st = _store_on(storage)
+    rows = [(T0 - 100 * i, "ok" if i != 3 else "fail", 10.0 + i, 5.0, "") for i in range(1, 9)]
+    for r in rows:
+        await st.execute("INSERT INTO results VALUES (?,?,?,?,?,?)", ("m",) + r)
+    await settle(storage)
+    assert await st.availability("m", 1, now=T0) is None
+    assert await st.backfill_monitor_series(batch=3) == 8
+    await settle(storage)
+    assert await st.availability("m", 1, now=T0) == 87.5
+    assert await st.hourly_series("m", 1, now=T0)
+    # A second start copies nothing, and newer live polls are not disturbed.
+    assert await st.backfill_monitor_series() == 0
+    await st.record("m", T0, CheckResult.ok("up"))
+    assert await st.backfill_monitor_series() == 0

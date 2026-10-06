@@ -83,15 +83,18 @@ class Scheduler:
     async def restore(self, monitor: Any) -> None:
         """Take the monitor's state from its newest stored result (the latest table), so a
         restart does not show everything as pending. A result older than three intervals is not
-        trusted. Nothing is alerted: a restored problem recovers silently."""
+        trusted. Only a good result is restored. A WARN or FAIL result leaves the monitor pending,
+        so a problem that continues across a restart is evaluated again and alerts as usual."""
         found = await self.store.last_result(monitor.slug)
         st = self.states[monitor.slug]
         if found is None or st.state is not State.PENDING:
             return
         at, result = found
+        if result is not Result.OK:
+            return
         if self.clock() - at > 3 * self.config.effective(monitor, "interval"):
             return
-        st.state = {Result.OK: State.UP, Result.WARN: State.WARN, Result.FAIL: State.DOWN}[result]
+        st.state = State.UP
         st.since = at
 
     async def _probe(self, monitor: Any) -> CheckResult:
