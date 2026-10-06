@@ -10,6 +10,10 @@ Alert decisions live here because they need the whole picture:
   of racing it.
 * If an ancestor is DOWN, the child's alert is suppressed and the event is
   recorded with the name of the blocking ancestor.
+* A failed check that means "nothing answered" starts the fast re-check (state.py): the monitor
+  is Warning, "Degraded: not responding", and is polled every `recheck_interval` seconds. While a
+  parent is Down the child starts no re-check of its own. While a parent is in its own re-check
+  window the child's alert is held, and sent when the parent recovers if the child still fails.
 * An UP alert is sent only if the matching problem alert was sent.
 * When a parent recovers, any descendant that is still DOWN or WARN on its
   own is alerted then, because it is now a real, separate problem.
@@ -39,8 +43,10 @@ _PROBLEM = (State.DOWN, State.WARN)
 
 
 class Scheduler:
-    def __init__(self, config: Config, store: Store, alerter: Alerter) -> None:
+    def __init__(self, config: Config, store: Store, alerter: Alerter,
+                 clock: Callable[[], float] = time.time) -> None:
         self.config = config
+        self.clock = clock
         self.store = store
         self.alerter = alerter
         self.monitors = [m for m in config.monitors if m.enabled]
@@ -48,7 +54,10 @@ class Scheduler:
         self.checks = {m.slug: build_check(m, config, store) for m in self.monitors}
         self.states = {
             m.slug: MonitorState(config.effective(m, "failures_to_down"),
-                                 config.effective(m, "recoveries_to_up"))
+                                 config.effective(m, "recoveries_to_up"),
+                                 recheck_window=config.effective(m, "recheck_window"),
+                                 recheck_good=config.effective(m, "recheck_good"),
+                                 since=clock())
             for m in self.monitors
         }
         self.rollup = Rollup(config, self.states)
@@ -64,10 +73,33 @@ class Scheduler:
 
     # ---------------------------------------------------------------- polling
 
+    def delay(self, monitor: Any) -> float:
+        """Seconds until the monitor is polled again: the re-check interval while it is
+        Degraded, the polling interval otherwise."""
+        if self.states[monitor.slug].degraded:
+            return float(self.config.effective(monitor, "recheck_interval"))
+        return float(self.config.effective(monitor, "interval"))
+
+    async def restore(self, monitor: Any) -> None:
+        """Take the monitor's state from its newest stored result (the latest table), so a
+        restart does not show everything as pending. A result older than three intervals is not
+        trusted. Nothing is alerted: a restored problem recovers silently."""
+        found = await self.store.last_result(monitor.slug)
+        st = self.states[monitor.slug]
+        if found is None or st.state is not State.PENDING:
+            return
+        at, result = found
+        if self.clock() - at > 3 * self.config.effective(monitor, "interval"):
+            return
+        st.state = {Result.OK: State.UP, Result.WARN: State.WARN, Result.FAIL: State.DOWN}[result]
+        st.since = at
+
     async def _probe(self, monitor: Any) -> CheckResult:
         async with self._sem:
+            check = self.checks[monitor.slug]
+            check.rechecking = self.states[monitor.slug].degraded
             try:
-                return await self.checks[monitor.slug].run()
+                return await check.run()
             except Exception as err:  # noqa: BLE001 - a buggy check must not stop the loop
                 log.exception("check %s raised", monitor.name)
                 return CheckResult.fail(f"internal error: {type(err).__name__}: {err}")
@@ -75,9 +107,10 @@ class Scheduler:
     async def poll_once(self, monitor: Any) -> CheckResult:
         async with self._locks[monitor.slug]:
             res = await self._probe(monitor)
-            now = time.time()
+            now = self.clock()
             await self.store.record(monitor.slug, now, res)
-            tr = self.states[monitor.slug].observe(res, now)
+            tr = self.states[monitor.slug].observe(
+                res, now, allow_recheck=self.rollup.blocking_parent(monitor.slug) is None)
         if tr is not None:
             await self._on_transition(monitor, tr)
         return res
@@ -103,7 +136,7 @@ class Scheduler:
             attempts = 0
             # Poll while the parent is unconfirmed: failing but not yet DOWN,
             # or never polled at all (PENDING with no history, e.g. at startup).
-            while (st.state is not State.DOWN
+            while (st.state is not State.DOWN and not st.degraded
                    and (st.bad > 0 or (st.state is State.PENDING and st.good == 0))
                    and attempts < st.failures_to_down):
                 attempts += 1
@@ -118,19 +151,27 @@ class Scheduler:
 
     async def _on_transition(self, monitor: Any, tr: Transition) -> None:
         st = self.states[monitor.slug]
-        if tr.current in _PROBLEM:
+        if tr.degraded and tr.current is State.WARN:
+            self._send(monitor, tr)  # only targets that opted in to degraded notices get it
+        elif tr.current in _PROBLEM:
             blocker = self.rollup.blocking_parent(monitor.slug)
             if blocker is None and monitor.depends_on:
                 await self._confirm_parents(monitor)
                 blocker = self.rollup.blocking_parent(monitor.slug)
+            holding = None if blocker else self.rollup.degraded_parent(monitor.slug)
             if blocker:
                 tr.message += f" [alert suppressed: {blocker} is down]"
+            elif holding:
+                tr.message += f" [alert held: {holding} is being re-checked]"
             else:
                 st.alert_open = True
                 self._send(monitor, tr)
         elif tr.current is State.UP:
             if st.alert_open:
                 st.alert_open = False
+                tr.degraded = False
+                self._send(monitor, tr)
+            elif tr.degraded:
                 self._send(monitor, tr)
 
         log.info("%s: %s -> %s (%s)", monitor.name, tr.previous.value, tr.current.value,
@@ -182,12 +223,13 @@ class Scheduler:
 
     async def _loop(self, monitor: Any) -> None:
         interval = self.config.effective(monitor, "interval")
+        await self.restore(monitor)
         await asyncio.sleep(random.uniform(0, min(interval, 10)))  # spread the first wave
         while True:
             started = asyncio.get_running_loop().time()
             await self.poll_once(monitor)
             elapsed = asyncio.get_running_loop().time() - started
-            await asyncio.sleep(max(1.0, interval - elapsed))
+            await asyncio.sleep(max(1.0, self.delay(monitor) - elapsed))
 
     async def _hook_loop(self) -> None:
         while True:

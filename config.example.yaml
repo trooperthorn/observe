@@ -84,6 +84,9 @@ defaults:
   timeout: 5            # seconds per probe
   failures_to_down: 3   # consecutive FAILs before DOWN (and an alert)
   recoveries_to_up: 1   # consecutive OKs before UP
+  recheck_interval: 10  # seconds between checks while a monitor is Degraded (minimum 5)
+  recheck_window: 180   # seconds of Degraded before DOWN; 0 turns the re-check off
+  recheck_good: 2       # good replies in a row that return a Degraded monitor to UP
 
 credentials:
   snmp-v2-legacy:

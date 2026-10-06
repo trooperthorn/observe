@@ -31,6 +31,9 @@ class CheckResult:
     unit: str = ""
     latency_ms: float | None = None
     detail: dict[str, Any] = field(default_factory=dict)
+    # True for a failure that means "no reply" (nothing answered), as opposed to a reply that
+    # was wrong or past a threshold. Only these start the fast re-check (section 10.3).
+    unreachable: bool = False
 
     @classmethod
     def fail(cls, message: str, **kw: Any) -> "CheckResult":
@@ -72,6 +75,8 @@ class Check:
         self.monitor = monitor
         self.config = config
         self.timeout: float = config.effective(monitor, "timeout")
+        # Set by the scheduler before each run: the monitor is in its fast re-check window.
+        self.rechecking: bool = False
 
     def credential(self) -> Any:
         name = getattr(self.monitor, "credential", None)

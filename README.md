@@ -41,7 +41,42 @@ Each poll returns OK, WARN, or FAIL. A monitor becomes DOWN only after
 consecutive WARN-or-worse results, and UP after `recoveries_to_up`
 consecutive OKs. Alerts fire on those transitions, not on individual polls.
 The first transition after a restart (PENDING to UP) is recorded but not
-alerted.
+alerted. After a restart a monitor takes its starting state from its newest
+stored result (never older than three intervals) instead of showing pending,
+and a restored problem recovers without an alert.
+
+### Degraded: the fast re-check
+
+A check that gets no reply (a ping, TCP connect or HTTP request that nothing
+answered, or a pushed host that missed its batch) does not wait for the next
+poll and does not jump to DOWN. The monitor becomes WARN at once with the
+message "Degraded: not responding" and is checked every `recheck_interval`
+seconds (default 10, minimum 5). `recheck_good` good replies in a row (default
+2) return it to UP. If `recheck_window` seconds (default 180) pass without that
+recovery it becomes DOWN, the DOWN alert is sent and the normal polling rate
+resumes, so a host that stays down is not hammered. A wrong answer (an HTTP
+500, a threshold breach) is not a missed reply and uses the ordinary
+`failures_to_down` counts. All three settings live under `defaults` and can be
+set on any monitor; a monitor's own value beats the default, and a
+`recheck_window` of 0 turns the re-check off for it.
+
+The Degraded notice and the recovery from it are not alerted. An alert target
+receives them only with `notify_degraded: true`. The start, the recovery and its
+duration are in the event history.
+
+A pushed host does not answer polls. When no batch arrives within
+`stale_after`, the host is Degraded, and each re-check pings the host (or opens
+a TCP connection to `recheck_port`). Set `address` when the name the agent sends
+does not resolve. An answer, or a batch arriving in the window, is a good
+reply. A host whose agent stays silent while the host itself answers will cycle
+between Degraded and UP, which is the signal to fix the agent.
+
+A child of a Down parent shows Unreachable and starts no re-check of its own.
+While a parent is in its re-check window, the child's alert is held; if the
+parent recovers and the child still fails, the child is alerted then.
+
+Availability and the hourly series behind forecasts are read from the summary
+views (`metric_5m`, `metric_hourly`), not from raw poll rows.
 
 ## Quick start (details below) (Docker on Debian or a Pi)
 

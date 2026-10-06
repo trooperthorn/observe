@@ -39,7 +39,7 @@ class PingCheck(Check):
             return CheckResult.fail(f"ping error: {err}")
         detail = {"packet_loss": host.packet_loss, "sent": host.packets_sent}
         if not host.is_alive:
-            return CheckResult.fail(f"no reply from {m.host}", detail=detail)
+            return CheckResult.fail(f"no reply from {m.host}", detail=detail, unreachable=True)
         msg = f"{host.avg_rtt:.1f} ms avg, {host.packet_loss:.0%} loss"
         res = CheckResult.ok(msg, value=host.avg_rtt, unit=" ms", latency_ms=host.avg_rtt,
                              detail=detail)
@@ -58,7 +58,8 @@ class TcpCheck(Check):
                 asyncio.open_connection(m.host, m.port), self.timeout
             )
         except (OSError, asyncio.TimeoutError) as err:
-            return CheckResult.fail(f"connect {m.host}:{m.port} failed: {err or 'timeout'}")
+            return CheckResult.fail(f"connect {m.host}:{m.port} failed: {err or 'timeout'}",
+                                    unreachable=True)
         connect_ms = (loop.time() - start) * 1000
         try:
             if m.send:
@@ -97,7 +98,7 @@ class HttpCheck(Check):
             ) as client:
                 resp = await client.request(m.method, m.url, headers=m.headers)
         except httpx.HTTPError as err:
-            return CheckResult.fail(f"{type(err).__name__}: {err}")
+            return CheckResult.fail(f"{type(err).__name__}: {err}", unreachable=True)
         ms = resp.elapsed.total_seconds() * 1000
         if resp.status_code not in m.expect_status:
             return CheckResult.fail(

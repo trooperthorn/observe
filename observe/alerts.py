@@ -38,6 +38,7 @@ def payload(monitor: Any, tr: Transition) -> dict[str, Any]:
         "previous": tr.previous.value,
         "state": tr.current.value,
         "message": tr.message,
+        "degraded": tr.degraded,
         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(tr.at)),
     }
 
@@ -52,9 +53,11 @@ class Alerter:
     async def notify(self, monitor: Any, tr: Transition) -> None:
         if not tr.alertable:
             return
+        # A degraded notice (the start or the end of a fast re-check) goes only to a target that
+        # opted in with notify_degraded, whatever its notify_on says.
         targets = [a for a in self.config.alerts
                    if (monitor.alerts is None or a.name in monitor.alerts)
-                   and tr.current.value in a.notify_on]
+                   and (a.notify_degraded if tr.degraded else tr.current.value in a.notify_on)]
         await asyncio.gather(*(self._deliver(a, monitor, tr) for a in targets))
 
     async def _deliver(self, target: Any, monitor: Any, tr: Transition) -> None:

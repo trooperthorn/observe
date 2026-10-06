@@ -13,7 +13,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
-from .checks.base import CheckResult
+from .checks.base import CheckResult, Result
 from .ingest.schema import Batch, normalize_severity
 from .state import Transition
 from .storage import Conn, Storage, open_storage, rollups, series
@@ -62,6 +62,15 @@ _LATEST_SQL = ("SELECT sc.name, s.metric, s.attrs, l.value, s.unit, l.ts FROM la
                "JOIN series s ON s.id = l.series_id JOIN scopes sc ON sc.id = s.scope_id ")
 
 
+# A monitor is a resource of kind "monitor"; each poll writes these series under one scope. State
+# is read back from the summary views and the latest table, never from the raw poll rows.
+MONITOR_SCOPE = "observe-monitor"
+RESULT_CODE = {Result.OK: 0.0, Result.WARN: 1.0, Result.FAIL: 2.0}
+CODE_RESULT = {0: Result.OK, 1: Result.WARN, 2: Result.FAIL}
+# A window up to this long is read from the 5 minute level, a longer one from the hourly level.
+FINE_WINDOW_H = 48.0
+
+
 class Store:
     def __init__(self, path: str, plugins: LoadedPlugins | None = None, *,
                  backend: str = "sqlite", dsn: str | None = None, password: str | None = None,
@@ -88,9 +97,39 @@ class Store:
 
     async def record(self, monitor: str, ts: float, res: CheckResult) -> None:
         row = (monitor, ts, res.result.value, res.value, res.latency_ms, res.message)
-        await self.storage.write(
-            lambda db: db.execute("INSERT INTO results VALUES (?,?,?,?,?,?)", row),
-            touches=("monitors",))
+        ms = series.to_ms(ts)
+
+        def point(metric: str, unit: str, value: float) -> series.Point:
+            return series.Point(MONITOR_SCOPE, metric, unit, "{}", ms, value)
+
+        points = [point("monitor.up", "1", 0.0 if res.result is Result.FAIL else 1.0),
+                  point("monitor.result", "1", RESULT_CODE[res.result])]
+        if res.value is not None and res.result is not Result.FAIL:
+            points.append(point("monitor.value", res.unit.strip(), res.value))
+        if res.latency_ms is not None:
+            points.append(point("monitor.latency", "ms", res.latency_ms))
+
+        def unit(db: Conn) -> None:
+            db.execute("INSERT INTO results VALUES (?,?,?,?,?,?)", row)
+            series.record_points(db, kind="monitor", name=monitor, points=points, now=ts,
+                                 rollups=self.storage.incremental_rollups)
+
+        await self.storage.write(unit, touches=("monitors", "metrics"))
+
+    async def last_result(self, monitor: str) -> tuple[float, Result] | None:
+        """The newest poll result of a monitor and when it was taken, from the latest table."""
+        rows = await self.fetch(
+            "SELECT l.ts, l.value FROM latest l JOIN series s ON s.id = l.series_id "
+            "JOIN resources r ON r.id = s.resource_id JOIN scopes sc ON sc.id = s.scope_id "
+            "WHERE r.kind = 'monitor' AND r.name = ? AND sc.name = ? AND s.metric = ?",
+            (monitor, MONITOR_SCOPE, "monitor.result"))
+        if not rows or rows[0][1] is None:
+            return None
+        return rows[0][0] / 1000.0, CODE_RESULT[int(rows[0][1])]
+
+    @staticmethod
+    def _summary_level(hours: float) -> tuple[str, int]:
+        return ("metric_5m", 300) if hours <= FINE_WINDOW_H else ("metric_hourly", 3600)
 
     async def record_event(self, monitor: str, tr: Transition) -> None:
         row = (monitor, tr.at, tr.previous.value, tr.current.value, tr.message)
@@ -122,28 +161,31 @@ class Store:
         keys = ("monitor", "ts", "previous", "current", "message")
         return [dict(zip(keys, r)) for r in rows]
 
-    async def hourly_series(self, monitor: str, days: float) -> list[tuple[float, float]]:
-        """Hourly means of non-null values: [(bucket midpoint ts, mean)]."""
-        since = time.time() - days * 86400
+    async def hourly_series(self, monitor: str, days: float,
+                            now: float | None = None) -> list[tuple[float, float]]:
+        """Hourly means of the non-failing values: [(bucket midpoint ts, mean)]. Read from the
+        hourly summary view."""
+        since = (time.time() if now is None else now) - days * 86400
         rows = await self.fetch(
-            "SELECT CAST(FLOOR(ts / 3600) AS BIGINT) AS h, CAST(AVG(value) AS DOUBLE PRECISION) "
-            "FROM results WHERE monitor=? AND ts>=? AND value IS NOT NULL AND result != 'fail' "
-            "GROUP BY CAST(FLOOR(ts / 3600) AS BIGINT) ORDER BY h",
-            (monitor, since),
-        )
-        return [(int(h) * 3600 + 1800.0, float(v)) for h, v in rows]
+            "SELECT bucket, avg_v FROM metric_hourly WHERE resource = ? AND scope = ? "
+            "AND metric = ? AND bucket >= ? AND avg_v IS NOT NULL ORDER BY bucket",
+            (monitor, MONITOR_SCOPE, "monitor.value", int(since // 3600 * 3600)))
+        return [(float(b) + 1800.0, float(v)) for b, v in rows]
 
-    async def availability(self, monitor: str, hours: float) -> float | None:
-        """Percent of polls in the window that were not FAIL."""
-        since = time.time() - hours * 3600
+    async def availability(self, monitor: str, hours: float,
+                           now: float | None = None) -> float | None:
+        """Percent of polls in the window that were not FAIL, from the summary view (the 5 minute
+        level up to 48 hours, the hourly level beyond), so the cost does not grow with the
+        number of polls."""
+        view, width = self._summary_level(hours)
+        since = (time.time() if now is None else now) - hours * 3600
         rows = await self.fetch(
-            "SELECT CAST(COUNT(*) AS BIGINT), "
-            "CAST(COALESCE(SUM(CASE WHEN result != 'fail' THEN 1 ELSE 0 END), 0) AS BIGINT) "
-            "FROM results WHERE monitor=? AND ts>=?",
-            (monitor, since),
-        )
+            f"SELECT CAST(COALESCE(SUM(n), 0) AS BIGINT), "
+            f"CAST(COALESCE(SUM(sum_v), 0) AS DOUBLE PRECISION) FROM {view} "
+            "WHERE resource = ? AND scope = ? AND metric = ? AND bucket >= ?",
+            (monitor, MONITOR_SCOPE, "monitor.up", int(since // width * width)))
         total, ok = rows[0]
-        return None if not total else round(int(ok) / int(total) * 100, 3)
+        return None if not total else round(float(ok) / int(total) * 100, 3)
 
     def _ingest_unit(self, db: Conn, batch: Batch, boots: dict[int, tuple[str, int | None]],
                      now: float) -> tuple[int, int, bool]:

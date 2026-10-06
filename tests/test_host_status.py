@@ -142,7 +142,9 @@ async def test_one_good_batch_resets_the_count():
 
 
 async def test_stale_host_goes_down_and_recovers():
-    env = Env([host_mon()], f2d=2)
+    # With the re-check window off, the failures_to_down count decides (the new path is in
+    # test_recheck.py).
+    env = Env([host_mon(recheck_window=0)], f2d=2)
     await env.push(temp=40)
     assert (await env.poll()).result.value == "ok"
     env.clock.now += 121

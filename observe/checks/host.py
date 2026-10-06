@@ -15,9 +15,13 @@ when a recent batch arrived (an outbox replay or a lagging agent clock).
 
 from __future__ import annotations
 
+import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
+
+from icmplib import async_ping
+from icmplib.exceptions import ICMPLibError
 
 from ..config import Config, Thresholds
 from .base import Check, CheckResult, Result
@@ -42,17 +46,57 @@ def grade(value: float, th: Thresholds) -> str:
 LATEST_WINDOW_S = 900.0
 
 
+async def reachable(address: str, port: int | None, timeout: float) -> bool:
+    """Whether the host answers: one ICMP echo, or a TCP connect when a port is given. Used for
+    the fast re-check of a pushed host, which does not answer polls (section 10.3)."""
+    if port is not None:
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(address, port), timeout)
+        except (OSError, asyncio.TimeoutError):
+            return False
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
+        return True
+    try:
+        host = await async_ping(address, count=1, timeout=timeout, privileged=False)
+    except (ICMPLibError, OSError):
+        return False
+    return bool(host.is_alive)
+
+
 class PushedHostCheck(Check):
     def __init__(self, monitor: Any, config: Config, store: Any,
-                 clock: Callable[[], float] = time.time) -> None:
+                 clock: Callable[[], float] = time.time,
+                 reach: Callable[[str, int | None, float], Awaitable[bool]] = reachable) -> None:
         super().__init__(monitor, config)
         self.store = store
         self.clock = clock
+        self.reach = reach
         interval = config.effective(monitor, "interval")
         self.stale_after: float = monitor.stale_after or 3 * interval
 
     def thresholds(self) -> Thresholds | None:
         return None  # the component thresholds are applied here, not to one value
+
+    async def _missed(self, age: float) -> CheckResult:
+        """No batch within the stale window. The first miss is a failure that starts the fast
+        re-check. While the monitor is being re-checked, the host's own address is pinged (or its
+        port connected to): an answer is a good reply, because a batch may simply be late."""
+        m = self.monitor
+        detail = {"age_seconds": age, "components": {}}
+        text = f"no batch from {m.host} for {age:.0f}s (limit {self.stale_after:.0f}s)"
+        if self.rechecking:
+            address = m.address or m.host
+            port = m.recheck_port
+            how = f"TCP port {port}" if port is not None else "ping"
+            if await self.reach(address, port, self.timeout):
+                return CheckResult.ok(f"{text}, but {address} answers {how}", value=age, unit="s",
+                                      detail=detail)
+            text += f", and {address} does not answer {how}"
+        return CheckResult.fail(text, value=age, unit="s", detail=detail, unreachable=True)
 
     async def probe(self) -> CheckResult:
         m = self.monitor
@@ -65,9 +109,7 @@ class PushedHostCheck(Check):
                                     detail={"components": {}})
         age = now - data["last_seen"]
         if age > self.stale_after:
-            return CheckResult.fail(
-                f"no batch from {m.host} for {age:.0f}s (limit {self.stale_after:.0f}s)",
-                value=age, unit="s", detail={"age_seconds": age, "components": {}})
+            return await self._missed(age)
 
         components: dict[str, str] = {}
         reasons: dict[str, str] = {}

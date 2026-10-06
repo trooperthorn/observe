@@ -51,6 +51,17 @@ class Rollup:
                 return upstream
         return None
 
+    def degraded_parent(self, slug: str) -> str | None:
+        """Name of the nearest ancestor that is in its fast re-check window. Whether it is
+        Down is not known yet, so a child's alert waits for the answer."""
+        for parent in self._parents(slug):
+            if self.states[parent.slug].degraded:
+                return parent.name
+            upstream = self.degraded_parent(parent.slug)
+            if upstream:
+                return upstream
+        return None
+
     def effective(self, slug: str) -> tuple[str, str | None]:
         """(effective state, name of the blocking ancestor or None)."""
         own = self.states[slug].state

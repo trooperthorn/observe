@@ -39,7 +39,7 @@ def test_basic_auth_and_headers():
 
 async def test_poll_records_history_and_metrics():
     cfg = make_config([{"name": "Loop Back", "type": "tcp", "host": "127.0.0.1", "port": 1,
-                        "group": 'lab"core'}])
+                        "group": 'lab"core', "recheck_window": 0}])
     app, sched = app_for(cfg)
     res = await sched.poll_once(sched.monitors[0])
     assert res.result is Result.FAIL
@@ -86,9 +86,10 @@ async def test_rollup_and_forecast_exposed_in_api_and_metrics():
     import time as _t
 
     cfg = make_config([
-        {"name": "sw", "type": "tcp", "host": "127.0.0.1", "port": 1, "group": "net"},
+        {"name": "sw", "type": "tcp", "host": "127.0.0.1", "port": 1, "group": "net",
+         "recheck_window": 0},
         {"name": "srv", "type": "tcp", "host": "127.0.0.1", "port": 1, "group": "net",
-         "depends_on": ["sw"]},
+         "depends_on": ["sw"], "recheck_window": 0},
         {"name": "disk", "type": "tcp", "host": "127.0.0.1", "port": 1, "forecast": True,
          "thresholds": {"direction": "above", "warn": 80, "crit": 90}},
     ])

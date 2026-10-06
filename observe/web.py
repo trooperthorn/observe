@@ -77,6 +77,7 @@ def _monitor_view(mon: Any, st: Any, sched: Any) -> dict[str, Any]:
         "mode": getattr(mon, "mode", None),
         "target": target,
         "state": st.state.value,
+        "degraded": st.degraded,
         "effective_state": effective,
         "blocked_by": blocker,
         "depends_on": [p.name for p in sched.config.parents(mon)],

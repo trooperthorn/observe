@@ -74,6 +74,18 @@ surfaces write.
 | Pockethernet pages and field change findings | built | The report list, report detail and jack pages are static shells with no data, like `/host`, registered by the plugin under `/plugins/pockethernet` and served with the core CSP. Their data routes (`/api/plugins/pockethernet/reports`, `/report`, `/jack`) are mounted by the core behind a login session and the plugin rate limit, so a visitor gets 401 and basic auth never opens them. They are read only and not audited, as with other plugin reads. Every string in a report, including the notes, preset, site names, neighbour names, step and tool output, is returned as JSON and written with `textContent`; no page uses `innerHTML`, inline script or inline style, so a hostile string renders as text (the wiremap SVG is built with createElementNS and its labels are text nodes, and its colours come from a stylesheet, not inline style), which tests check with hostile values through the API and over the markup. The report detail also shows location and Wi-Fi names, which owner decision stores with the report, to any logged-in user, so treat a login as access to that data. Lists are capped at 200 rows. Field change findings are computed on request from the last two property values and are shown on the dashboard, port page and map to logged-in users only. They never call an alert target, which a test enforces, so a forged report cannot page anyone. A forged report can still raise a false finding or, by writing a better value later, clear a real one, and an unacknowledged warning turns a passing port to Warning; an admin can acknowledge a finding (audited), the report, key prefix and device are recorded with each value, and the findings never change monitor state, rollup or dependencies. |
 | Control channel | built (Observe side) | The channel is pull only: Observe never connects to a host and no host listens. Commands are Ed25519 signed, carry an expiry and a per-host `seq`, and each daemon checks its pinned public key, its own host name, expiry, a never-reused id, a rising `seq` and its own allowlist before acting, so a compromised Observe can request only what a host's allowlist already permits. The signing key is separate from ingest and `wpc_` keys, and a stolen `wpc_` key can pull and report for one host only and cannot create commands. Requests need an admin session, CSRF, explicit confirmation and, for a reboot, the typed host name; rate limits and the audit log bound a hijacked admin session. Setup and the shared test vector are in docs/CONTROL.md. Residual risk: plain HTTP on the LAN leaves commands readable (use TLS), and the host's allowlist is the only limit on what an admin can request. |
 
+## Re-check probes
+
+The fast re-check of a pushed host (docs/DATA-API-DESIGN.md section 10.3) makes Observe send one
+ICMP echo, or open one TCP connection, every `recheck_interval` seconds (at least 5) for at most
+`recheck_window` seconds, to the host's `address` or name and `recheck_port`. Both values come from
+the YAML that an administrator controls, never from an ingest batch, so a pushing agent cannot
+aim these probes at another address. The probes stop when the host goes Down, so a dead host is not
+probed at the fast rate, and a re-check of a child does not start while its parent is Down. Degraded
+notices go only to alert targets that opt in, so a flapping link cannot fill a channel by default.
+A pushed host that answers ping while its agent is silent reads as recovered; the host stays
+visible as Degraded and Up in the event history, and its data goes stale on the host page.
+
 ## Discovery
 
 Discovery sends credentials to addresses it has not seen before, which is a

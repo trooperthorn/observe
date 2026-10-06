@@ -263,6 +263,9 @@ class Thresholds(Strict):
     crit: float | None = None
 
 
+MIN_RECHECK_INTERVAL = 5.0
+
+
 class MonitorBase(Strict):
     name: str
     group: str = "default"
@@ -270,6 +273,11 @@ class MonitorBase(Strict):
     timeout: float | None = None
     failures_to_down: int | None = None
     recoveries_to_up: int | None = None
+    # The fast re-check after a missed reply (docs/DATA-API-DESIGN.md section 10.3). None means
+    # the value under `defaults`.
+    recheck_interval: float | None = Field(default=None, ge=MIN_RECHECK_INTERVAL)
+    recheck_window: float | None = Field(default=None, ge=0)
+    recheck_good: int | None = Field(default=None, ge=1)
     thresholds: Thresholds | None = None
     alerts: list[str] | None = None  # alert target names; None means all
     enabled: bool = True
@@ -322,6 +330,10 @@ class PushedHostMonitor(MonitorBase):
     # failures_to_down confirmation. A later clean boot clears it at once.
     crash_hold_s: float = Field(default=3600, gt=0)
     crash_result: Literal["warn", "fail"] = "warn"
+    # A pushed host does not answer polls. When a batch is missed, the fast re-check pings
+    # `address` (the host name when empty), or opens a TCP connection to `recheck_port`.
+    address: str | None = None
+    recheck_port: int | None = Field(default=None, ge=1, le=65535)
 
 
 class PingMonitor(MonitorBase):
@@ -661,6 +673,9 @@ class AlertBase(Strict):
     name: str
     # Named notify_on, not "on": YAML 1.1 parses a bare `on:` key as boolean true.
     notify_on: list[Literal["down", "warn", "up"]] = Field(default_factory=lambda: ["down", "up"])
+    # Degraded notices (a monitor in its fast re-check window, and its recovery from it) are
+    # sent only to a target that opts in.
+    notify_degraded: bool = False
 
 
 class WebhookAlert(AlertBase):
@@ -850,6 +865,12 @@ class Defaults(Strict):
     timeout: float = 5.0
     failures_to_down: int = 3
     recoveries_to_up: int = 1
+    # Section 10.3: after a missed reply the monitor is Degraded and is checked every
+    # `recheck_interval` seconds. `recheck_good` good replies in a row return it to Up; no
+    # recovery within `recheck_window` seconds makes it Down. A window of 0 turns the re-check off.
+    recheck_interval: float = Field(default=10.0, ge=MIN_RECHECK_INTERVAL)
+    recheck_window: float = Field(default=180.0, ge=0)
+    recheck_good: int = Field(default=2, ge=1)
 
 
 class Config(Strict):

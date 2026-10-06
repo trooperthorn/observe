@@ -330,6 +330,42 @@ differs. A crash boot makes its `pushed_host` monitor WARN (or DOWN with
 a later clean boot does not alert. Showing events in the event log and on the host view
 is a later slice.
 
+## State from summaries and the Degraded re-check
+
+Each poll result is written twice: the raw row in `results` (message and detail, trimmed by
+retention) and points in the series store under a resource of kind `monitor`, scope
+`observe-monitor`, metrics `monitor.up` (0 for FAIL, else 1), `monitor.result` (0, 1, 2),
+`monitor.value` (not for FAIL) and `monitor.latency`. State is read back from the summary
+levels and the latest table, never from raw rows. `Store.availability` reads `metric_5m` (windows
+up to 48 hours) or `metric_hourly`; `Store.hourly_series`, which feeds forecasts, reads
+`metric_hourly`; `Store.last_result` reads `latest`, and `Scheduler.restore` uses it so a
+restart does not show everything pending. The cost of these reads does not grow with the poll
+count. The host views keep reading the `latest` table, as before.
+
+`observe/state.py` implements section 10.3 of the data design. `CheckResult.unreachable` marks a
+failure that means no reply (set by the ping, TCP and HTTP checks and by a pushed host that
+missed its batch). The first such failure on a monitor that is not Down moves it to WARN with
+`degraded` set and the message "Degraded: not responding". `Scheduler.delay` then returns
+`recheck_interval` instead of the polling interval. `recheck_good` consecutive OK results end the
+episode in UP; an unreachable failure once `recheck_window` seconds have passed since the start
+ends it in DOWN. A reply that is wrong is not a miss and ends the episode into the ordinary
+counts. `recheck_interval`, `recheck_window` and `recheck_good` resolve through
+`Config.effective`: the monitor's own value, else `defaults`.
+
+Transitions of an episode carry `Transition.degraded`. The scheduler hands them to the alerter,
+which sends them only to targets with `notify_degraded` and ignores `notify_on` for them; the Down
+that ends an episode is an ordinary alert. For a pushed host, `PushedHostCheck` fails the first
+miss, and while `Check.rechecking` is set (the scheduler sets it from the state before each
+run) a stale batch is answered by `reachable()`: a ping of `address` or `host`, or a TCP
+connect to `recheck_port`. An answer is an OK result. The probe is injectable, so tests use a
+fake.
+
+Dependencies: `MonitorState.observe(allow_recheck=False)` is used while `Rollup.blocking_parent`
+names a Down ancestor, so the child shows Unreachable and starts no re-check. While an ancestor
+is itself in a re-check (`Rollup.degraded_parent`), the child's alert is held with a note in its
+event; when the ancestor recovers, `_release_children` polls the child again and alerts if it
+still fails.
+
 ## Status integration
 
 A pushed host becomes a monitor of type `pushed_host` when it is listed in the
