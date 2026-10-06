@@ -15,9 +15,11 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+from pydantic import (BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, field_validator,
+                      model_validator)
 
 from . import compat
+from .storage.pg_dsn import check_dsn, read_password
 
 _REF = re.compile(r"\$\{([^}]+)\}")
 
@@ -735,6 +737,39 @@ class ServerConfig(Strict):
         return None if value is None else normalise_public_url(value)
 
 
+class StorageConfig(Strict):
+    """Which database holds the data (docs/DATA-API-DESIGN.md section 12). SQLite, the default,
+    uses server.db_path. PostgreSQL uses the connection string without a password, and the
+    password comes from a secret file so it is never in the config, the logs or an error."""
+
+    backend: Literal["sqlite", "postgres"] = "sqlite"
+    dsn: SecretStr | None = None
+    password_file: str | None = None
+    timescaledb: Literal["auto", "on", "off"] = "auto"
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "StorageConfig":
+        if self.backend == "sqlite":
+            if self.dsn is not None or self.password_file is not None:
+                raise ValueError("storage.dsn and storage.password_file apply only to "
+                                 "storage.backend: postgres")
+            return self
+        if self.dsn is None:
+            raise ValueError("storage.backend: postgres needs storage.dsn")
+        check_dsn(self.dsn.get_secret_value())
+        return self
+
+    def password(self) -> str | None:
+        """The password from its secret file, read when the database is opened."""
+        if self.password_file is None:
+            return None
+        try:
+            return read_password(self.password_file)
+        except (OSError, ValueError) as err:
+            raise ConfigError(f"storage.password_file: cannot use {self.password_file}: "
+                              f"{type(err).__name__}") from None
+
+
 class ForecastSettings(Strict):
     lookback_days: float = 7.0  # history window fitted
     min_points: int = 24  # hourly buckets required before projecting
@@ -819,6 +854,7 @@ class Defaults(Strict):
 
 class Config(Strict):
     server: ServerConfig = Field(default_factory=ServerConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
     defaults: Defaults = Field(default_factory=Defaults)
     forecast: ForecastSettings = Field(default_factory=ForecastSettings)
     discovery: DiscoverySettings = Field(default_factory=DiscoverySettings)
@@ -965,5 +1001,10 @@ def load_config(path: str | Path) -> Config:
     resolved = _resolve_refs(raw)
     try:
         return Config.model_validate(resolved)
-    except Exception as err:  # pydantic.ValidationError, surfaced verbatim
-        raise ConfigError(str(err)) from err
+    except Exception as err:  # pydantic.ValidationError, surfaced with the DSN withheld
+        message = str(err)
+        storage = resolved.get("storage") if isinstance(resolved, dict) else None
+        dsn = storage.get("dsn") if isinstance(storage, dict) else None
+        if isinstance(dsn, str) and dsn:
+            message = message.replace(dsn, "[withheld]")
+        raise ConfigError(message) from None

@@ -271,7 +271,7 @@ Read connections: opened with `file:/data/observe.db?mode=ro` and `uri=True`, th
 
 ### 2.11 Locks that remain
 
-Implementation status (slice r1): the `Storage` protocol, the SQLite writer and read pool, the pragmas above, the `change_seq` table (migration 17) and the ban test exist. The `rollup` operation of the protocol is a no-op until the rollup tables of slice O-2 exist, the PostgreSQL backend and the `storage.backend` config key are a later slice, and units of work still carry SQLite-flavoured SQL with `?` placeholders that the PostgreSQL backend will adapt.
+Implementation status (slices r1 and r1b): the `Storage` protocol, the SQLite writer and read pool, the pragmas above, the `change_seq` table (migration 17) and the ban test exist. Slice r1b added the PostgreSQL backend (`observe/storage/postgres.py`, psycopg 3 and psycopg-pool), the `storage.backend`, `storage.dsn`, `storage.password_file` and `storage.timescaledb` config keys, the TimescaleDB hypertable, continuous aggregates and policies (`pg_timescale.py`), the shared incremental rollups and retention levels (`rollups.py`, migration 18: `rollup_5m`, `rollup_1h`, `rollup_1d`, `rollup_state` and the views `metric_5m`, `metric_hourly`, `metric_daily`, `availability_history`), the compose `postgres` profile and the CI workflow. The summary tables are keyed by the current `host_samples` columns (host, source, metric, labels) and are rekeyed to `series_id` by slice O-2, which also moves the hypertable time column to integer milliseconds. Units of work still carry SQLite-flavoured SQL with `?` placeholders; the PostgreSQL connection rewrites them (`pg_dialect.py`). The PostgreSQL contract cases run in CI and skip locally when `OBSERVE_TEST_PG_DSN` is not set.
 
 
 | Lock | Why it stays |

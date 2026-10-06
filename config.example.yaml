@@ -4,6 +4,15 @@
 #   ${NAME}              environment variable (startup fails if unset)
 #   ${file:/run/secrets/name}   file contents, trailing newline stripped
 
+# Database. SQLite (the default, server.db_path below) suits a Raspberry Pi. PostgreSQL with
+# TimescaleDB suits a larger host; start the compose postgres profile and uncomment this block.
+# The connection string carries no password: it is read from the secret file.
+# storage:
+#   backend: postgres
+#   dsn: postgresql://observe@postgres:5432/observe
+#   password_file: /run/secrets/observe_db_password
+#   timescaledb: auto   # auto uses TimescaleDB when the database has it; on requires it; off never
+
 server:
   listen: 0.0.0.0
   port: 8080

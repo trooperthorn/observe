@@ -99,10 +99,59 @@ same transaction and mirrored in memory after the commit. The domains are `metri
 `store._lock`, `Store._run` and `Store._exec` no longer exist, and `tests/test_storage_ban.py`
 fails the build when code under `observe/` or `plugins/` imports a driver, opens a connection
 or reaches for them. The contract tests in `tests/test_storage.py` run against every backend;
-the PostgreSQL cases run only when `OBSERVE_TEST_PG_DSN` is set. The PostgreSQL backend itself
-is a later slice, and `rollup` does nothing until the sample rollup tables arrive.
+the PostgreSQL cases run only when `OBSERVE_TEST_PG_DSN` is set and skip otherwise.
 
-Pushed data lives in the existing SQLite database, behind a versioned schema.
+### PostgreSQL and TimescaleDB backend
+
+`storage.backend: postgres` selects `observe/storage/postgres.py` (psycopg 3 and psycopg-pool,
+imported only by that module). It has the same shape as the SQLite backend: one writer thread over
+one connection, each unit in its own transaction in submission order, and a pool of three
+read-only repeatable-read connections, so a response sees one snapshot. An empty pool for 2
+seconds raises `StorageBusy`, and a server-side `statement_timeout` of 2 seconds raises
+`StorageTimeout`. Units and schema steps are written once in portable SQL. The connection
+rewrites them in `observe/storage/pg_dialect.py`: `?` becomes `%s`, `INSERT OR IGNORE` becomes
+`ON CONFLICT DO NOTHING`, `INTEGER PRIMARY KEY [AUTOINCREMENT]` becomes an identity column,
+`REAL` becomes `DOUBLE PRECISION` and `INTEGER` becomes `BIGINT`, the two-argument `MAX` and `MIN`
+become `GREATEST` and `LEAST`, and `PRAGMA table_info` becomes a catalogue query. `INSERT OR
+REPLACE` is refused. The core steps and the plugin steps run through the same rewrite, and an
+advisory lock makes two starting processes migrate one at a time.
+
+The summary levels are shared. Migration 18 adds `rollup_5m`, `rollup_1h`, `rollup_1d` (host,
+source, metric, labels, bucket, n, sum, min, max), the watermark table `rollup_state` and four
+views with the same columns on every backend: `metric_5m`, `metric_hourly`, `metric_daily` (with
+`avg_v` as sum over count) and `availability_history` (over `events`). `Storage.rollup(now)`
+folds each level once from the level below it, complete buckets only, inside one write unit
+(`observe/storage/rollups.py`); the scheduler calls it every 5 minutes. A sample that arrives more
+than 60 seconds after its 5 minute bucket was folded stays a raw row and is left out of the
+summaries. `apply_retention` folds first, then trims each level at its own age: raw 7 days (1 to
+30), 5 minute 14 days, hourly 90 days (90 to 180), daily 730 days and the up and down history 730
+days, read from `app_settings` keys `retention.raw_days`, `retention.5m_days`,
+`retention.hourly_days`, `retention.daily_days` and `retention.history_days`. A level is never
+trimmed past what the next level has folded. When no raw setting exists, `server.retention_days`
+is the raw level. The admin page for these settings is a later slice.
+
+With the TimescaleDB extension (`storage.timescaledb: auto` uses it when the database offers it,
+`on` requires it, `off` never uses it) `host_samples` is a hypertable chunked by day on `ts_s`
+(whole seconds, kept by a trigger because `ts` is a REAL), and `rollup_5m`, `rollup_1h` and
+`rollup_1d` are continuous aggregates with the same names and columns as the plain tables, so the
+views are the same text on both. Refresh, retention and compression policies are removed and
+added again from the retention levels at start and at every retention run, so a changed setting
+applies at the next compaction. A refresh window never reaches back past half of its source's
+retention, so a refresh cannot rebuild a bucket whose source rows are gone. On plain PostgreSQL
+the shared incremental rollups run unchanged. The choice is made when the database is created:
+a database created without TimescaleDB is refused under `on`, and a TimescaleDB database is
+refused when the extension is off, because there is no migration path; destroy and redeploy.
+
+The connection string has no password. `storage.password_file` names a secret file that is read
+when the database opens and passed to the driver on its own. Every error, log record from
+`psycopg.pool` and repr that could carry the string or the password is scrubbed
+(`observe/storage/postgres.py`, `Scrubber`), a string that carries a password is refused at
+config load, and a configuration error never echoes the string. `docker-compose.yml` has an
+optional `postgres` profile (TimescaleDB image, volume, `pg_isready` health check, no published
+port) and `.github/workflows/tests.yml` runs the suite on SQLite and on TimescaleDB and plain
+PostgreSQL service containers, with every action pinned to a commit.
+
+Pushed data lives in the database behind a versioned schema (SQLite, or PostgreSQL).
 A `schema_version` table records the applied version. At startup the storage layer
 applies each missing migration in order, one transaction per step, and rolls a
 failed step back. Every step is additive and guarded with `IF NOT EXISTS`, so

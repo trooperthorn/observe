@@ -50,7 +50,7 @@ async def _once(config, only: str | None) -> int:  # type: ignore[no-untyped-def
 
 
 async def _serve(config, plugins) -> None:  # type: ignore[no-untyped-def]
-    store = Store(config.server.db_path, plugins)
+    store = Store.from_config(config, plugins)
     alerter = Alerter(config)
     sched = Scheduler(config, store, alerter)
     app = create_app(config, store, sched, alerter, plugins=plugins)
@@ -167,7 +167,7 @@ def _ingest_keys(config, args) -> int:  # type: ignore[no-untyped-def]
             print(f"{k.prefix}  {state:7}  {k.scope}  {k.host}  last used {used}")
         return 0
 
-    store = Store(config.server.db_path)
+    store = Store.from_config(config)
     try:
         return asyncio.run(run(store))
     finally:
@@ -203,7 +203,7 @@ def _create_admin(config, args) -> int:  # type: ignore[no-untyped-def]
         print(f"created admin {args.create_admin.strip()}", file=sys.stderr)
         return 0
 
-    store = Store(config.server.db_path)
+    store = Store.from_config(config)
     try:
         return asyncio.run(run(store))
     finally:

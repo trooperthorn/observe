@@ -1,0 +1,69 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sqlite:
+    name: suite on SQLite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install system libraries for the Kerberos wheel
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libkrb5-dev
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q -p no:cacheprovider
+
+  postgres:
+    name: suite on PostgreSQL (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: TimescaleDB
+            image: timescale/timescaledb:2.17.2-pg17
+            timescale: "on"
+          - name: plain PostgreSQL
+            image: postgres:17.2
+            timescale: "off"
+    services:
+      postgres:
+        image: ${{ matrix.image }}
+        env:
+          POSTGRES_USER: observe
+          POSTGRES_PASSWORD: ci-test-only
+          POSTGRES_DB: observe_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U observe -d observe_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      OBSERVE_TEST_PG_DSN: postgresql://observe:ci-test-only@127.0.0.1:5432/observe_test
+      OBSERVE_TEST_PG_TIMESCALE: ${{ matrix.timescale }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install system libraries for the Kerberos wheel
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libkrb5-dev
+      - run: pip install -r requirements-dev.txt
+      - name: Run the whole suite, with the storage contract cases on PostgreSQL
+        run: python -m pytest -q -p no:cacheprovider

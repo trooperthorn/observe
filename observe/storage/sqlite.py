@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .base import CHANGE_DOMAINS, Conn, IntegrityConflict, StorageBusy, StorageTimeout, T
+from . import rollups
 from .schema import migrate, migrate_plugins
 
 READ_POOL_SIZE = 3
@@ -57,6 +58,10 @@ class _Reader:
 
     def _expired(self) -> int:
         return 1 if self.deadline and time.monotonic() > self.deadline else 0
+
+
+def _bucket_of_ts(column: str, width: int) -> str:
+    return f"CAST({column} / {width} AS INTEGER) * {width}"
 
 
 def _translate(err: sqlite3.Error) -> Exception:
@@ -227,28 +232,24 @@ class SqliteStorage:
     # ---- rollups, retention, plugin tables ------------------------------------------------
 
     async def rollup(self, now: float) -> int:
-        # The rollup tables arrive with the samples schema (slice O-2); until then there is
-        # nothing to fold.
-        return 0
+        return await self.write(lambda db: rollups.fold(db, now, _bucket_of_ts))
 
     async def apply_retention(self, *, now: float, retention_days: int,
                               audit_retention_days: int) -> int:
-        """Poll rows and host samples past retention go; transitions and host events are kept
-        at least a year; the audit log has its own retention; expired sessions go. Each table
-        is its own unit so ingest is never held back behind one long delete."""
-        cutoff = now - retention_days * 86400
-        keep = now - max(retention_days, 365) * 86400
+        """Fold what is due, then drop rows past each level's retention. A level is never
+        trimmed past what the next level has folded. Each table is its own unit so ingest is
+        never held back behind one long delete. Returns the poll rows removed."""
+        await self.rollup(now)
+        levels = await self.write(lambda db: rollups.load_levels(db, retention_days))
+        cut = await self.write(lambda db: rollups.cutoffs(db, now, levels))
 
-        async def delete(sql: str, bound: float) -> int:
-            return await self.write(lambda db: db.execute(sql, (bound,)).rowcount)
-
-        removed = await delete("DELETE FROM results WHERE ts < ?", cutoff)
-        await delete("DELETE FROM host_samples WHERE ts < ?", cutoff)
-        await delete("DELETE FROM ingest_batches WHERE ts < ?", cutoff)
-        await delete("DELETE FROM events WHERE ts < ?", keep)
-        await delete("DELETE FROM host_events WHERE ts < ?", keep)
-        await delete("DELETE FROM audit WHERE ts < ?", now - audit_retention_days * 86400)
-        await delete("DELETE FROM sessions WHERE expires < ?", now)
+        removed = 0
+        for i, (sql, bound) in enumerate(rollups.retention_statements(
+                cut, now=now, audit_retention_days=audit_retention_days)):
+            count = await self.write(lambda db, sql=sql, bound=bound: db.execute(
+                sql, (bound,)).rowcount)
+            if i == 0:
+                removed = count
         return removed
 
     def apply_plugin_migrations(self, plugins: Mapping[str, Sequence[Any]]) -> None:

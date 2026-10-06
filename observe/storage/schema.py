@@ -1,8 +1,8 @@
-"""SQLite schema steps and the migration runner.
+"""Schema steps and the SQLite migration runner.
 
 Schema versioning uses a schema_version table. Each step is additive: it only creates
 objects, guarded with IF NOT EXISTS, so rerunning a step changes nothing. The layout is
-adapted from hostwatch (hostwatch/store.py). Only the SQLite backend imports this module.
+adapted from hostwatch (hostwatch/store.py). The steps are portable SQL; the PostgreSQL backend runs them through observe/storage/pg_dialect.py.
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
+
+from .rollups import METRIC_VIEWS, ROLLUP_TABLES
 
 BASELINE = (
     """CREATE TABLE IF NOT EXISTS results (
@@ -280,6 +282,8 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     15: HOST_SAMPLE_TS_INDEX,
     16: HOST_SAMPLE_SERIES_INDEX,
     17: CHANGE_SEQ_TABLES,
+    # Summary levels, their watermarks and the read views (observe/storage/rollups.py).
+    18: ROLLUP_TABLES + METRIC_VIEWS,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

@@ -1,8 +1,9 @@
 """The Storage interface: one contract suite for every backend, plus the SQLite specifics
 (single writer thread, read-only pool, pragmas, deadlines).
 
-PostgreSQL cases run only when OBSERVE_TEST_PG_DSN is set; the backend itself arrives in a
-later slice, so with a DSN set they skip until it exists."""
+PostgreSQL cases run only when OBSERVE_TEST_PG_DSN is set and skip otherwise; CI sets it for a
+TimescaleDB service container (OBSERVE_TEST_PG_TIMESCALE=on) and for plain PostgreSQL (off). Each
+PostgreSQL case gets its own schema, dropped afterwards, so cases never see each other's rows."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import os
 import sqlite3
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 
 import pytest
@@ -27,20 +29,34 @@ class Migration:
     statements: tuple[str, ...]
 
 
-def _make(backend: str, tmp_path) -> Storage:
-    if backend == "sqlite":
-        return open_storage(str(tmp_path / "s.db"))
+def _pg_dsn() -> str:
     dsn = os.environ.get("OBSERVE_TEST_PG_DSN")
     if not dsn:
         pytest.skip("OBSERVE_TEST_PG_DSN is not set")
-    pytest.skip("the PostgreSQL backend is delivered in a later slice")
+    return dsn
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
 def storage(request, tmp_path):
-    s = _make(request.param, tmp_path)
+    if request.param == "sqlite":
+        s = open_storage(str(tmp_path / "s.db"))
+        yield s
+        s.close()
+        return
+    import psycopg
+    from psycopg.conninfo import make_conninfo
+
+    dsn = _pg_dsn()
+    schema = "t_" + uuid.uuid4().hex[:12]
+    with psycopg.connect(dsn, autocommit=True) as admin:
+        admin.execute(f"CREATE SCHEMA {schema}")
+    scoped = make_conninfo(dsn, options=f"-c search_path={schema},public")
+    s = open_storage("", backend="postgres", dsn=scoped,
+                     timescale=os.environ.get("OBSERVE_TEST_PG_TIMESCALE", "auto"))
     yield s
     s.close()
+    with psycopg.connect(dsn, autocommit=True) as admin:
+        admin.execute(f"DROP SCHEMA {schema} CASCADE")
 
 
 @pytest.fixture
@@ -153,6 +169,73 @@ async def test_retention_drops_old_rows_and_keeps_the_rest(storage):
 
 async def test_rollup_with_nothing_to_fold_writes_no_buckets(storage):
     assert await storage.rollup(1_000_000_000.0) == 0
+
+
+def _view_columns(storage, view):
+    return storage.read_sync(lambda db: [c[0] for c in db.execute(
+        f"SELECT * FROM {view} WHERE 1 = 0").description])
+
+
+def test_the_summary_views_have_the_same_columns_on_every_backend(storage):
+    summary = ["host", "source", "metric", "labels", "bucket", "n", "sum_v", "min_v", "max_v",
+               "avg_v"]
+    for view in ("metric_5m", "metric_hourly", "metric_daily"):
+        assert _view_columns(storage, view) == summary
+    assert _view_columns(storage, "availability_history") == [
+        "monitor", "ts", "previous_state", "state", "message"]
+
+
+async def test_availability_history_lists_every_state_change(storage):
+    await storage.execute("INSERT INTO events (monitor, ts, previous, current, message) "
+                          "VALUES ('m', 5, 'up', 'warn', 'Degraded')")
+    assert await storage.fetchall(
+        "SELECT monitor, ts, previous_state, state, message FROM availability_history") == [
+        ("m", 5.0, "up", "warn", "Degraded")]
+
+
+async def _samples(storage, base, values):
+    for offset, value in values:
+        await storage.execute(
+            "INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
+            "VALUES (?, 'h', 'cpu', 'temp', '{}', ?, 'C')", (base + offset, value))
+
+
+def _recent_hour(now):
+    return int(now) // 3600 * 3600 - 3600  # the last whole hour, 1 to 2 hours ago
+
+
+async def test_rollup_builds_the_five_minute_and_hourly_levels_with_min_max_avg(storage):
+    now = time.time()
+    base = _recent_hour(now)
+    await _samples(storage, base, [(10, 10.0), (20, 30.0), (310, 5.0), (320, 7.0), (330, None)])
+    assert await storage.rollup(now) > 0
+    rows = await storage.fetchall(
+        "SELECT bucket, n, min_v, max_v, avg_v FROM metric_5m ORDER BY bucket")
+    assert [(int(b), int(n), lo, hi, avg) for b, n, lo, hi, avg in rows] == [
+        (base, 2, 10.0, 30.0, 20.0), (base + 300, 2, 5.0, 7.0, 6.0)]
+    hourly = await storage.fetchall(
+        "SELECT bucket, n, min_v, max_v, avg_v FROM metric_hourly ORDER BY bucket")
+    assert [(int(b), int(n), lo, hi, avg) for b, n, lo, hi, avg in hourly] == [
+        (base, 4, 5.0, 30.0, 13.0)]
+
+
+async def test_rolling_up_again_does_not_count_a_sample_twice(storage):
+    now = time.time()
+    await _samples(storage, _recent_hour(now), [(10, 10.0), (20, 30.0)])
+    await storage.rollup(now)
+    await storage.rollup(now)
+    await storage.rollup(now + 60)
+    assert await storage.fetchall("SELECT n FROM metric_5m") == [(2,)]
+
+
+async def test_retention_drops_raw_samples_past_the_raw_level(storage):
+    now = time.time()
+    old = now - 40 * 86400
+    await _samples(storage, old, [(0, 1.0)])
+    await storage.execute(
+        "INSERT INTO app_settings (key, value, updated) VALUES ('retention.raw_days', '7', 1)")
+    await storage.apply_retention(now=now, retention_days=30, audit_retention_days=365)
+    assert await storage.fetchall("SELECT COUNT(*) FROM host_samples") == [(0,)]
 
 
 def test_close_is_safe_to_repeat(storage):

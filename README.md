@@ -466,7 +466,14 @@ updated as each phase lands.
 All database access goes through one storage interface (`observe/storage`): a single writer
 thread runs every write as one transaction, reads use a pool of three read-only WAL connections
 with a 2 second deadline, and a test fails the build if code outside that package opens a
-database. Only the SQLite backend exists so far; see `docs/ARCHITECTURE.md`, "Storage interface".
+database. SQLite is the default and suits a Raspberry Pi. PostgreSQL with TimescaleDB suits a
+host with 2 GB of memory or more and an SSD: put the password in a file under `./secrets`, set
+`storage.backend: postgres`, `storage.dsn` (no password in it) and `storage.password_file`
+(see `config.example.yaml`), and start the database with `docker compose --profile postgres up -d`.
+The choice is made when the database is created; there is no migration between backends, so
+destroy and redeploy to change it. Both backends keep 5 minute, hourly and daily summaries behind the same
+views (`metric_5m`, `metric_hourly`, `metric_daily`, `availability_history`). See
+`docs/ARCHITECTURE.md`, "Storage interface" and "PostgreSQL and TimescaleDB backend".
 Plugins read and write through `store.storage` (`write`, `read`, `write_sync`, `read_sync`).
 
 The SQLite store is now versioned. On startup Observe applies any missing

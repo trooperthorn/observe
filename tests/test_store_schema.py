@@ -118,7 +118,7 @@ def test_failed_step_rolls_back(tmp_path, monkeypatch):
 def test_prune_applies_retention(tmp_path):
     store = Store(str(tmp_path / "w.db"))
     now = time.time()
-    old, recent, very_old, audit_old = now - 40 * DAY, now - DAY, now - 400 * DAY, now - 100 * DAY
+    old, recent, very_old, audit_old = now - 40 * DAY, now - DAY, now - 800 * DAY, now - 100 * DAY
     for ts in (old, recent):
         run_sql(store, "INSERT INTO host_samples (ts, host, source, metric) VALUES (?,?,?,?)",
                     (ts, "h", "cpu", "temp"))
@@ -139,7 +139,7 @@ def test_prune_applies_retention(tmp_path):
 
     assert removed == 1
     assert count("host_samples") == 1  # the 40 day old sample is gone at 30 days
-    assert [r[0] for r in run_sql(store, "SELECT ts FROM host_events")] == [old]  # a year minimum
+    assert [r[0] for r in run_sql(store, "SELECT ts FROM host_events")] == [old]  # kept for the two year history level
     assert count("audit") == 1  # audit uses its own, shorter window here
     assert [r[0] for r in run_sql(store, "SELECT id_hash FROM sessions")] == ["live"]
     store.close()

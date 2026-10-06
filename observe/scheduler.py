@@ -233,16 +233,21 @@ class Scheduler:
 
     async def _maintenance(self) -> None:
         await asyncio.sleep(30)  # let the first poll wave land before forecasting
+        passes = 0
         while True:
             try:
-                await self.refresh_forecasts()
-                removed = await self.store.prune(
-                    self.config.server.retention_days, self.config.server.audit_retention_days)
-                if removed:
-                    log.info("pruned %d result rows", removed)
+                # The summary levels are folded every pass; forecasts and pruning run hourly.
+                await self.store.rollup()
+                if passes % 12 == 0:
+                    await self.refresh_forecasts()
+                    removed = await self.store.prune(
+                        self.config.server.retention_days, self.config.server.audit_retention_days)
+                    if removed:
+                        log.info("pruned %d result rows", removed)
             except Exception:  # noqa: BLE001
                 log.exception("maintenance failed")
-            await asyncio.sleep(3600)
+            passes += 1
+            await asyncio.sleep(300)
 
     def start(self) -> None:
         self._tasks = [asyncio.create_task(self._loop(m), name=m.slug) for m in self.monitors]

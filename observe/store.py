@@ -58,9 +58,24 @@ _TAKES_OVER = (f"({_rank_sql('excluded.agent_version')} > {_rank_sql('hosts.agen
 
 
 class Store:
-    def __init__(self, path: str, plugins: LoadedPlugins | None = None) -> None:
+    def __init__(self, path: str, plugins: LoadedPlugins | None = None, *,
+                 backend: str = "sqlite", dsn: str | None = None, password: str | None = None,
+                 timescale: str = "auto") -> None:
         self.storage: Storage = open_storage(
-            path, {p.name: p.migrations for p in plugins.plugins} if plugins else None)
+            path, {p.name: p.migrations for p in plugins.plugins} if plugins else None,
+            backend=backend, dsn=dsn, password=password, timescale=timescale)
+
+    @classmethod
+    def from_config(cls, config: Any, plugins: LoadedPlugins | None = None) -> "Store":
+        """Open the database the config names: SQLite at server.db_path, or PostgreSQL."""
+        s = config.storage
+        return cls(config.server.db_path, plugins, backend=s.backend,
+                   dsn=s.dsn.get_secret_value() if s.dsn else None, password=s.password(),
+                   timescale=s.timescaledb)
+
+    async def rollup(self) -> int:
+        """Fold the samples that are due into the summary levels."""
+        return await self.storage.rollup(time.time())
 
     async def fetch(self, sql: str, args: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
         """One read statement on the read pool."""

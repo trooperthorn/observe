@@ -26,4 +26,38 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
-    # SQLite in /data is the only persistent write.
+    # SQLite in /data is the only persistent write on the default deployment. With the postgres
+    # profile the data lives in the postgres service instead; see storage: in config.example.yaml.
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false  # only when the postgres profile is on
+
+  # Optional PostgreSQL with TimescaleDB for larger hosts (2 GB of memory or more, SSD):
+  #   docker compose --profile postgres up -d
+  # The password is a file under ./secrets (observe_db_password), the same file the postgres
+  # image reads and the one named by storage.password_file. Nothing is published on the host.
+  postgres:
+    profiles: [postgres]
+    image: timescale/timescaledb:2.17.2-pg17
+    container_name: observe-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: observe
+      POSTGRES_DB: observe
+      POSTGRES_PASSWORD_FILE: /run/secrets/observe_db_password
+    volumes:
+      - observe-pgdata:/var/lib/postgresql/data
+      - ./secrets:/run/secrets:ro
+    security_opt:
+      - no-new-privileges:true
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U observe -d observe"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+volumes:
+  observe-pgdata:
