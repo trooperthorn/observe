@@ -15,6 +15,7 @@ from observe.checks import build_check
 from observe.checks.base import Result
 from observe.checks.ha_host import build_batch
 from observe.config import Config
+from observe.ingest.schema import Batch
 from observe.store import ABSENT_REASON, Store
 
 from .fakes.servers import HA_TOKEN, json_server
@@ -83,13 +84,12 @@ def test_states_map_to_samples_and_grades():
 
 def test_update_pending_is_warning():
     v = view(build_batch("homeassistant", CONFIG, STATES, NOW))
-    pend = item(v, "ha", "update_pending")
+    pend = item(v, "ha", "update_pending", entity_id="update.home_assistant_core_update")
     assert pend["labels"]["entity_id"] == "update.home_assistant_core_update"
-    assert pend["labels"]["latest"] == "2026.10.0"
     assert pend["status"] == "warning" and v["ha"]["status"] == "warning"
     clean = [s for s in STATES if s["entity_id"] != "update.home_assistant_core_update"]
     v = view(build_batch("homeassistant", CONFIG, clean, NOW))
-    assert not any(i["metric"] == "update_pending" for i in v["ha"]["items"])
+    assert all(i["value"] == 0.0 for i in v["ha"]["items"] if i["metric"] == "update_pending")
     assert v["ha"]["status"] == "good"
 
 
@@ -111,12 +111,122 @@ def test_many_unavailable_entities_warn():
 
 def test_container_percent_grades_and_absent_sources():
     states = [st("sensor.some_addon_cpu_percent", "90"),
-              st("sensor.some_addon_memory_percent", "96")]
+              st("sensor.some_addon_memory_percent", "96"),
+              st("binary_sensor.some_addon_running", "on")]
     v = view(build_batch("homeassistant", CONFIG, states, NOW))
     assert item(v, "containers", "cpu_percent")["status"] == "warning"
     assert item(v, "containers", "memory_percent")["status"] == "critical"
     v = view(build_batch("homeassistant", CONFIG, [], NOW))
     assert v["containers"]["state"] == "absent" and v["containers"]["status"] == "good"
+
+
+def test_an_installed_update_clears_the_pending_state():
+    pending = st("update.home_assistant_core_update", "on", installed_version="2026.9.1",
+                 latest_version="2026.10.0")
+    # the entity state still says on, but the installed version is now the latest one
+    lagging = st("update.home_assistant_core_update", "on", installed_version="2026.10.0",
+                 latest_version="2026.10.0")
+    installed = st("update.home_assistant_core_update", "off", installed_version="2026.10.0",
+                   latest_version="2026.10.0")
+    first = build_batch("homeassistant", CONFIG, [pending], NOW)
+    assert next(s for s in first.samples if s.metric == "updates_pending").value == 1.0
+    for done in (lagging, installed):
+        b = build_batch("homeassistant", CONFIG, [done], NOW + 300)
+        assert next(s for s in b.samples if s.metric == "updates_pending").value == 0.0
+        zero = [s for s in b.samples if s.metric == "update_pending"]
+        assert len(zero) == 1 and zero[0].value == 0.0
+        assert view(b, now=NOW + 300)["ha"]["status"] == "good"
+
+
+async def test_an_installed_update_supersedes_the_stored_pending_reading(store):
+    pending = st("update.home_assistant_core_update", "on", installed_version="1",
+                 latest_version="2")
+    done = st("update.home_assistant_core_update", "off", installed_version="2",
+              latest_version="2")
+    await store.ingest_batch(build_batch("homeassistant", CONFIG, [pending], NOW), {}, now=NOW)
+    await store.ingest_batch(build_batch("homeassistant", CONFIG, [done], NOW + 300), {},
+                             now=NOW + 300)
+    data = await store.latest_host("homeassistant")
+    cur = [s for s in data["samples"] if s["metric"] == "update_pending"]
+    assert len(cur) == 1 and cur[0]["value"] == 0.0
+
+
+def test_the_updates_mode_and_the_host_mode_agree_on_pending():
+    from observe.checks.ha_host import update_is_pending
+    assert update_is_pending(st("update.a", "on", installed_version="1", latest_version="2"))
+    assert update_is_pending(st("update.a", "on"))
+    assert not update_is_pending(st("update.a", "on", installed_version="2", latest_version="2"))
+    assert not update_is_pending(st("update.a", "off", installed_version="1", latest_version="2"))
+
+
+def test_a_sensor_from_another_integration_is_not_a_container():
+    states = [st("sensor.nas_cpu_percent", "99"), st("sensor.living_room_pc_memory_percent", "97"),
+              st("sensor.some_addon_cpu_percent", "50"), st("update.some_addon_update", "off")]
+    b = build_batch("homeassistant", CONFIG, states, NOW)
+    names = {(s.metric, s.labels["name"]) for s in b.samples if s.source == "hassio"}
+    assert names == {("cpu_percent", "some_addon")}
+    foreign = build_batch("homeassistant", CONFIG, states[:2], NOW)
+    assert not any(s.source == "hassio" for s in foreign.samples)
+    v = view(foreign)
+    assert v["containers"]["state"] == "absent" and v["containers"]["status"] == "good"
+
+
+def test_a_healthy_default_home_assistant_grades_good():
+    default = [st("light.hall", "on"), st("sensor.nas_temp", "41.5"),
+               st("update.home_assistant_core_update", "off", installed_version="2026.9.1",
+                  latest_version="2026.9.1"),
+               st("update.esphome", "off", installed_version="1", latest_version="1")]
+    v = view(build_batch("homeassistant", CONFIG, default, NOW))
+    assert v["status"] == "good"
+    for section in ("ha", "containers", "disks"):
+        assert v[section]["status"] == "good", section
+    assert v["containers"]["state"] == "absent" and v["disks"]["state"] == "absent"
+
+
+async def test_a_default_install_stores_absent_sources_and_grades_good(store):
+    await store.ingest_batch(build_batch("homeassistant", CONFIG, [st("light.hall", "on")], NOW),
+                             {}, now=NOW)
+    sources = await store.host_sources("homeassistant")
+    for name in ("hassio", "ha_soc"):
+        assert sources[name]["reason"] == ABSENT_REASON and not sources[name]["available"]
+    data = await store.latest_host("homeassistant")
+    row = {"host": "homeassistant", "last_seen": NOW, "platform": data["platform"]}
+    v = hostview.build_host_view(row, data, sources, [], NOW, 900.0, None, {}, None)
+    assert v["status"] == "good"
+
+
+def _producer_batch(platform: str, agent: str, ts: float) -> Batch:
+    return Batch.model_validate({
+        "schema_version": 1, "agent_version": agent, "host": "homeassistant",
+        "platform": platform, "sent_at": ts,
+        "sources": [{"source": "x", "available": True}], "samples": []})
+
+
+def test_declared_pull_producers_match_the_checks():
+    from observe.checks import snmp
+    from observe.checks.ha_host import AGENT_VERSION
+    from observe.store import PULL_PRODUCER_RANK
+    assert set(PULL_PRODUCER_RANK) == {snmp.AGENT_VERSION, AGENT_VERSION}
+
+
+async def test_platform_and_version_are_stable_with_every_producer_writing(store):
+    order = [("homeassistant", "ha_soc 1.0.0"), ("homeassistant", "observe-ha-host"),
+             ("snmp", "observe-snmp-host")]
+    for i in range(9):
+        platform, agent = order[i % 3]
+        await store.ingest_batch(_producer_batch(platform, agent, NOW + 60 * i), {},
+                                 now=NOW + 60 * i)
+        row = await store.latest_host("homeassistant")
+        assert (row["platform"], row["agent_version"]) == ("homeassistant", "ha_soc 1.0.0")
+
+
+async def test_pull_producers_rank_home_assistant_over_snmp_in_any_order(store):
+    for i, (platform, agent) in enumerate([("snmp", "observe-snmp-host"),
+                                           ("homeassistant", "observe-ha-host"),
+                                           ("snmp", "observe-snmp-host")]):
+        await store.ingest_batch(_producer_batch(platform, agent, NOW + i), {}, now=NOW + i)
+    row = await store.latest_host("homeassistant")
+    assert (row["platform"], row["agent_version"]) == ("homeassistant", "observe-ha-host")
 
 
 def test_stale_host_goes_stale():

@@ -214,7 +214,23 @@ maps them in `observe/checks/ha_host.py` to a hostwatch `Batch` for the host nam
 retention are the ordinary ones. Sources are `homeassistant` (run state, safe and recovery mode,
 versions, pending updates, entity counts, unavailable count), `hassio` (Core, Supervisor and
 add-on CPU and memory percent, host disk) and `ha_soc` (posture, open detections, users at
-risk, suspicious activity). A source with no matching sensor is reported absent, never as zero.
+risk, suspicious activity). A source with no matching sensor is reported absent, never as zero,
+and a source that is absent claims nothing, so a healthy Home Assistant with default settings
+(the hassio and HA SOC sensors are opt-in) grades Good. Only the Core and Supervisor sensors
+(`sensor.home_assistant_core_*` and `sensor.home_assistant_supervisor_*`) and add-ons are read
+as containers; an add-on counts when the same slug also has its hassio `binary_sensor.<slug>_running`
+or `update.<slug>_update` entity, so a `*_cpu_percent` sensor from another integration is
+ignored. An update entity is pending when its state is on and its installed version differs from
+the latest one; every update entity is stored each cycle (1 pending, 0 not), so an installed
+update replaces the earlier pending reading. Every read in this check and in the other
+`homeassistant`, `unifi_network` and `unifi_protect` modes goes through one capped reader: no
+redirect is followed, a body over 16 MB (Home Assistant) or 4 MB (UniFi) is refused, and a UniFi
+list stops with an error after 50 pages of 200 rows, the same caps as the plugin client.
+
+The host row's platform and agent version come from one declared producer, not from whichever
+batch wrote last. A pushed agent (including ha_Int_soc) outranks the Home Assistant pull
+(`observe-ha-host`), which outranks SNMP (`observe-snmp-host`); a lower rank never replaces a
+higher one and the newest heartbeat wins within a rank (`PULL_PRODUCER_RANK` in `store.py`).
 
 An `snmp` monitor in mode `cpu`, `memory`, `storage` or `interface` with `host_name` set does the
 same for SNMP: after a successful poll `observe/checks/snmp.py` builds a one-source (`snmp`)

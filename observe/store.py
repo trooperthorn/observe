@@ -383,6 +383,25 @@ def content_key(batch: Batch) -> str:
     return f"content:{digest}"
 
 
+# The producer that names a host's platform and agent version. Observe's own pull checks
+# (Home Assistant host mode and SNMP) write batches for a host that an installed agent, or
+# ha_Int_soc, also pushes for. The ranking is declared here: a pushed agent outranks the Home
+# Assistant pull, which outranks SNMP. A lower rank never replaces a higher one, and within one
+# rank the newest heartbeat wins. This keeps the host page stable however the writers interleave.
+PULL_PRODUCER_RANK = {"observe-snmp-host": 0, "observe-ha-host": 1}
+PUSHED_PRODUCER_RANK = 2
+
+
+def _rank_sql(column: str) -> str:
+    whens = " ".join(f"WHEN '{name}' THEN {rank}" for name, rank in PULL_PRODUCER_RANK.items())
+    return f"CASE {column} {whens} ELSE {PUSHED_PRODUCER_RANK} END"
+
+
+_TAKES_OVER = (f"({_rank_sql('excluded.agent_version')} > {_rank_sql('hosts.agent_version')} OR "
+               f"({_rank_sql('excluded.agent_version')} = {_rank_sql('hosts.agent_version')} AND "
+               "excluded.heartbeat_ts >= COALESCE(hosts.heartbeat_ts, 0)))")
+
+
 class Store:
     def __init__(self, path: str, plugins: LoadedPlugins | None = None) -> None:
         if path != ":memory:":
@@ -487,10 +506,10 @@ class Store:
                 "INSERT INTO hosts (host, platform, agent_version, first_seen, last_seen, heartbeat_ts) "
                 "VALUES (?,?,?,?,?,?) ON CONFLICT(host) DO UPDATE SET "
                 "last_seen=MAX(hosts.last_seen, excluded.last_seen), "
-                "platform=CASE WHEN excluded.heartbeat_ts >= COALESCE(hosts.heartbeat_ts, 0) "
-                "THEN excluded.platform ELSE hosts.platform END, "
-                "agent_version=CASE WHEN excluded.heartbeat_ts >= COALESCE(hosts.heartbeat_ts, 0) "
-                "THEN excluded.agent_version ELSE hosts.agent_version END, "
+                f"platform=CASE WHEN {_TAKES_OVER} THEN excluded.platform "
+                "ELSE hosts.platform END, "
+                f"agent_version=CASE WHEN {_TAKES_OVER} THEN excluded.agent_version "
+                "ELSE hosts.agent_version END, "
                 "heartbeat_ts=MAX(COALESCE(hosts.heartbeat_ts, 0), excluded.heartbeat_ts)",
                 (batch.host, batch.platform, batch.agent_version, now, now, sent))
             self._db.executemany(

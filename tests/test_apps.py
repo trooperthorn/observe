@@ -268,3 +268,56 @@ async def test_unifi_ports_refuses_redirect_and_oversize(cert, monkeypatch):
         assert res.result is Result.FAIL and "larger than 50 bytes" in res.message
     finally:
         srv.shutdown()
+
+
+# ------------------------------------------------------------ body and page caps on every read
+
+
+async def test_core_unifi_list_read_refuses_an_oversize_body(cert, monkeypatch):
+    from observe.checks import apps
+    monkeypatch.setattr(apps, "MAX_API_BODY", 300)
+    srv = json_server(unifi_routes(), ("X-API-KEY", UNIFI_KEY), cert)
+    try:
+        res = await ucheck((srv, cert[0]), mode="devices").run()
+        assert res.result is Result.FAIL and "larger than 300 bytes" in res.message
+    finally:
+        srv.shutdown()
+
+
+async def test_core_unifi_list_read_stops_at_the_page_cap(cert, monkeypatch):
+    from observe.checks import apps
+    monkeypatch.setattr(apps, "MAX_UNIFI_PAGES", 3)
+    base = "/proxy/network/integration/v1"
+    routes = unifi_routes()
+    sid = [r for r in routes if r.endswith("/devices")][0].split("/")[-2]
+    endless = {"offset": 0, "limit": 1, "count": 1, "totalCount": 1_000_000_000,
+               "data": [{"id": "d", "name": "x", "state": "ONLINE"}]}
+    srv = json_server({**routes, f"{base}/sites/{sid}/devices": endless},
+                      ("X-API-KEY", UNIFI_KEY), cert)
+    try:
+        res = await ucheck((srv, cert[0]), mode="devices").run()
+        assert res.result is Result.FAIL and "more than 3 pages" in res.message
+        assert sum(1 for p, _ in srv.seen if "/devices?" in p) == 3
+    finally:
+        srv.shutdown()
+
+
+async def test_core_unifi_list_read_refuses_a_redirect(cert):
+    base = "/proxy/network/integration/v1"
+    srv = json_server({**unifi_routes(),
+                       f"{base}/sites": lambda q, h: (302, {"location": "http://127.0.0.1:1/x"})},
+                      ("X-API-KEY", UNIFI_KEY), cert)
+    try:
+        res = await ucheck((srv, cert[0]), mode="devices").run()
+        assert res.result is Result.FAIL and "redirect" in res.message
+    finally:
+        srv.shutdown()
+
+
+@pytest.mark.parametrize("mode,extra", [("api", {}), ("unavailable", {}), ("updates", {}),
+                                        ("entity", {"entity_id": "sensor.nas_temp"})])
+async def test_every_ha_mode_refuses_an_oversize_body(ha, monkeypatch, mode, extra):
+    from observe.checks import apps
+    monkeypatch.setattr(apps, "MAX_HA_BODY", 20)
+    res = await hcheck(ha, mode=mode, **extra).run()
+    assert res.result is Result.FAIL and "larger than 20 bytes" in res.message

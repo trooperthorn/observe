@@ -32,8 +32,41 @@ from .base import Check, CheckResult, Result
 from .platforms import AuthFailed, api_ssl_context, pct
 
 
+MAX_API_BODY = 4_000_000  # per response, the same cap the UniFi plugin client uses
+MAX_UNIFI_PAGES = 50  # a list longer than 200 * MAX_UNIFI_PAGES rows is refused, not truncated
+
+
+class BodyTooLarge(ValueError):
+    """A reply was larger than the byte cap, or a list ran past the page cap."""
+
+
+async def read_json_capped(c: httpx.AsyncClient, url: str, headers: dict[str, str],
+                           params: dict[str, Any] | None, limit: int, what: str) -> Any:
+    """GET one JSON document. Redirects are refused, because one would carry the credential
+    header elsewhere, and the body is refused once it grows past `limit` bytes."""
+    async with c.stream("GET", url, headers=headers, params=params,
+                        follow_redirects=False) as r:
+        if r.status_code in (401, 403):
+            raise AuthFailed(f"HTTP {r.status_code}")
+        if r.status_code == 404:
+            raise LookupError(f"{what} not found (404)")
+        if 300 <= r.status_code < 400:
+            raise LookupError(f"{what} answered a redirect (HTTP {r.status_code}); "
+                              "redirects are not followed")
+        r.raise_for_status()
+        buf = bytearray()
+        async for chunk in r.aiter_bytes():
+            buf += chunk
+            if len(buf) > limit:
+                raise BodyTooLarge(f"{what} response is larger than {limit} bytes")
+    return json.loads(bytes(buf))
+
+
 class _HttpApiCheck(Check):
     scheme_field = "https"
+
+    def body_limit(self) -> int:
+        return MAX_API_BODY
 
     def base_url(self) -> str:
         m = self.monitor
@@ -43,17 +76,14 @@ class _HttpApiCheck(Check):
     def headers(self) -> dict[str, str]:  # pragma: no cover - overridden
         return {}
 
-    async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+    async def get(self, path: str, params: dict[str, Any] | None = None,
+                  limit: int | None = None) -> Any:
         m = self.monitor
         verify: Any = api_ssl_context(m.verify_tls, m.ca_bundle)
-        async with httpx.AsyncClient(verify=verify, timeout=self.timeout) as c:
-            r = await c.get(self.base_url() + path, headers=self.headers(), params=params)
-        if r.status_code in (401, 403):
-            raise AuthFailed(f"HTTP {r.status_code}")
-        if r.status_code == 404:
-            raise LookupError(f"{path} not found (404)")
-        r.raise_for_status()
-        return r.json()
+        async with httpx.AsyncClient(verify=verify, timeout=self.timeout,
+                                     follow_redirects=False) as c:
+            return await read_json_capped(c, self.base_url() + path, self.headers(), params,
+                                          self.body_limit() if limit is None else limit, path)
 
     async def probe(self) -> CheckResult:
         try:
@@ -86,30 +116,14 @@ class HomeAssistantCheck(_HttpApiCheck):
         self.store = store
         self.clock = clock
 
-    async def get_capped(self, path: str) -> Any:
-        """GET with no redirects and a body size cap, for the large /api/states list."""
-        m = self.monitor
-        verify: Any = api_ssl_context(m.verify_tls, m.ca_bundle)
-        async with httpx.AsyncClient(verify=verify, timeout=self.timeout,
-                                     follow_redirects=False) as c:
-            async with c.stream("GET", self.base_url() + path, headers=self.headers()) as r:
-                if r.status_code in (401, 403):
-                    raise AuthFailed(f"HTTP {r.status_code}")
-                if r.status_code == 404:
-                    raise LookupError(f"{path} not found (404)")
-                r.raise_for_status()
-                buf = bytearray()
-                async for chunk in r.aiter_bytes():
-                    buf += chunk
-                    if len(buf) > MAX_HA_BODY:
-                        raise ValueError(f"{path} reply is larger than {MAX_HA_BODY} bytes")
-        return json.loads(buf)
+    def body_limit(self) -> int:
+        return MAX_HA_BODY
 
     async def _host(self) -> CheckResult:
         if self.store is None:
             return CheckResult.fail("host mode needs the Observe store")
-        cfg = await self.get_capped("/api/config")
-        states = await self.get_capped("/api/states")
+        cfg = await self.get("/api/config")
+        states = await self.get("/api/states")
         if not isinstance(cfg, dict) or not isinstance(states, list):
             return CheckResult.fail("unexpected /api/config or /api/states shape")
         batch = ha_host.build_batch(self.monitor.host_name, cfg, states, self.clock())
@@ -136,7 +150,8 @@ class HomeAssistantCheck(_HttpApiCheck):
         states = await self.get("/api/states")
         if m.mode == "updates":
             pending = sorted(s["entity_id"] for s in states
-                             if s["entity_id"].startswith("update.") and s.get("state") == "on")
+                             if s["entity_id"].startswith("update.")
+                             and ha_host.update_is_pending(s))
             res = CheckResult.ok(f"{len(pending)} updates pending", value=float(len(pending)),
                                  detail={"pending": pending})
             if pending:
@@ -182,21 +197,17 @@ class HomeAssistantCheck(_HttpApiCheck):
 # ============================================================ UniFi
 
 
-async def unifi_list_all(client: httpx.AsyncClient, url: str,
-                         headers: dict[str, str]) -> list[dict[str, Any]]:
+async def unifi_list_all(client: httpx.AsyncClient, url: str, headers: dict[str, str],
+                         limit: int | None = None) -> list[dict[str, Any]]:
     """Read every page of a UniFi Integration API list endpoint. Stops on an
     empty page or when totalCount is reached, whichever comes first, so a
-    server that caps `limit` below what was asked is still read fully."""
+    server that caps `limit` below what was asked is still read fully. Each
+    page is capped in bytes and the list in pages; past either it is refused."""
     out: list[dict[str, Any]] = []
     offset = 0
-    while True:
-        r = await client.get(url, headers=headers, params={"offset": offset, "limit": 200})
-        if r.status_code in (401, 403):
-            raise AuthFailed(f"HTTP {r.status_code}")
-        if r.status_code == 404:
-            raise LookupError(f"{url} not found (404)")
-        r.raise_for_status()
-        body = r.json()
+    for _ in range(MAX_UNIFI_PAGES):
+        body = await read_json_capped(client, url, headers, {"offset": offset, "limit": 200},
+                                      MAX_API_BODY if limit is None else limit, url)
         if isinstance(body, list):
             return body
         page = body.get("data") or []
@@ -205,6 +216,7 @@ async def unifi_list_all(client: httpx.AsyncClient, url: str,
         if not page or total is None or len(out) >= int(total):
             return out
         offset += len(page)
+    raise BodyTooLarge(f"{url} has more than {MAX_UNIFI_PAGES} pages; refusing to read further")
 
 
 UNIFI_DETAIL_MAX_BYTES = 1_000_000  # a device detail body larger than this is refused
@@ -217,32 +229,13 @@ class _UniFiCheck(_HttpApiCheck):
     async def list_all(self, path: str) -> list[dict[str, Any]]:
         m = self.monitor
         verify: Any = api_ssl_context(m.verify_tls, m.ca_bundle)
-        async with httpx.AsyncClient(verify=verify, timeout=self.timeout) as c:
+        async with httpx.AsyncClient(verify=verify, timeout=self.timeout,
+                                     follow_redirects=False) as c:
             return await unifi_list_all(c, self.base_url() + m.base_path + path, self.headers())
 
     async def get_capped(self, path: str, limit: int | None = None) -> Any:
-        """GET one JSON object, never following a redirect and refusing to read
-        more than `limit` bytes."""
-        limit = UNIFI_DETAIL_MAX_BYTES if limit is None else limit
-        m = self.monitor
-        verify: Any = api_ssl_context(m.verify_tls, m.ca_bundle)
-        async with httpx.AsyncClient(verify=verify, timeout=self.timeout,
-                                     follow_redirects=False) as c:
-            async with c.stream("GET", self.base_url() + path, headers=self.headers()) as r:
-                if r.status_code in (401, 403):
-                    raise AuthFailed(f"HTTP {r.status_code}")
-                if r.status_code == 404:
-                    raise LookupError(f"{path} not found (404)")
-                if 300 <= r.status_code < 400:
-                    raise LookupError(f"{path} answered a redirect (HTTP {r.status_code}); "
-                                      "redirects are not followed")
-                r.raise_for_status()
-                body = bytearray()
-                async for chunk in r.aiter_bytes():
-                    body += chunk
-                    if len(body) > limit:
-                        raise LookupError(f"{path} response is larger than {limit} bytes")
-        return json.loads(bytes(body))
+        """GET one JSON object under the smaller device detail cap."""
+        return await self.get(path, limit=UNIFI_DETAIL_MAX_BYTES if limit is None else limit)
 
     @staticmethod
     def matches(item: dict[str, Any], want: str) -> bool:

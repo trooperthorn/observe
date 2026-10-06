@@ -17,7 +17,9 @@ Shapes, from the Home Assistant REST API and the ha_Int_soc code:
   Supervisor and each add-on, and sensor.home_assistant_host_disk_free, _disk_used and
   _disk_total in GB. UNVERIFIED: the entity ids come from knowledge of the HA hassio
   integration and no live install was read. They are disabled by default in HA, so a
-  missing sensor is reported as absent, never as zero.
+  missing sensor is reported as absent, never as zero. Only Core, Supervisor and add-ons count
+  (see HASSIO_FIXED and the add-on rule below); a *_cpu_percent sensor from any other
+  integration is ignored.
 - HA SOC sensors: sensor.ha_soc_posture_score, sensor.ha_soc_open_detections,
   sensor.ha_soc_users_at_risk and binary_sensor.ha_soc_suspicious_activity. The unique ids
   are in ha_Int_soc sensor.py; the entity ids derive from translated names and are
@@ -34,8 +36,15 @@ from ..ingest.schema import MAX_SAMPLES, MAX_TEXT, Batch
 
 AGENT_VERSION = "observe-ha-host"
 MAX_PENDING = 100
+MAX_UPDATES = 300
 MAX_HASSIO = 400
 _STATS = re.compile(r"^sensor\.([a-z0-9_]+?)_(cpu_percent|memory_percent)$")
+# The hassio integration names its sensors after the Core and Supervisor entities and after each
+# add-on. An add-on slug is not fixed, so a stats sensor counts for an add-on only when the same
+# slug also has its hassio "running" binary sensor or its update entity. UNVERIFIED against a live
+# install, like the other entity ids here.
+HASSIO_FIXED = ("home_assistant_core", "home_assistant_supervisor")
+_ADDON_MARK = re.compile(r"^(?:binary_sensor\.([a-z0-9_]+)_running|update\.([a-z0-9_]+)_update)$")
 _DISK = {"sensor.home_assistant_host_disk_free": "disk_free_gb",
          "sensor.home_assistant_host_disk_used": "disk_used_gb",
          "sensor.home_assistant_host_disk_total": "disk_total_gb"}
@@ -56,6 +65,16 @@ def _number(raw: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return v if v == v and v not in (float("inf"), float("-inf")) else None
+
+
+def update_is_pending(st: dict[str, Any]) -> bool:
+    """An update entity is pending when its state is on and the installed version is not the
+    latest one. An installed update clears it even if the entity state lags behind."""
+    if st.get("state") != "on":
+        return False
+    attrs = st.get("attributes") if isinstance(st.get("attributes"), dict) else {}
+    installed, latest = attrs.get("installed_version"), attrs.get("latest_version")
+    return not (installed and latest and str(installed) == str(latest))
 
 
 def _text(raw: Any) -> str:
@@ -81,7 +100,11 @@ def build_batch(host: str, config: dict[str, Any], states: list[dict[str, Any]],
     domains: Counter[str] = Counter()
     unavailable = 0
     pending: list[dict[str, Any]] = []
+    update_entities: list[str] = []
+    pending_ids: set[str] = set()
+    addon_slugs: set[str] = set()
     hassio: list[tuple[str, str, float | None]] = []
+    stats: list[tuple[str, str, float | None]] = []
     disk: dict[str, float | None] = {}
     soc: dict[str, float | None] = {}
     versions: dict[str, str] = {}
@@ -97,19 +120,29 @@ def build_batch(host: str, config: dict[str, Any], states: list[dict[str, Any]],
         if state == "unavailable":
             unavailable += 1
         if eid.startswith("update."):
-            if state == "on" and len(pending) < MAX_PENDING:
+            if len(update_entities) < MAX_UPDATES:
+                update_entities.append(eid)
+            if update_is_pending(st) and len(pending) < MAX_PENDING:
+                pending_ids.add(eid)
                 pending.append({"entity_id": eid, "installed": attrs.get("installed_version"),
                                 "latest": attrs.get("latest_version")})
             comp = _SUPERVISOR_UPDATES.get(eid)
             if comp and attrs.get("installed_version"):
                 versions[comp] = _text(attrs["installed_version"])
+        mark = _ADDON_MARK.match(eid)
+        if mark:
+            addon_slugs.add(mark.group(1) or mark.group(2))
         m = _STATS.match(eid)
-        if m and len(hassio) < MAX_HASSIO:
-            hassio.append((m.group(1), m.group(2), _number(state)))
+        if m:
+            stats.append((m.group(1), m.group(2), _number(state)))
         if eid in _DISK:
             disk[_DISK[eid]] = _number(state)
         if eid in _SOC:
             soc[_SOC[eid]] = _number(1.0 if state == "on" else 0.0 if state == "off" else state)
+
+    for slug, kind, v in stats:
+        if (slug in HASSIO_FIXED or slug in addon_slugs) and len(hassio) < MAX_HASSIO:
+            hassio.append((slug, kind, v))
 
     for comp in ("supervisor", "os"):
         if comp in versions:
@@ -120,8 +153,13 @@ def build_batch(host: str, config: dict[str, Any], states: list[dict[str, Any]],
         add("homeassistant", "entities", float(n), "count", domain=domain)
     add("homeassistant", "updates_pending", float(len(pending)), "count")
     for p in pending:
-        add("homeassistant", "update_pending", 1.0, "", entity_id=p["entity_id"],
-            installed=_text(p["installed"]), latest=_text(p["latest"]))
+        add("homeassistant", "update_pending", 1.0, "", entity_id=p["entity_id"])
+    # An explicit 0 for every update entity that is not pending, with the same labels, so an
+    # installed update supersedes the earlier pending reading instead of lingering as the latest
+    # one. The versions are not labels, because a label change would start a new series.
+    for eid in update_entities:
+        if eid not in pending_ids:
+            add("homeassistant", "update_pending", 0.0, "", entity_id=eid)
 
     for name, kind, v in hassio:
         add("hassio", kind, v, "%", name=name)
@@ -137,9 +175,9 @@ def build_batch(host: str, config: dict[str, Any], states: list[dict[str, Any]],
     sources = [
         {"source": "homeassistant", "available": True},
         {"source": "hassio", "available": have_hassio, "present": have_hassio,
-         "reason": "" if have_hassio else "no hassio sensors are enabled"},
+         "reason": ""},
         {"source": "ha_soc", "available": bool(soc), "present": bool(soc),
-         "reason": "" if soc else "no HA SOC sensors found"},
+         "reason": ""},
     ]
     return Batch.model_validate({
         "schema_version": 1, "agent_version": AGENT_VERSION, "host": host,
