@@ -96,7 +96,8 @@ infrastructure tables (see "Infrastructure map core"). Version 9 adds the
 `enrolments` (see "Host enrolment") and version 11 adds its `step_hash` and `reports` columns. Version 12 adds
 the `allowlist_rev`, `allowlist_saved_at` and `reissued_at` columns of `enrolments` and the `host_tasks` table (see "Host
 settings"). Version 13 adds `ui_layouts` (see "Dashboard layout"). Version 14 adds the `guard_step`, `guard_reason` and
-`guard_at` columns of `enrolments` and the `app_settings` table (see "Host enrolment"). A migration step may
+`guard_at` columns of `enrolments` and the `app_settings` table (see "Host enrolment"). Version 15 adds the
+`host_samples_host_ts` index on `host_samples (host, ts)`. A migration step may
 be a function as well as a statement, so an `ALTER TABLE` can check first and
 stay safe to run again. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
@@ -173,11 +174,13 @@ YAML. Listing it is the confirmation; the `hosts.confirmed` column is reserved
 for the admin screen's confirm action in a later slice. The check
 (`observe/checks/host.py`) takes its state from freshness and readings
 rather than from a poll. It reads the newest sample per source, metric and
-label set through `Store.latest_host`, grades each configured component Good,
+label set through `Store.latest_host`, reading only samples from the last
+`max(stale_after, 900)` seconds (the `window` argument, served by the `(host, ts)` index, so the cost does not grow with
+retention; `GET /api/hosts` and `GET /api/hosts/{host}` use the same bound; a series silent for longer than the window is no longer listed, and when nothing is inside the window the single newest sample is returned so a quiet host still reads stale), grades each configured component Good,
 Warning or Critical, and returns OK, WARN or FAIL for the worst one. Those go
 through `MonitorState.observe` like any other result, so `failures_to_down`
 confirmation applies before a host is DOWN or pages. No batch within
-`stale_after` seconds (default three intervals), or none ever, is FAIL. A component whose newest sample is older than `stale_after` is graded stale and is also FAIL, so an outbox replay or a lagging agent clock can not read as healthy.
+`stale_after` seconds (default three intervals), or none ever, is FAIL. A component whose newest sample is older than `stale_after` is graded stale and is also FAIL, so an outbox replay or a lagging agent clock can not read as healthy. The dashboard and host page refresh timers skip a tick while the previous refresh is still running.
 Because the result is an ordinary check result, `group`, `depends_on`,
 `critical`, rollup, alerts and `/metrics` work unchanged, and `/metrics` adds
 `observe_host_age_seconds` and `observe_host_component_state`. The grouped

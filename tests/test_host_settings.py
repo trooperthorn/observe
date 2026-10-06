@@ -590,7 +590,7 @@ def test_a_version_11_database_with_enrolments_migrates_to_14(tmp_path):
     db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
     db.commit()
     newer = {v: m for v, m in MIGRATIONS.items() if v > 11}
-    assert newer and SCHEMA_VERSION == 14
+    assert newer and SCHEMA_VERSION == 15
     for v in newer:
         del MIGRATIONS[v]
     try:
@@ -610,7 +610,7 @@ def test_a_version_11_database_with_enrolments_migrates_to_14(tmp_path):
         assert db.execute("SELECT allowlist_rev, allowlist_saved_at, reissued_at FROM enrolments "
                           "WHERE host='nas01'").fetchone() == (0, None, None)
         assert db.execute("SELECT COUNT(*) FROM host_tasks").fetchone() == (0,)
-        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 14
+        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 15
     finally:
         db.close()
 

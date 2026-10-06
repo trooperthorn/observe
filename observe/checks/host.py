@@ -37,6 +37,11 @@ def grade(value: float, th: Thresholds) -> str:
     return CRITICAL if crit else WARNING if warn else GOOD
 
 
+# Readings older than this are never needed for a current value, so the latest-value
+# query does not read them (the larger of this and the stale window is used).
+LATEST_WINDOW_S = 900.0
+
+
 class PushedHostCheck(Check):
     def __init__(self, monitor: Any, config: Config, store: Any,
                  clock: Callable[[], float] = time.time) -> None:
@@ -52,7 +57,8 @@ class PushedHostCheck(Check):
     async def probe(self) -> CheckResult:
         m = self.monitor
         now = self.clock()
-        data = await self.store.latest_host(m.host)
+        data = await self.store.latest_host(
+            m.host, window=max(self.stale_after, LATEST_WINDOW_S), now=now)
         if data is None:
             return CheckResult.fail(f"no batch ever received from {m.host}",
                                     detail={"components": {}})

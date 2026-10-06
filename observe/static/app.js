@@ -303,7 +303,13 @@ async function renderWaiting() {
   }));
 }
 
+let refreshing = false;
+
+// A refresh never starts while the previous one is still running, so a slow server is
+// not given a growing queue of overlapping requests.
 async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
   try {
     const r = await fetch("/api/monitors");
     if (r.ok) { lastData = await r.json(); render(lastData); }
@@ -312,6 +318,8 @@ async function refresh() {
     await renderWaiting();
   } catch (_) {
     document.getElementById("footer").textContent = "observe unreachable, retrying";
+  } finally {
+    refreshing = false;
   }
 }
 

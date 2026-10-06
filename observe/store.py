@@ -272,6 +272,10 @@ ENROLMENT_GUARD_TABLES = (
 )""",
 )
 
+HOST_SAMPLE_TS_INDEX = (
+    "CREATE INDEX IF NOT EXISTS host_samples_host_ts ON host_samples(host, ts)",
+)
+
 MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = {
     1: BASELINE,
     2: HOST_TABLES,
@@ -287,6 +291,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     12: HOST_TASK_TABLES,
     13: LAYOUT_TABLES,
     14: ENROLMENT_GUARD_TABLES,
+    15: HOST_SAMPLE_TS_INDEX,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
@@ -528,7 +533,8 @@ class Store:
         return await asyncio.to_thread(
             self._ingest_sync, batch, boots, time.time() if now is None else now)
 
-    def _latest_host_sync(self, host: str, since: float) -> dict[str, Any] | None:
+    def _latest_host_sync(self, host: str, since: float,
+                          newest_fallback: bool = False) -> dict[str, Any] | None:
         with self._lock:
             row = self._db.execute(
                 "SELECT last_seen, platform, agent_version, clean_shutdown, boot_ts FROM hosts WHERE host=?",
@@ -542,6 +548,12 @@ class Store:
                 "SELECT source, metric, labels, value, unit, ts, ROW_NUMBER() OVER ("
                 "PARTITION BY source, metric, labels ORDER BY ts DESC, rowid DESC) AS n "
                 "FROM host_samples WHERE host=? AND ts>=?) WHERE n=1", (host, since)).fetchall()
+            if not samples and newest_fallback:
+                # Nothing inside the window: return the single newest row (one index
+                # lookup) so a host that has gone quiet still reads as stale, not empty.
+                samples = self._db.execute(
+                    "SELECT source, metric, labels, value, unit, ts FROM host_samples "
+                    "WHERE host=? ORDER BY ts DESC, rowid DESC LIMIT 1", (host,)).fetchall()
             sources = self._db.execute(
                 "SELECT source, available, reason FROM host_sources WHERE host=?",
                 (host,)).fetchall()
@@ -553,11 +565,18 @@ class Store:
             "sources": {r[0]: {"available": bool(r[1]), "reason": r[2]} for r in sources},
         }
 
-    async def latest_host(self, host: str, since: float = 0.0) -> dict[str, Any] | None:
+    async def latest_host(self, host: str, since: float = 0.0, *, window: float | None = None,
+                          now: float | None = None) -> dict[str, Any] | None:
         """The newest reading per source, metric and label set for a pushed host
         (samples older than `since` are left out), its source availability, and
-        when a batch last arrived. None when the host has never pushed."""
-        return await asyncio.to_thread(self._latest_host_sync, host, since)
+        when a batch last arrived. None when the host has never pushed. With `window`
+        only samples from the last `window` seconds before `now` are read, so the cost
+        does not grow with retention; a series silent for longer is absent, except that when
+        nothing at all is in the window the single newest sample is returned."""
+        if window is not None:
+            since = max(since, (time.time() if now is None else now) - window)
+        return await asyncio.to_thread(
+            self._latest_host_sync, host, since, window is not None)
 
     def _host_rows_sync(self) -> list[dict[str, Any]]:
         with self._lock:

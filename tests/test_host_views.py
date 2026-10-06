@@ -224,7 +224,7 @@ def test_missing_source_is_reported_honestly(env):
 
 
 def test_stale_reading_and_stale_host_are_marked(env):
-    env.push(batch(samples=[s("cpu", "utilization_pct", 5.0, "%", ts=NOW - 5000),
+    env.push(batch(samples=[s("cpu", "utilization_pct", 5.0, "%", ts=NOW - 600),
                             s("memory", "mem_total", 8e9, "B")],
                    sources=[{"source": "cpu", "available": True}]))
     env.login()

@@ -36,6 +36,7 @@ from . import auth as authmod
 from . import enrol, hosttasks, layout, scripts, taskscripts
 from . import hostview
 from .alerts import Alerter
+from .checks.host import LATEST_WINDOW_S
 from .config import Config
 from .infra import InfraError, InfraService
 from .infra_map import MapService
@@ -759,6 +760,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
 
     async def host_view(host: str, row: dict[str, Any] | None) -> dict[str, Any] | None:
         mon = pushed.get(host)
+        seen = row is not None
         if row is None:
             if mon is None:
                 return None
@@ -766,10 +768,11 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             row = {"host": host, "platform": "", "agent_version": "", "last_seen": 0.0,
                    "confirmed": 1}
             data = None
-        else:
-            data = await store.latest_host(host)
         now = auth_clock()
         stale_after = (mon.stale_after or 3 * config.effective(mon, "interval")) if mon             else 3 * config.defaults.interval
+        if seen:
+            data = await store.latest_host(
+                host, window=max(stale_after, LATEST_WINDOW_S), now=now)
         state = None
         if mon is not None:
             st = scheduler.states[mon.slug]

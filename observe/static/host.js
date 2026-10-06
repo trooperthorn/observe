@@ -187,7 +187,13 @@ function render(h) {
   document.getElementById("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;
 }
 
+let refreshing = false;
+
+// A refresh never starts while the previous one is still running, so a slow server is
+// not given a growing queue of overlapping requests.
 async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
   try {
     const r = await fetch(`/api/hosts/${encodeURIComponent(name)}`);
     if (r.status === 401) { location.assign("/login"); return; }
@@ -195,6 +201,8 @@ async function refresh() {
     if (r.ok) render(await r.json());
   } catch (_) {
     document.getElementById("footer").textContent = "observe unreachable, retrying";
+  } finally {
+    refreshing = false;
   }
 }
 

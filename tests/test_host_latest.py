@@ -1,0 +1,98 @@
+"""Latest-value reads for pushed hosts stay bounded and the page timers never overlap."""
+
+from __future__ import annotations
+
+import json
+import re
+import sqlite3
+from pathlib import Path
+
+from observe.checks.host import LATEST_WINDOW_S
+from observe.store import Store
+
+NOW = 1_000_000.0
+STATIC = Path(__file__).resolve().parent.parent / "observe" / "static"
+
+
+def seed(store: Store, old_rows: int, host: str = "nas01") -> None:
+    db = store._db
+    db.execute("INSERT INTO hosts (host, first_seen, last_seen, platform, agent_version) VALUES (?,?,?,?,?)",
+               (host, NOW - 99, NOW, "linux", "1"))
+    rows = []
+    for i in range(old_rows):
+        rows.append((NOW - 10 * 86400 + i, host, "hwmon", "cpu_temp_c", "{}", 40.0 + i % 5, "C"))
+    for i in range(5):
+        rows.append((NOW - 100 + i * 10, host, "hwmon", "cpu_temp_c", "{}", 60.0 + i, "C"))
+        rows.append((NOW - 100 + i * 10, host, "zfs", "pool_used", json.dumps({"p": "a"}), 5.0 + i, "%"))
+    db.executemany("INSERT INTO host_samples (ts, host, source, metric, labels, value, unit) "
+                   "VALUES (?,?,?,?,?,?,?)", rows)
+    db.commit()
+
+
+async def test_windowed_latest_matches_unbounded(tmp_path):
+    store = Store(str(tmp_path / "w.db"))
+    seed(store, 200)
+    full = await store.latest_host("nas01")
+    bounded = await store.latest_host("nas01", window=LATEST_WINDOW_S, now=NOW)
+    assert bounded == full
+    assert len(full["samples"]) == 2
+    store.close()
+
+
+async def test_series_silent_beyond_the_window_is_left_out(tmp_path):
+    store = Store(str(tmp_path / "w.db"))
+    seed(store, 3)
+    bounded = await store.latest_host("nas01", window=70, now=NOW)
+    assert {s["source"] for s in bounded["samples"]} == {"hwmon", "zfs"}
+    bounded = await store.latest_host("nas01", window=1, now=NOW + 1000)
+    assert len(bounded["samples"]) == 1  # nothing in the window: the newest row only
+    assert bounded["samples"][0]["ts"] == NOW - 60
+    store.close()
+
+
+def test_host_ts_index_exists_after_migration(tmp_path):
+    path = str(tmp_path / "w.db")
+    Store(path).close()
+    db = sqlite3.connect(path)
+    cols = [r[2] for r in db.execute("PRAGMA index_info(host_samples_host_ts)")]
+    db.close()
+    assert cols == ["host", "ts"]
+
+
+def _steps(store: Store) -> int:
+    count = 0
+
+    def tick() -> int:
+        nonlocal count
+        count += 1
+        return 0
+
+    store._db.set_progress_handler(tick, 100)
+    try:
+        store._latest_host_sync("nas01", NOW - LATEST_WINDOW_S)
+    finally:
+        store._db.set_progress_handler(None, 0)
+    return count
+
+
+def test_bounded_read_does_not_scale_with_retention(tmp_path):
+    small, large = Store(str(tmp_path / "a.db")), Store(str(tmp_path / "b.db"))
+    seed(small, 500)
+    seed(large, 20_000)
+    plan = " ".join(r[3] for r in large._db.execute(
+        "EXPLAIN QUERY PLAN SELECT source, metric, labels, value, unit, ts FROM host_samples "
+        "WHERE host=? AND ts>=?", ("nas01", NOW - 900)))
+    assert "host_samples_host_ts" in plan
+    a, b = _steps(small), _steps(large)
+    assert b <= a + 20, (a, b)
+    small.close()
+    large.close()
+
+
+def test_page_refresh_never_overlaps():
+    for name in ("app.js", "host.js"):
+        text = (STATIC / name).read_text(encoding="utf-8")
+        body = re.search(r"async function refresh\(\) \{(.*?)\n\}\n", text, re.S).group(1)
+        assert "if (refreshing) return;" in body
+        assert body.index("refreshing = true") < body.index("fetch(")
+        assert "finally" in body and "refreshing = false" in body
