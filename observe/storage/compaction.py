@@ -5,8 +5,8 @@ A compaction pass removes, level by level, the rows past each level's retention:
 5 minute, hourly and daily summaries. Three rules keep it safe.
 
 * Coverage is verified before anything is deleted. For a series, the points about to go must be
-  counted in the summary levels that still hold their time range: the count of the coarser level
-  must be at least the count of the finer one. A series that fails the check is left alone, the
+  summarised by the levels that still hold their time range: the coarser level must count at least
+  as many points, reach as low and as high, and (at equal counts) have the same sum. A series that fails the check is left alone, the
   first problem is recorded for the admin page, and the pass carries on with the others.
 * Deletes are chunked. A write unit removes at most CHUNK_ROWS rows and looks at no more than
   MAX_SERIES_PER_UNIT series, so ingest never waits behind one long delete.
@@ -83,27 +83,50 @@ def whole_table_cuts(levels: RetentionLevels, now: float) -> Cuts:
                 d1=cut("d1", MS_1D, shortest_days(levels, "daily_days")))
 
 
-def _count(db: Conn, level: str, sid: int | None, lo: int, hi: int) -> int:
+def _stats(db: Conn, level: str, sid: int | None, lo: int, hi: int
+           ) -> tuple[int, float, float | None, float | None]:
+    """Count, sum, min and max of the points a level holds in [lo, hi)."""
     table, col = TABLES[level]
     where = f"{col} >= ? AND {col} < ?"
     args: tuple[Any, ...] = (lo, hi)
     if sid is not None:
         where = "series_id = ? AND " + where
         args = (sid, *args)
-    what = "COUNT(value)" if level == "raw" else "COALESCE(SUM(n), 0)"
-    return int(db.execute(f"SELECT {what} FROM {table} WHERE {where}", args).fetchone()[0] or 0)
+    if level == "raw":
+        what = "COUNT(value), COALESCE(SUM(value), 0), MIN(value), MAX(value)"
+    else:
+        what = "COALESCE(SUM(n), 0), COALESCE(SUM(sum_v), 0), MIN(min_v), MAX(max_v)"
+    n, total, lo_v, hi_v = db.execute(f"SELECT {what} FROM {table} WHERE {where}", args).fetchone()
+    return (int(n or 0), float(total or 0.0), None if lo_v is None else float(lo_v),
+            None if hi_v is None else float(hi_v))
+
+
+def _covers(fine: tuple[int, float, float | None, float | None],
+            coarse: tuple[int, float, float | None, float | None]) -> bool:
+    """The coarse level counts at least the points of the fine one, reaches at least as low and
+    as high, and, when the counts match, has the same sum (within rounding)."""
+    if coarse[0] < fine[0]:
+        return False
+    if fine[2] is not None and (coarse[2] is None or coarse[2] > fine[2]):
+        return False
+    if fine[3] is not None and (coarse[3] is None or coarse[3] < fine[3]):
+        return False
+    if coarse[0] == fine[0] and abs(coarse[1] - fine[1]) > 1e-9 * max(1.0, abs(fine[1])):
+        return False
+    return True
 
 
 def coverage_ok(db: Conn, level: str, hi: int, cuts: Cuts, sid: int | None = None) -> bool:
-    """Whether the rows of `level` older than `hi` are counted in the levels above it. Each
-    covering level is checked over the range it still holds; what is older than every covering
-    level's cut has been trimmed everywhere by retention and is not checked. `sid` limits the
-    check to one series."""
+    """Whether the rows of `level` older than `hi` are summarised in the levels above it. Each
+    covering level is checked over the range it still holds, on count, sum, minimum and maximum;
+    what is older than every covering level's cut has been trimmed everywhere by retention and
+    is not checked. `sid` limits the check to one series."""
     upper = hi
     for coarse in COVERED_BY[level]:
         hold = cuts.of(coarse)
         if upper > hold:
-            if _count(db, coarse, sid, hold, upper) < _count(db, level, sid, hold, upper):
+            if not _covers(_stats(db, level, sid, hold, upper),
+                           _stats(db, coarse, sid, hold, upper)):
                 return False
             upper = hold
     return True

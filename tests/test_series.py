@@ -329,6 +329,12 @@ def fake_timescale(covered, rows=42):
         compacted.append(level)
         return 0
 
+    class Raw:
+        def rollback(self):
+            pass
+
+    pg._wraw = Raw()
+    pg._read_on_writer = lambda unit: (covered, rows)
     pg.read, pg.write, pg.compacted = read, write, compacted
     return pg, compact_level
 

@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from observe.checks.host import LATEST_WINDOW_S
 from observe.store import Store
 
@@ -121,3 +123,18 @@ def test_page_refresh_never_overlaps():
         assert "if (refreshing) return;" in body
         assert body.index("refreshing = true") < body.index("fetch(")
         assert "finally" in body and "refreshing = false" in body
+
+
+@pytest.mark.parametrize("version", [10, 15, 16, 17])
+def test_a_database_from_an_earlier_build_is_refused(tmp_path, version):
+    import sqlite3
+    from observe.storage.schema import LegacySchemaError, migrate
+    db = sqlite3.connect(str(tmp_path / "old.db"))
+    db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+    db.execute("CREATE TABLE host_samples (host TEXT, ts REAL)")
+    db.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+    db.commit()
+    with pytest.raises(LegacySchemaError):
+        migrate(db)
+    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == version
+    db.close()

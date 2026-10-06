@@ -29,7 +29,8 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 from . import compaction, pg_timescale, rollups
 from .base import CHANGE_DOMAINS, Conn, IntegrityConflict, StorageBusy, StorageError, StorageTimeout, T
 from .pg_dialect import table_info_query, translate_sql
-from .schema import (MIGRATIONS, PLUGIN_TABLES, PluginSchemaTooNewError, SchemaTooNewError)
+from .schema import (MIGRATIONS, PLUGIN_TABLES, PluginSchemaTooNewError, SchemaTooNewError,
+                     refuse_legacy)
 
 log = logging.getLogger("observe.storage.postgres")
 
@@ -230,6 +231,9 @@ class PgStorage:
             current = db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
             raw.commit()
             latest = max(MIGRATIONS)
+            legacy = db.execute("SELECT to_regclass('host_samples')").fetchone()
+            raw.commit()
+            refuse_legacy(current, bool(legacy and legacy[0] is not None))
             if current > latest:
                 raise SchemaTooNewError(
                     f"database schema version {current} is newer than this Observe "
@@ -456,12 +460,21 @@ class PgStorage:
             n = db.execute("SELECT COUNT(*) FROM samples WHERE ts < ?", (bound,)).fetchone()[0]
             return ok, int(n)
 
-        ok, rows = await self.read(check)
+        def check_and_drop() -> tuple[bool, int]:
+            # One writer-thread unit: ingest runs on this thread too, so no late sample can
+            # reach an old chunk between the check and the drop.
+            assert self._wraw is not None
+            try:
+                ok, n = self._read_on_writer(check)
+            finally:
+                self._wraw.rollback()
+            if ok:
+                self._admin_run([pg_timescale.drop_raw_statement(bound)])
+            return ok, n
+
+        ok, rows = await asyncio.wrap_future(self._writer.submit(check_and_drop))
         error = ""
-        if ok:
-            await asyncio.wrap_future(self._writer.submit(
-                self._admin_run, [pg_timescale.drop_raw_statement(bound)]))
-        else:
+        if not ok:
             error = "raw chunks kept: the aggregates do not cover them yet"
             log.warning(error)
         await self.write(lambda db: compaction.note_level(

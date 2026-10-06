@@ -129,6 +129,20 @@ async def test_a_series_whose_summaries_do_not_cover_it_is_left_alone(db):
     assert "1 series kept" in error[0]
 
 
+async def test_a_summary_with_a_wrong_sum_or_extreme_is_not_trusted(db):
+    now = 800 * DAY
+    await one(db, now - 10 * DAY, 5.0, metric="badsum")
+    await one(db, now - 10 * DAY, 5.0, metric="badmin")
+    await db.execute("UPDATE rollup_5m SET sum_v = 99 WHERE series_id = "
+                     "(SELECT id FROM series WHERE metric = 'badsum')")
+    await db.execute("UPDATE rollup_5m SET min_v = 6 WHERE series_id = "
+                     "(SELECT id FROM series WHERE metric = 'badmin')")
+    await db.apply_retention(now=now, retention_days=7, audit_retention_days=365)
+    left = await db.fetchall("SELECT s.metric FROM samples a JOIN series s ON s.id = a.series_id "
+                             "ORDER BY 1")
+    assert left == [("badmin",), ("badsum",)]
+
+
 async def test_a_five_minute_row_is_not_trimmed_without_the_hourly_row_that_covers_it(db):
     now = 800 * DAY
     await one(db, now - 20 * DAY, 1.0)

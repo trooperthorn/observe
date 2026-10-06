@@ -310,6 +310,20 @@ class SchemaTooNewError(RuntimeError):
     """Raised when the database was written by a newer version of Observe."""
 
 
+class LegacySchemaError(SchemaTooNewError):
+    """Raised when the database was created by an earlier build with a different migration
+    numbering (it still has the host_samples table). Steps were renumbered in place, so
+    running only the steps above its number would skip tables. There is no migration path."""
+
+
+def refuse_legacy(current: int, has_host_samples: bool) -> None:
+    if current and has_host_samples:
+        raise LegacySchemaError(
+            f"database at schema version {current} was created by an earlier build of Observe "
+            "(it has a host_samples table) and cannot be upgraded in place; delete it and "
+            "start again with an empty database")
+
+
 def migrate(db: sqlite3.Connection) -> None:
     """Bring an open database up to SCHEMA_VERSION, one transaction per step."""
     old = db.isolation_level
@@ -318,6 +332,8 @@ def migrate(db: sqlite3.Connection) -> None:
         db.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
         current = db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
         latest = max(MIGRATIONS)
+        refuse_legacy(current, bool(db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='host_samples'").fetchall()))
         if current > latest:
             raise SchemaTooNewError(
                 f"database schema version {current} is newer than this Observe "

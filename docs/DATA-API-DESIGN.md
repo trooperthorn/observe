@@ -250,7 +250,7 @@ Field reports keep their raw JSON in the Pockethernet plugin's `reports` table (
 
 ### 2.8 Migration from current tables
 
-Dropped by section 11. There is no migration path: Observe is destroyed and redeployed, so the dual write, the backfill, the verification, the cut-over and the legacy rename described in earlier versions of this section do not exist, and the `host_samples` table is gone. The core schema creates the tables of section 2 directly (migrations 16 and 17).
+Dropped by section 11. There is no migration path: Observe is destroyed and redeployed, so the dual write, the backfill, the verification, the cut-over and the legacy rename described in earlier versions of this section do not exist, and the `host_samples` table is gone. The core schema creates the tables of section 2 directly (migrations 16 and 17). A database created by an earlier build (one that still has a `host_samples` table) is refused at start with `LegacySchemaError`, because the migration steps were renumbered in place; delete it and start empty.
 
 ### 2.9 SQLite pragmas
 
