@@ -77,11 +77,15 @@ class PushedHostCheck(Check):
         self.reach = reach
         interval = config.effective(monitor, "interval")
         self.stale_after: float = monitor.stale_after or 3 * interval
+        # The batch time that a ping or TCP answer already carried through a re-check. A host
+        # that answers while its agent stays silent is not healthy, so the same stale batch is a
+        # plain failure the next time and the ordinary counts take it to Down.
+        self._answered_for: float | None = None
 
     def thresholds(self) -> Thresholds | None:
         return None  # the component thresholds are applied here, not to one value
 
-    async def _missed(self, age: float) -> CheckResult:
+    async def _missed(self, age: float, last_seen: float) -> CheckResult:
         """No batch within the stale window. The first miss is a failure that starts the fast
         re-check. While the monitor is being re-checked, the host's own address is pinged (or its
         port connected to): an answer is a good reply, because a batch may simply be late."""
@@ -93,9 +97,13 @@ class PushedHostCheck(Check):
             port = m.recheck_port
             how = f"TCP port {port}" if port is not None else "ping"
             if await self.reach(address, port, self.timeout):
+                self._answered_for = last_seen
                 return CheckResult.ok(f"{text}, but {address} answers {how}", value=age, unit="s",
                                       detail=detail)
             text += f", and {address} does not answer {how}"
+        if not self.rechecking and self._answered_for == last_seen:
+            text += "; the host answered a re-check but the agent is still silent"
+            return CheckResult.fail(text, value=age, unit="s", detail=detail)
         return CheckResult.fail(text, value=age, unit="s", detail=detail, unreachable=True)
 
     async def probe(self) -> CheckResult:
@@ -109,7 +117,8 @@ class PushedHostCheck(Check):
                                     detail={"components": {}})
         age = now - data["last_seen"]
         if age > self.stale_after:
-            return await self._missed(age)
+            return await self._missed(age, data["last_seen"])
+        self._answered_for = None
 
         components: dict[str, str] = {}
         reasons: dict[str, str] = {}

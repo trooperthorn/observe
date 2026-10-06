@@ -294,6 +294,37 @@ async def test_the_recheck_uses_tcp_and_the_address_when_configured(storage):
     assert p.calls == [("192.0.2.9", 22)]
 
 
+async def test_a_host_that_answers_ping_but_has_a_dead_agent_still_goes_down(storage):
+    p = Pushed(storage)
+    p.alive = True
+    await p.push()
+    await p.poll()
+    await p.poll(121)
+    await p.poll(10)
+    await p.poll(10)
+    assert p.env.st("nas").state is State.UP  # the answers carried it through the re-check
+    for _ in range(10):  # the same stale batch is now a plain failure, not another re-check
+        await p.poll(30)
+    st = p.env.st("nas")
+    assert st.state is State.DOWN and not st.degraded
+    assert "agent is still silent" in st.last.message
+
+
+async def test_a_fresh_batch_clears_the_answered_but_silent_memory(storage):
+    p = Pushed(storage)
+    p.alive = True
+    await p.push()
+    await p.poll()
+    await p.poll(121)
+    await p.poll(10)
+    await p.poll(10)
+    p.env.clock.now += 10
+    await p.push()
+    assert (await p.poll()).result is Result.OK
+    res = await p.poll(121)  # silent again later: a new episode starts with a re-check
+    assert res.unreachable and p.env.st("nas").degraded
+
+
 async def test_a_pushed_host_that_never_answers_goes_down_after_the_window(storage):
     p = Pushed(storage)
     await p.push()
@@ -476,4 +507,18 @@ async def test_history_from_before_the_series_existed_is_backfilled(storage):
     # A second start copies nothing, and newer live polls are not disturbed.
     assert await st.backfill_monitor_series() == 0
     await st.record("m", T0, CheckResult.ok("up"))
+    assert await st.backfill_monitor_series() == 0
+
+
+async def test_a_finished_backfill_is_not_repeated_after_raw_samples_are_pruned(storage):
+    st = _store_on(storage)
+    for i in range(1, 6):
+        await st.execute("INSERT INTO results VALUES (?,?,?,?,?,?)",
+                         ("m", T0 - 100 * i, "ok", 10.0, 5.0, ""))
+    await settle(storage)
+    assert await st.backfill_monitor_series() == 5
+    await settle(storage)
+    # Raw samples pruned earlier than the poll rows: the rows are older than the new minimum.
+    await st.execute("DELETE FROM samples")
+    await settle(storage)
     assert await st.backfill_monitor_series() == 0

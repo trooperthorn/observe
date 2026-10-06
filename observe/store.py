@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -71,6 +72,9 @@ CODE_RESULT = {0: Result.OK, 1: Result.WARN, 2: Result.FAIL}
 FINE_WINDOW_H = 48.0
 
 
+log = logging.getLogger(__name__)
+BACKFILL_KEY = "monitor_series_backfill_done"
+
 class Store:
     def __init__(self, path: str, plugins: LoadedPlugins | None = None, *,
                  backend: str = "sqlite", dsn: str | None = None, password: str | None = None,
@@ -122,9 +126,14 @@ class Store:
         read the series, so an upgraded install would otherwise show no history. Newest rows go
         first, so an interrupted run leaves no gap and the next start continues below the oldest
         point already copied. Returns the number of rows copied."""
+        done = await self.fetch("SELECT 1 FROM app_settings WHERE key = ?", (BACKFILL_KEY,))
+        if done:
+            return 0  # the copy ran to the end once; pruned raw samples must not be copied again
         monitors = [r[0] for r in await self.fetch("SELECT DISTINCT monitor FROM results")]
         copied = 0
-        for monitor in monitors:
+        for n, monitor in enumerate(monitors, 1):
+            log.info("Copying poll history into the series: monitor %d of %d (%s)",
+                     n, len(monitors), monitor)
             while True:
                 first = await self.fetch(
                     "SELECT MIN(sm.ts) FROM samples sm JOIN series s ON s.id = sm.series_id "
@@ -146,6 +155,11 @@ class Store:
                     lambda db, rows=rows, monitor=monitor: self._backfill_unit(db, monitor, rows),
                     touches=("monitors", "metrics"))
                 copied += len(rows)
+        await self.execute(
+            "INSERT INTO app_settings (key, value, updated) VALUES (?, '1', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+            (BACKFILL_KEY, time.time()))
+        log.info("Copied %d poll rows into the series", copied)
         return copied
 
     def _backfill_unit(self, db: Conn, monitor: str, rows: list[tuple[Any, ...]]) -> None:

@@ -195,8 +195,8 @@ class Scheduler:
             if monitor.slug not in self._ancestors(child.slug):
                 continue
             cst = self.states[child.slug]
-            if cst.state not in _PROBLEM or cst.alert_open:
-                continue
+            if cst.state not in _PROBLEM or cst.alert_open or cst.degraded:
+                continue  # a child in its own re-check window is decided by that window
             res = await self.poll_once(child)
             if res.result is Result.OK or cst.state not in _PROBLEM or cst.alert_open:
                 continue  # recovering, recovered, or already alerted by that poll

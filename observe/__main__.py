@@ -51,7 +51,6 @@ async def _once(config, only: str | None) -> int:  # type: ignore[no-untyped-def
 
 async def _serve(config, plugins) -> None:  # type: ignore[no-untyped-def]
     store = Store.from_config(config, plugins)
-    await store.backfill_monitor_series()
     alerter = Alerter(config)
     sched = Scheduler(config, store, alerter)
     app = create_app(config, store, sched, alerter, plugins=plugins)
@@ -63,12 +62,17 @@ async def _serve(config, plugins) -> None:  # type: ignore[no-untyped-def]
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, lambda: setattr(server, "should_exit", True))
     sched.start()
+    # The history copy can be long on a small board, so it runs beside polling and the web app
+    # and logs its progress instead of holding the start.
+    backfill = asyncio.create_task(store.backfill_monitor_series())
     log.info("Observe %s: %d monitors, %d alert targets, listening on %s:%d",
              __version__, len(sched.monitors), len(config.alerts),
              config.server.listen, config.server.port)
     try:
         await server.serve()
     finally:
+        backfill.cancel()
+        await asyncio.gather(backfill, return_exceptions=True)
         await sched.stop()
         store.close()
 
