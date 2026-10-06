@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildBody, controlBlock, defaultFans, parseLimit, progressChip, stepFromHash, validHeader,
+  buildBody, controlBlock, defaultFans, parseLimit, progressChip, stepFromHash, stepAnnouncement, validHeader,
   validName, validPool, validService, hostHref, reportChip, validPublicUrl, noticeFor, guardText,
 } from "../../observe/static/js/wizard-logic.js";
 
@@ -24,6 +24,18 @@ test("header, service and pool names", () => {
   assert.ok(validService("smbd") && validService("docker:scrutiny"));
   assert.ok(!validService("a..b") && !validService("-x") && !validService("a@b") && !validService("a;b"));
   assert.ok(validPool("") && validPool("Apps") && !validPool("a/b") && !validPool("a..b"));
+});
+
+test("fan header names follow hostwatch-control's rule", () => {
+  for (const ok of ["pwm1", "pwm2", "fan1", "pwm-fan", "_x", "a", "A_b-9", "a".repeat(32)]) assert.ok(validHeader(ok), ok);
+  for (const bad of ["", "pwm 1", "../x", "a;b", "$(id)", "-pwm1", "pw@m", "a".repeat(40), "a".repeat(33),
+    "pwm.1", ".x", "pwm1\n", 5, null]) assert.ok(!validHeader(bad), String(bad));
+});
+
+test("each step has an announcement for the live region", () => {
+  assert.equal(stepAnnouncement("host"), "Step 1 of 5: Host");
+  assert.equal(stepAnnouncement("live"), "Step 5 of 5: Live progress");
+  assert.equal(stepAnnouncement("nope"), "");
 });
 
 test("limits are blank or a whole number from 0 to 100", () => {

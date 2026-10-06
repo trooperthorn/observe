@@ -94,7 +94,7 @@ def test_the_command_block_is_a_pre_filled_with_text_and_has_a_copy_button():
     assert '<pre class="cmd" id="cmd"' in html and 'id="copy"' in html
     js = _read("hosts-new.js")
     assert '$("cmd").textContent = created.command' in js
-    assert "copyText(created.command)" in js
+    assert 'copyText(created.command, $("cmd"))' in js
     assert 'created.host} · ${created.platform_label}' in js
 
 

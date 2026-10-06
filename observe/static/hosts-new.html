@@ -22,6 +22,7 @@
     <h1>Add host</h1>
   </div>
   <p id="msg" class="msg-line" role="alert"></p>
+  <p id="step-announce" class="sr-only" role="status" aria-live="polite"></p>
   <ol class="steps" id="steps" aria-label="Add host steps">
     <li data-step="host"><span class="step-n">1</span><span class="step-name">Host</span></li>
     <li data-step="agent"><span class="step-n">2</span><span class="step-name">Agent and control</span></li>
@@ -55,7 +56,7 @@
   </section>
 
   <section class="card" id="step-host" aria-labelledby="step-host-h" hidden>
-    <h3 id="step-host-h">Step 1. Host</h3>
+    <h3 id="step-host-h" tabindex="-1">Step 1. Host</h3>
     <form id="form-host" class="wiz-form" novalidate>
       <label class="wiz-field">Host name
         <input id="host-name" name="name" type="text" maxlength="63" autocomplete="off"
@@ -79,7 +80,7 @@
   </section>
 
   <section class="card" id="step-agent" aria-labelledby="step-agent-h" hidden>
-    <h3 id="step-agent-h">Step 2. Agent and control</h3>
+    <h3 id="step-agent-h" tabindex="-1">Step 2. Agent and control</h3>
     <form id="form-agent" class="wiz-form" novalidate>
       <label class="inline"><input type="checkbox" id="agent-on" checked disabled> hostwatch agent (metrics), required</label>
       <label class="inline"><input type="checkbox" id="control-on"> thermal-control (fans, services, reboot)</label>
@@ -92,7 +93,7 @@
   </section>
 
   <section class="card" id="step-allowlist" aria-labelledby="step-allowlist-h" hidden>
-    <h3 id="step-allowlist-h">Step 3. Allowlist</h3>
+    <h3 id="step-allowlist-h" tabindex="-1">Step 3. Allowlist</h3>
     <p class="card-sub">Only these fan headers and services can ever be changed from the console. The host enforces the same list.</p>
     <form id="form-allow" class="wiz-form" novalidate>
       <fieldset class="wiz-fieldset" id="fans">
@@ -124,7 +125,7 @@
   </section>
 
   <section class="card" id="step-install" aria-labelledby="step-install-h" hidden>
-    <h3 id="step-install-h">Step 4. Install</h3>
+    <h3 id="step-install-h" tabindex="-1">Step 4. Install</h3>
     <p class="card-sub" id="install-sub"></p>
     <div class="cmd-block">
       <pre class="cmd" id="cmd" tabindex="0"></pre>
@@ -136,7 +137,7 @@
   </section>
 
   <section class="card" id="step-live" aria-labelledby="step-live-h" hidden>
-    <h3 id="step-live-h">Step 5. Live progress</h3>
+    <h3 id="step-live-h" tabindex="-1">Step 5. Live progress</h3>
     <p class="card-sub" id="live-sub"></p>
     <ol class="progress" id="progress" aria-live="polite"></ol>
     <ul class="progress" id="reports" aria-live="polite"></ul>

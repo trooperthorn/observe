@@ -38,6 +38,35 @@ export function zoomAt(camera, sx, sy, factor) {
   return { k, x: sx - wx * k, y: sy - wy * k };
 }
 
+// A string that changes when the graph's shape changes: its devices, its links or its anchors.
+// Two refreshes with the same key have the same layout, so only the states and stale flags differ.
+export function structureKey(entities, relations, anchors) {
+  const ids = entities.map((e) => e.id).sort();
+  const links = relations.map((r) => r.source + ">" + r.target + ":" + r.kind).sort();
+  return JSON.stringify([ids, links, [...(anchors || [])].sort()]);
+}
+
+// The previous layout with new device states and stale flags, positions untouched. The caller has
+// already checked that the structure key is unchanged, so every node and link still exists.
+export function mergeLayout(prev, entities, relations) {
+  const state = new Map(entities.map((e) => [e.id, e.state || "pending"]));
+  const stale = new Map(relations.map((r) => [r.source + ">" + r.target, !!r.stale]));
+  return {
+    ...prev,
+    nodes: prev.nodes.map((n) => ({ ...n, state: state.has(n.entityId) ? state.get(n.entityId) : n.state })),
+    links: prev.links.map((l) => {
+      const key = l.source + ">" + l.target;
+      return { ...l, stale: stale.has(key) ? stale.get(key) : l.stale };
+    }),
+  };
+}
+
+// The camera after a data refresh. The person's pan and zoom survive when they have moved the
+// view or when the graph kept its shape; a changed graph that nobody has moved is fitted again.
+export function cameraAfterRefresh(current, fitted, sameStructure, touched) {
+  return sameStructure || touched ? current : fitted;
+}
+
 // Entities connected to the selection, plus the selection itself. Null when nothing is selected.
 export function focusSet(layout, selected) {
   if (!selected) return null;
@@ -68,6 +97,7 @@ export function createGraphView(canvas, options) {
     h: 200,
     dpr: 1,
     showLabels: opts.showLabels !== false,
+    touched: false, // true once the person has panned or zoomed; fit() clears it
   };
   let frame = 0;
   let lastPaint = 0;
@@ -139,6 +169,7 @@ export function createGraphView(canvas, options) {
       if (Math.abs(sx - dragging.sx) + Math.abs(sy - dragging.sy) > 3) dragging.moved = true;
       if (dragging.moved) {
         st.camera = { k: st.camera.k, x: dragging.cx + sx - dragging.sx, y: dragging.cy + sy - dragging.sy };
+        st.touched = true;
         schedule();
       }
       return;
@@ -173,6 +204,7 @@ export function createGraphView(canvas, options) {
     ev.preventDefault();
     const [sx, sy] = pointer(ev);
     st.camera = zoomAt(st.camera, sx, sy, ev.deltaY < 0 ? 1.15 : 1 / 1.15);
+    st.touched = true;
     schedule();
   }
 
@@ -211,12 +243,14 @@ export function createGraphView(canvas, options) {
 
   const controller = {
     state: st,
-    // layout comes from layoutForce; entities is an array of GraphEntity.
-    setData(layout, entities) {
+    // layout comes from layoutForce; entities is an array of GraphEntity. With
+    // options.sameStructure the layout is the previous one with new states, so the view is kept.
+    setData(layout, entities, options) {
       st.layout = layout;
       st.entities = new Map(entities.map((e) => [e.id, e]));
       if (st.selected && !st.entities.has(st.selected)) st.selected = null;
-      st.camera = fitCamera(layout, st.w, st.h);
+      st.camera = cameraAfterRefresh(st.camera, fitCamera(layout, st.w, st.h),
+        !!(options && options.sameStructure), st.touched);
       describe();
       schedule();
     },
@@ -224,10 +258,12 @@ export function createGraphView(canvas, options) {
       setSelected(id);
     },
     fit() {
+      st.touched = false;
       st.camera = fitCamera(st.layout, st.w, st.h);
       schedule();
     },
     zoomBy(factor) {
+      st.touched = true;
       st.camera = zoomAt(st.camera, st.w / 2, st.h / 2, factor);
       schedule();
     },

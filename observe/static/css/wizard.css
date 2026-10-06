@@ -14,7 +14,7 @@
 .steps li[aria-current="step"] .step-n { border-color: var(--o-accent); }
 .wiz-form { display: grid; gap: var(--o-s3); justify-items: start; margin-top: var(--o-s3); }
 .wiz-field { display: flex; flex-direction: column; gap: var(--o-s1); font-size: var(--o-fs-sm); }
-.wiz-field input, .wiz-add input { border: 1px solid var(--o-border); border-radius: 6px;
+.wiz-field input, .wiz-add input { border: 1px solid var(--o-border-input); border-radius: 6px;
   background: var(--o-surface); color: var(--o-text); padding: 0 var(--o-s2); min-height: 32px; font: inherit; }
 .wiz-field input { min-width: min(24rem, 100%); }
 .wiz-fieldset { border: 1px solid var(--o-border); border-radius: var(--o-radius-sm);
@@ -24,7 +24,7 @@
 .wiz-list li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--o-s2) var(--o-s3); }
 .wiz-limit { display: inline-flex; align-items: center; gap: var(--o-s1); font-size: var(--o-fs-sm);
              color: var(--o-text-muted); }
-.wiz-limit input { width: 5rem; border: 1px solid var(--o-border); border-radius: 6px;
+.wiz-limit input { width: 5rem; border: 1px solid var(--o-border-input); border-radius: 6px;
   background: var(--o-surface); color: var(--o-text); padding: 0 var(--o-s2); min-height: 32px; font: inherit; }
 .wiz-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--o-s2); }
 .wiz-add label { display: flex; flex-direction: column; gap: var(--o-s1); font-size: var(--o-fs-sm); }

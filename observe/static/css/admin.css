@@ -11,13 +11,13 @@
 .admin-form label { display: flex; flex-direction: column; gap: var(--o-s1); font-size: var(--o-fs-sm); }
 .admin-form label.inline { flex-direction: row; align-items: center; gap: var(--o-s2); }
 .admin-form input:not([type="checkbox"]), .admin-form select, .filter-bar input, .filter-bar select {
-  border: 1px solid var(--o-border); border-radius: 6px; background: var(--o-surface);
+  border: 1px solid var(--o-border-input); border-radius: 6px; background: var(--o-surface);
   color: var(--o-text); padding: 0 var(--o-s2); min-height: 32px; font: inherit; }
 .row-actions { display: flex; flex-wrap: wrap; gap: var(--o-s2); }
 .card.notice.accent { background: var(--o-accent-tint); border-color: var(--o-accent-line); }
 .card.notice.accent h3 { color: var(--o-accent); }
 .key-line { display: flex; flex-wrap: wrap; gap: var(--o-s2); align-items: center; }
-.key-line input { flex: 1 1 18rem; font-family: var(--o-mono); min-height: 32px; border: 1px solid var(--o-border);
+.key-line input { flex: 1 1 18rem; font-family: var(--o-mono); min-height: 32px; border: 1px solid var(--o-border-input);
                   border-radius: 6px; background: var(--o-surface); color: var(--o-text); padding: 0 var(--o-s2); }
 .msg-line { min-height: 1.2em; color: var(--o-down); margin: 0; }
 .filter-bar { display: flex; flex-wrap: wrap; gap: var(--o-s3); align-items: flex-end; margin: var(--o-s3) 0; }

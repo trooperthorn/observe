@@ -9,7 +9,7 @@ import {
   fitCamera, pickNode, worldToScreen, screenToWorld, paletteColor, readTheme,
 } from "../../observe/static/js/graph/render.js";
 import {
-  graphSummary, stepSelection, zoomAt, focusSet,
+  graphSummary, stepSelection, zoomAt, focusSet, structureKey, mergeLayout, cameraAfterRefresh,
 } from "../../observe/static/js/graph/view.js";
 
 function sample(n) {
@@ -95,4 +95,36 @@ test("colours come from tokens with a neutral fallback", () => {
   const theme = readTheme({});
   assert.equal(paletteColor(theme, 0), theme.cats[0]);
   assert.equal(paletteColor(theme, 99), theme.other);
+});
+
+test("a refresh with the same shape keeps the layout and the view, and only updates states", () => {
+  const input = sample(12);
+  const layout = layoutForce(input);
+  const same = structureKey(input.entities, input.relations, input.anchors);
+  const next = input.entities.map((e) => (e.id === "n3" ? { ...e, state: "down" } : e));
+  const rels = input.relations.map((r) => (r.id === "l2" ? { ...r, stale: true } : r));
+  assert.equal(structureKey(next, rels, input.anchors), same);
+  const merged = mergeLayout(layout, next, rels);
+  assert.equal(merged.nodes.find((n) => n.entityId === "n3").state, "down");
+  assert.ok(merged.links.find((l) => l.target === "n2").stale);
+  for (let i = 0; i < layout.nodes.length; i++) {
+    assert.equal(merged.nodes[i].x, layout.nodes[i].x);
+    assert.equal(merged.nodes[i].y, layout.nodes[i].y);
+  }
+  assert.equal(layout.nodes.find((n) => n.entityId === "n3").state, "up"); // the old layout is not changed
+  const moved = { x: 40, y: -10, k: 2.5 };
+  const fitted = { x: 0, y: 0, k: 1 };
+  assert.deepEqual(cameraAfterRefresh(moved, fitted, true, false), moved);
+});
+
+test("a changed graph is fitted again unless the person has moved the view", () => {
+  const input = sample(12);
+  const a = structureKey(input.entities, input.relations, input.anchors);
+  const grown = sample(13);
+  assert.notEqual(structureKey(grown.entities, grown.relations, grown.anchors), a);
+  assert.notEqual(structureKey(input.entities, input.relations, []), a);
+  const moved = { x: 40, y: -10, k: 2.5 };
+  const fitted = { x: 0, y: 0, k: 1 };
+  assert.deepEqual(cameraAfterRefresh(moved, fitted, false, false), fitted);
+  assert.deepEqual(cameraAfterRefresh(moved, fitted, false, true), moved);
 });

@@ -14,7 +14,7 @@ from .queue import QueueError
 
 CONTROLLERS = ("thermalctl", "thermal-control-suite")
 MODES = ("dry_run", "active")
-_HEADER = re.compile(r"[A-Za-z0-9_.-]{1,32}")
+_HEADER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,31}")
 _SERVICE = re.compile(r"[A-Za-z0-9_.@:-]{1,128}")
 _FAN_METRICS = ("fan", "fan_duty", "fan_target")
 
@@ -59,8 +59,8 @@ def validate(action: str, params: Any, caps: dict[str, Any]) -> dict[str, Any]:
         controller = _controller(params)
         header, duty = params["header"], params["min_duty"]
         if not isinstance(header, str) or not _HEADER.fullmatch(header):
-            raise QueueError("header must be 1 to 32 letters, digits, dots, dashes or "
-                             "underscores", 422)
+            raise QueueError("header must be 1 to 32 letters, digits, dashes or "
+                             "underscores and must not start with a dash", 422)
         if isinstance(duty, bool) or not isinstance(duty, int) or not 0 <= duty <= 100:
             raise QueueError("min_duty must be a whole number from 0 to 100", 422)
         known = caps.get("headers")

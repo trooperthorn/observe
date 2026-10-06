@@ -18,15 +18,37 @@ export function button(label, kind, onclick) {
   return b;
 }
 
-// Copy text to the clipboard. Outside a secure context the readonly field is selected so the
-// person can copy it by hand; the toast says which happened.
+export const SELECTED_MESSAGE = "Selected, press Ctrl+C to copy.";
+
+// Select all the text of a field or a block (an input, a textarea or a pre) so Ctrl+C copies it.
+export function selectText(node) {
+  if (typeof node.select === "function") {
+    node.select();
+    return;
+  }
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+// Copy text to the clipboard. navigator.clipboard exists only in a secure context, so on plain
+// HTTP (or when the browser refuses) the field is selected instead and the toast says to press
+// Ctrl+C. The field is the element that shows the text: an input or the command block.
 export async function copyText(text, field) {
   try {
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+      throw new Error("clipboard unavailable");
+    }
     await navigator.clipboard.writeText(text);
     toast("Copied to the clipboard.", "up");
   } catch (_) {
-    if (field) { field.focus(); field.select(); }
-    toast("Select the text and copy it by hand.", "warn");
+    if (field) {
+      field.focus();
+      selectText(field);
+    }
+    toast(field ? SELECTED_MESSAGE : "Select the text and copy it by hand.", "warn");
   }
 }
 

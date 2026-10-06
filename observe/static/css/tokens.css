@@ -8,6 +8,8 @@
   --o-border: #e3e6eb; --o-text: #1c2230; --o-text-muted: #5d6676; --o-accent: #1d63b8;
   --o-accent-tint: rgba(42, 120, 214, .10); --o-accent-line: rgba(42, 120, 214, .24);
   --o-focus: #1d63b8;
+  /* the edge of a text field: 3:1 against the page and the surface (WCAG 1.4.11), unlike the quiet card border */
+  --o-border-input: #7a8494;
   /* shape and space */
   --o-radius: 12px; --o-radius-sm: 8px; --o-radius-pill: 999px;
   --o-s1: 4px; --o-s2: 8px; --o-s3: 12px; --o-s4: 16px; --o-s5: 24px; --o-s6: 32px;
@@ -40,6 +42,7 @@
     --o-border: #2a303b; --o-text: #e6e9ef; --o-text-muted: #a3acba; --o-accent: #3987e5;
     --o-accent-tint: rgba(57, 135, 229, .16); --o-accent-line: rgba(57, 135, 229, .34);
     --o-focus: #6aa6ee;
+    --o-border-input: #6b7686;
     --o-up: #4cc77f; --o-up-bg: rgba(76, 199, 127, .14);
     --o-warn: #f0b429; --o-warn-bg: rgba(240, 180, 41, .14);
     --o-serious: #f08a5d; --o-serious-bg: rgba(240, 138, 93, .14);
@@ -57,6 +60,7 @@
   --o-border: #2a303b; --o-text: #e6e9ef; --o-text-muted: #a3acba; --o-accent: #3987e5;
   --o-accent-tint: rgba(57, 135, 229, .16); --o-accent-line: rgba(57, 135, 229, .34);
   --o-focus: #6aa6ee;
+    --o-border-input: #6b7686;
   --o-up: #4cc77f; --o-up-bg: rgba(76, 199, 127, .14);
   --o-warn: #f0b429; --o-warn-bg: rgba(240, 180, 41, .14);
   --o-serious: #f08a5d; --o-serious-bg: rgba(240, 138, 93, .14);

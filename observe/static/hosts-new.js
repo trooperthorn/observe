@@ -9,7 +9,7 @@ import { confirmDialog } from "/static/js/dialog.js";
 import { NEEDS_URL, askPublicUrl } from "/static/js/public-url.js";
 import {
   STEPS, controlBlock, defaultFans, defaultServices, platformNote, validName,
-  validHeader, validService, buildBody, stepFromHash, progressChip, reportChip, hostHref,
+  validHeader, validService, buildBody, stepAnnouncement, stepFromHash, progressChip, reportChip, hostHref,
   noticeFor, guardText,
 } from "/static/js/wizard-logic.js";
 
@@ -35,7 +35,9 @@ function fresh() {
 }
 
 // ---- step display ----
-function show(step) {
+// moveFocus is true when the person changed the step: focus goes to its heading and a live region
+// says which step it is, so a keyboard or screen reader user is not left on a hidden control.
+function show(step, moveFocus) {
   current = step;
   for (const s of STEPS) $(`step-${s}`).hidden = s !== step;
   const at = STEPS.indexOf(step);
@@ -49,6 +51,10 @@ function show(step) {
   if (step === "live") drawLive();
   if (step === "install" || step === "live") poll(); else stopPoll();
   drawNotice();
+  if (moveFocus) {
+    $("step-announce").textContent = stepAnnouncement(step);
+    $(`step-${step}-h`).focus();
+  }
 }
 
 // The command's own state on the install and live steps: expired, already used, or refused by the
@@ -68,10 +74,10 @@ function drawNotice() {
 }
 
 function go(step) {
-  if (window.location.hash === `#${step}`) show(step); else window.location.hash = `#${step}`;
+  if (window.location.hash === `#${step}`) show(step, true); else window.location.hash = `#${step}`;
 }
 
-function onHash() { show(stepFromHash(window.location.hash, created)); }
+function onHash() { show(stepFromHash(window.location.hash, created), true); }
 
 // ---- step 1: host ----
 function platform() { return document.querySelector('input[name="platform"]:checked').value; }
@@ -200,7 +206,7 @@ function drawInstall() {
   drawNotice();
 }
 
-$("copy").addEventListener("click", () => { if (created) copyText(created.command); });
+$("copy").addEventListener("click", () => { if (created) copyText(created.command, $("cmd")); });
 $("ran").addEventListener("click", () => go("live"));
 
 // Regenerate: before the command was used it replaces the token; after, the old keys are revoked

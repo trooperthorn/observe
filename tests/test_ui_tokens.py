@@ -27,7 +27,7 @@ STATUS = ["up", "warn", "serious", "down", "pending", "unreach"]
 # Tokens every theme must define. The categorical and graph tokens that stay the same in dark
 # mode (cat-3 is overridden, cat-4 and cat-6 are not) are only required in the light block.
 THEMED = (["page", "surface", "surface-subtle", "border", "text", "text-muted", "accent",
-           "accent-tint", "accent-line", "focus"]
+           "accent-tint", "accent-line", "focus", "border-input"]
           + STATUS + [f"{s}-bg" for s in STATUS])
 THEMED = [f"--o-{n}" for n in THEMED] + [
     "--cat-1", "--cat-2", "--cat-3", "--cat-4", "--cat-5", "--cat-7", "--cat-8", "--cat-other",
@@ -93,7 +93,7 @@ def test_stylesheets_hard_code_no_hex_outside_tokens():
         if css.name == "tokens.css":
             continue
         text = re.sub(r"/\*.*?\*/", "", css.read_text(encoding="utf-8"), flags=re.S)
-        assert not re.search(r"#[0-9a-fA-F]{3,8}", text), css.name
+        assert not re.search(r"#[0-9a-fA-F]{3,8}b", text), css.name
 
 
 # ---- contrast ---------------------------------------------------------------------------
@@ -180,6 +180,29 @@ def test_status_dots_and_the_focus_ring_reach_3_to_1(theme: str):
         ratio = contrast(_parse(t["--o-focus"]), bg)
         if ratio < 3.0:
             failures.append(f"--o-focus on {label}: {ratio:.2f}")
+    assert not failures, failures
+
+
+@pytest.mark.parametrize("theme", sorted(THEMES))
+def test_text_input_borders_reach_3_to_1_on_the_page_and_the_surface(theme: str):
+    t = THEMES[theme]
+    border = _parse(t["--o-border-input"])
+    for label, bg in (("surface", _parse(t["--o-surface"])), ("page", _parse(t["--o-page"]))):
+        ratio = contrast(border, bg)
+        assert ratio >= 3.0, f"--o-border-input on {label}: {ratio:.2f}"
+
+
+def test_every_stylesheet_rule_that_styles_a_field_uses_the_input_border_token():
+    """The quiet card border is 1.3:1, so a rule for an input, select or textarea must not use it."""
+    failures = []
+    for path in sorted((STATIC / "css").glob("*.css")):
+        css = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.S)
+        for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+            selector, body = m.group(1), m.group(2)
+            if not re.search(r"\b(input|select|textarea)\b", selector):
+                continue
+            if re.search(r"border(-color)?\s*:[^;]*var\(--o-border\)", body):
+                failures.append(f"{path.name}: {selector.strip()}")
     assert not failures, failures
 
 

@@ -3,9 +3,19 @@
 export const STEPS = ["host", "agent", "allowlist", "install", "live"];
 
 export const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-export const HEADER_RE = /^[A-Za-z0-9._-]{1,32}$/;
+export const HEADER_RE = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$/;
 export const SERVICE_RE = /^(?:docker:)?[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 export const POOL_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
+// What a screen reader is told when the step changes: the step number and its name.
+export const STEP_NAMES = {
+  host: "Host", agent: "Agent and control", allowlist: "Allowlist", install: "Install", live: "Live progress",
+};
+
+export function stepAnnouncement(step) {
+  const at = STEPS.indexOf(step);
+  return at < 0 ? "" : `Step ${at + 1} of ${STEPS.length}: ${STEP_NAMES[step]}`;
+}
 
 export const PLATFORM_LABELS = {
   linux: "Linux server", truenas: "TrueNAS", windows: "Windows", "raspberry-pi": "Raspberry Pi",

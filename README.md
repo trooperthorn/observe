@@ -355,6 +355,10 @@ are retried once, then shown in the dashboard footer.
 Admins add a host in the console at `/hosts/new` (Hosts, Add host in the navigation), a
 five-step wizard: host name and platform, agent and control, the control allowlist, the
 one-time install command with a Copy button, and live progress. The wizard uses this API.
+A fan header is 1 to 32 letters, digits, dashes or underscores and does not start with a dash,
+the same rule hostwatch-control applies. Copy needs a secure context (HTTPS or localhost); on
+plain HTTP the button selects the command and says "Selected, press Ctrl+C to copy.". Moving
+between steps puts focus on the step heading and announces it to screen readers.
 `POST /api/hosts`
 (admin session and CSRF) takes a host name, a platform (`linux`, `truenas`,
 `windows` or `raspberry-pi`), whether to enrol the agent and control, and a
@@ -693,8 +697,8 @@ page route loses its Content-Security-Policy header.
 
 `tests/test_ui_tokens.py` checks the colour tokens in `observe/static/css/tokens.css`: every
 token is present in the light block and both dark blocks, the two dark blocks match, and the
-text, status and focus colours meet WCAG contrast (4.5:1 for text, 3:1 for dots and the focus
-ring) in light and dark. The console theme (Auto, Light or Dark) is a per-browser choice kept in
+text, status and focus colours meet WCAG contrast (4.5:1 for text, 3:1 for dots, the focus
+ring and the border of text fields) in light and dark. The console theme (Auto, Light or Dark) is a per-browser choice kept in
 `localStorage` under `observe.theme`; the server never stores it.
 
 `observe/static/css/components.css` and the modules `js/chips.js`, `js/table.js`, `js/dialog.js`

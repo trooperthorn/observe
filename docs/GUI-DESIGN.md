@@ -206,12 +206,12 @@ Below 700px, wide tables sit inside `.table-wrap{overflow-x:auto}` (the HA SOC r
 
 ### 2.7 Forms
 
-- Labelled `<label>` wrapping the input, or `for`/`id` pairs. Inputs use a 6px radius, `--o-border`, and focus via `:focus-visible` with a 2px `--o-focus` outline.
+- Labelled `<label>` wrapping the input, or `for`/`id` pairs. Inputs use a 6px radius, `--o-border-input` (3:1 against the page and the card, unlike the quiet `--o-border`), and focus via `:focus-visible` with a 2px `--o-focus` outline.
 - `.form-grid` is 2 columns that collapse to 1. Use a `fieldset` and `legend` for groups such as fan headers and services.
 - Inline validation sits in a `<p class="field-err" id=...>` linked with `aria-describedby`. Server errors are rendered with `textContent` from `detail`, as `host-control.js` already does.
 - Buttons: `.btn` (outline accent), `.btn.primary` (filled), `.btn.danger`, `.btn.ghost`. Disabled state uses 0.5 opacity.
 - Every submit is handled by JS (`preventDefault` then `fetch`), because of `form-action 'none'`.
-- Copy-to-clipboard button: `navigator.clipboard.writeText`, with a fallback that selects the text in a readonly `<textarea>` when the page is not served from a secure context.
+- Copy-to-clipboard button: `navigator.clipboard.writeText`, with a fallback when the page is not served from a secure context (`navigator.clipboard` is then undefined). The fallback selects the text of the field or the command block, a `<pre>` included, and shows the message "Selected, press Ctrl+C to copy.".
 
 ### 2.8 Dialogs
 
@@ -619,6 +619,18 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 - Tests: `tests/test_host_settings.py` (API: validation, confirmation, update command and fetch, status after a pull, reissue, cleanup, danger zone, access, audit, no secrets), `tests/test_task_scripts.py` (rendering, syntax checks, guard order, hostile values), `tests/test_ui_settings.py` (markup, modules, text-only writes, diff rules mirrored in Python) and `tests/js/settings.test.mjs` for CI.
 - Deviations: the cleanup scripts do not apply the hostname and Observe-host guards (see above), and do not revoke keys; the console offers Regenerate for that. Remove host deletes the host's stored hardware data as well as its enrolment and keys, but keeps the audit log and the control command history. The pages and scripts have not been exercised in a real browser or on a real host in this slice, only through the page and API tests, syntax checks and a JavaScript syntax check. The update and cleanup scripts assume the file locations the install script uses, and the Windows cleanup removes the service with `sc.exe delete` and the `hostwatch` folders itself instead of calling hostwatch's own uninstall script, so it has not been compared with that script on a real machine.
 
+### fix-ui-a11y notes (done)
+
+Copy, focus, contrast, fan names and the map view, from the audit of the console setup and new look.
+
+- Copy on plain HTTP: `copyText` checks `navigator.clipboard` before calling it, so a missing clipboard no longer throws before the fallback. The fallback focuses the field and selects its text (`selectText` uses `select()` for an input and a range for a `<pre>`), then toasts "Selected, press Ctrl+C to copy.". The wizard passes its command block as the field, as the settings page already did.
+- Wizard focus: a step change the person makes moves focus to the step heading (`tabindex="-1"`) and writes "Step N of 5: name" into a polite `role="status"` region (`#step-announce`, `stepAnnouncement` in `wizard-logic.js`). The first draw of the page does not move focus.
+- Input contrast: new token `--o-border-input` (light `#7a8494`, dark `#6b7686`, 3.5:1 or better on page and card) for the wizard, login, admin and key fields. `tests/test_ui_tokens.py` checks it in both themes and that no field rule uses `--o-border`.
+- Fan header names: `^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$`, hostwatch-control's `HEADER_ID`. It replaces the looser rule that allowed dots and a leading dash in `enrol.py`, `scripts.py`, the control queue and `wizard-logic.js`. `tests/test_fan_header_rule.py` copies hostwatch's rejected names and checks that all four places and the browser pattern are the same rule. An allowlist saved earlier with a dotted header is refused by the new rule when it is next edited, which is right because the host would never have accepted it.
+- Map refresh: the 15 second refresh keeps the old layout and camera when the graph has the same devices, links and anchors (`structureKey`), merging only the new states and stale flags (`mergeLayout`). When the shape changes, a view the person has not moved is fitted again and a moved one is kept (`cameraAfterRefresh`; `st.touched` is set by drag, wheel and the zoom buttons, and cleared by Fit).
+- Tests: `tests/test_ui_a11y.py`, `tests/test_fan_header_rule.py`, additions to `tests/test_ui_tokens.py`, `tests/js/wizard.test.mjs` and `tests/js/graph.test.mjs`.
+- Deviations: the scripts were not run in a browser; the pure functions are covered by `node --test tests/js` and the wiring by source and page tests. A container resize still refits the camera.
+
 ### fix-enrol-flow notes (done)
 
 Enrolment survives the wrong machine and explains failures. The audit of the console setup found that a command pasted on the wrong machine burned the token, that the command carried whatever Host header the request had, and that nothing said why an install had stopped.
@@ -666,7 +678,7 @@ Enrolment survives the wrong machine and explains failures. The audit of the con
 - `css/base.css` holds the reset, body, focus ring, 32px (44px on touch) hit targets, `[hidden]`, reduced motion and a few utilities. `app.css` keeps only the component rules of pages that have not migrated yet, with no colour values of its own. Every page loads `tokens.css`, `base.css` and then `app.css`. `components.css` arrives with S4.
 - `js/theme.js` cycles Auto, Light and Dark, applies `data-theme` and stores the choice per browser under the key `observe.theme`, with every storage call in try/catch (Q7). Importing it applies the stored choice. Only the map page imports it so far, because the other pages are still classic scripts. The shell in S3 adds the toggle button to every page.
 - Deviations from the section 2.2 sketch, found by the contrast test: the light `--o-accent` and `--o-focus` are `#1d63b8` (the sketch's `#2a78d6` is 4.05:1 on the page and fails as link text), `--o-up` is `#0c7a0c`, `--o-warn` is `#8a5d00` and `--o-serious` is `#a94718`, all to reach 4.5:1 on their own tint. A new `--o-ink` (`#1c2230` in both themes) is the dark text used on amber fills.
-- The 3:1 rule is applied to the status colours as dots and to the focus ring. The amber `--o-dot-warn` fill and the card borders are exempt: amber on white cannot reach 3:1 and stay amber, and borders are decoration, because state is always also written in words. A test keeps `--o-dot-warn` from being used as a text colour.
+- The 3:1 rule is applied to the status colours as dots and to the focus ring. The border of a text field is not exempt: `--o-border-input` must reach 3:1 on the page and the card in both themes (WCAG 1.4.11), and a test fails if a rule for an input, select or textarea uses `--o-border`. The amber `--o-dot-warn` fill and the card borders are exempt: amber on white cannot reach 3:1 and stay amber, and borders are decoration, because state is always also written in words. A test keeps `--o-dot-warn` from being used as a text colour.
 - The old `.pill` text colour is now `--o-page` (light text on dark fills in light mode, dark text on bright fills in dark mode), which fixes the weak white-on-green pills in dark mode.
 
 ---

@@ -291,7 +291,9 @@ characters), `platform` (`linux`, `truenas`, `windows` or `raspberry-pi`),
 with `header` and `min_duty_limit` from 0 to 100, which thermalctl needs per
 header for remote floors), `services` and `reboot`. Every entry is matched
 against the same character set the control daemon accepts, so none can hold
-shell syntax. Control is refused for Windows until thermal-control has a
+shell syntax. A fan header is 1 to 32 letters, digits, dashes or underscores and
+does not start with a dash, which is hostwatch-control's own rule (`HEADER_ID`),
+so a name the wizard accepts is never refused later by the host. Control is refused for Windows until thermal-control has a
 Windows path (Q10), and an allowlist needs control. A name that is already
 enrolled or already reporting is refused with 409.
 

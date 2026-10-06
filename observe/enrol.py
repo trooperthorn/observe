@@ -61,7 +61,7 @@ POOL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 DEFAULT_POOL = "Apps"
 # Same shapes the control daemon accepts (docs/CONTROL.md). None can hold a space, quote, slash,
 # semicolon, dollar sign, backtick or pipe, so an entry is safe inside a shell word or a TOML string.
-_HEADER = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
+_HEADER = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
 # Matches hostwatch SERVICE_NAME (an optional docker: prefix, no @, no leading dash, no "..").
 _SERVICE = re.compile(r"^(?:docker:)?[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 

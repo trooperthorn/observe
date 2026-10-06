@@ -36,7 +36,7 @@ SCRIPT_PLATFORMS = ("linux", "raspberry-pi", "truenas", "windows")
 AGENT_ONLY_PLATFORMS = ("truenas", "windows")
 
 _NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
-_HEADER = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
+_HEADER = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
 _SERVICE = re.compile(r"^(?:docker:)?[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _URL = re.compile(r"^https?://(?:[A-Za-z0-9.-]{1,253}|\[[0-9a-fA-F:]{2,45}\])(?::[0-9]{1,5})?$")
 _TOKEN = re.compile(r"^wpe_[A-Za-z0-9_-]{10,200}$")

@@ -4,7 +4,7 @@ import { el, stateText, portHref, api, STATE_WORDS } from "/static/infra-common.
 import { svg as svgEl } from "/static/js/dom.js";
 import "/static/js/theme.js";
 import { layoutForce } from "/static/js/graph/force.js";
-import { createGraphView } from "/static/js/graph/view.js";
+import { createGraphView, structureKey, mergeLayout } from "/static/js/graph/view.js";
 import { GROUPS, buildGraph, defaultView, viewFromHash } from "/static/js/graph/infra.js";
 
 const LAYER_TITLES = [
@@ -19,6 +19,8 @@ let lastData = null;
 let view = null;
 let graphView = null;
 let graph = null;
+let layout = null;
+let layoutKey = "";
 const graphEl = document.getElementById("graphview");
 const selectedEl = document.getElementById("selected");
 const narrow = () => window.matchMedia("(max-width: 600px)").matches;
@@ -65,9 +67,15 @@ function drawGraph(data) {
     });
   }
   const box = graphView.state;
-  const layout = layoutForce({ entities: graph.entities, relations: graph.relations, groups: GROUPS,
-    anchors: graph.anchors, width: Math.max(box.w, 600), height: Math.max(box.h, 400) });
-  graphView.setData(layout, graph.entities);
+  // The 15 second refresh only changes states when the map is the same shape, so the old layout is
+  // kept with the new states and the person's pan and zoom stay where they were.
+  const key = structureKey(graph.entities, graph.relations, graph.anchors);
+  const same = layout !== null && key === layoutKey;
+  layout = same ? mergeLayout(layout, graph.entities, graph.relations)
+    : layoutForce({ entities: graph.entities, relations: graph.relations, groups: GROUPS,
+      anchors: graph.anchors, width: Math.max(box.w, 600), height: Math.max(box.h, 400) });
+  layoutKey = key;
+  graphView.setData(layout, graph.entities, { sameStructure: same });
   note.hidden = !layout.limited;
   note.textContent = layout.limited
     ? "The graph is limited to 300 devices. Use the tiers or the table for this view." : "";
