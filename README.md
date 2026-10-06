@@ -124,7 +124,7 @@ way to be, so there is no such thing as "Observe running as a gMSA".
      -crypto AES256-SHA1 -ptype KRB5_NT_PRINCIPAL -out observe.keytab
    ```
    (`msktutil` is the equivalent tool if you manage the account from Linux.)
-   Use AES256, not RC4 — modern DCs support it and RC4 is what's actually
+   Use AES256, not RC4, because modern DCs support it and RC4 is what's actually
    being deprecated alongside NTLM.
 2. Put `observe.keytab` under `./secrets` (never in `./config`, which the
    container mounts read-only for config, not secrets, and which you may put
@@ -140,7 +140,7 @@ way to be, so there is no such thing as "Observe running as a gMSA".
 5. `kinit -kt` runs automatically before each poll (a ticket is cached for a
    few hours, not re-acquired every time); nothing needs to be pre-authenticated
    on the host. Time skew between the container and the KDC must stay under
-   about 5 minutes or Kerberos rejects the ticket outright — make sure the
+   about 5 minutes or Kerberos rejects the ticket outright, so make sure the
    Docker host's clock is NTP-synced.
 6. All Kerberos WinRM/WMI calls are serialized process-wide (unlike NTLM and
    certificate transports, which run in parallel): the ticket cache is
@@ -233,6 +233,24 @@ applies. `verify_tls: false` also works, and is labelled for what it is.
 retained message satisfies it immediately, which proves the broker holds a
 value, not that the publisher is alive. For liveness, watch an availability
 or LWT topic with `expect: online`.
+
+## Setting up UniFi and Home Assistant sources
+
+Each source below uses the least privilege that works. Put every secret in the environment and
+reference it as `${NAME}`; none of them is written to the database or a log.
+
+| Source | What to create | Where it goes |
+|---|---|---|
+| UniFi Integration API key (view only) | In the console, Settings > Control Plane > Integrations, create one key. The Integration API only reads. | A `unifi` credential, used by the `unifi_network` and `unifi_protect` checks and by the `unifi` plugin. |
+| Dedicated local UniFi account (optional) | On the UniFi OS console, add a local-only user with view-only access to Network, with no cloud login, no admin role and no other use. | A `unifi_classic` credential named in `plugin_settings.unifi.classic_credential`. It gives PoE watts, per-port VLAN, LLDP neighbours, uplink port numbers, WAN health and offline clients. The plugin works without it. |
+| Home Assistant token (non-admin) | A dedicated HA user that is not an administrator, with a long-lived token from its profile. | A `homeassistant` credential for the `homeassistant` check. Observe reads `/api/config` and `/api/states` only and never holds an admin token. |
+| HA SOC Probe SNMPv3 credential | An SNMPv3 authPriv user on the HA SOC Probe add-on, scoped to the HOST-RESOURCES subtrees (see ha_Int_soc `docs/SNMPV3.md`). | An `snmp` v3 credential for the `snmp` monitors in modes `cpu`, `memory` and `storage`, with `host_name: homeassistant`. |
+| HA SOC push key | A `wpi` key for the host `homeassistant`, created from the Add host wizard or the key admin page. | Configured in ha_Int_soc only, never in Observe's YAML. It can push only the host `homeassistant`. |
+
+If the view-only key or the local account is revoked, the plugin pauses and backs off instead of
+retrying every interval. If you use a UniFi account with more rights than view-only, Observe
+cannot detect that, so a stolen password would reach further. Keep the push key out of any
+shared dashboard or log, and regenerate it if HA SOC is rebuilt.
 
 ## Discovery
 
@@ -716,6 +734,27 @@ plugin_settings:
     protect_interval: 120
     # classic_credential: unifi_view   # optional; enables the read-only classic client
 ```
+
+The settings of `plugin_settings.unifi` are:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `host` | required | Console address. |
+| `port` | 443 | Console port. |
+| `https` | true | Use TLS. |
+| `verify_tls` | true | Validate the console certificate. |
+| `ca_bundle` | none | Path of an internal root certificate. |
+| `base_path` | `/proxy/network/integration/v1` | Network Integration API root. Use `/integration/v1` for a standalone controller. |
+| `credential` | required | Name of a `unifi` credential. |
+| `classic_credential` | none | Name of a `unifi_classic` credential; enables the classic collector. |
+| `site` | the only site | Site name. |
+| `interval` | 120 | Seconds between device polls, 30 to 3600. |
+| `clients_interval` | 300 | Seconds between client polls. |
+| `protect` | false | Poll Protect cameras. |
+| `protect_base_path` | `/proxy/protect/integration/v1` | Protect Integration API root. |
+| `protect_interval` | 120 | Seconds between camera polls. |
+| `timeout` | 20 | Seconds for one poll, at most 120. |
+| `retention_days` | 30 | Delete records unseen this long. |
 
 Clients are read every `clients_interval` seconds (default 300) and kept one row per MAC. With
 the classic account each connected client also gets its access point or switch, switch port number

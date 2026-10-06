@@ -858,7 +858,7 @@ The `unifi_network` check has a `ports` mode that issues one GET for a device de
 
 `plugins/unifi/observe_unifi` is a plugin with session routes and one page (see Clients, Protect and
 the UniFi page below). `UniFiSettings` is its
-`plugin_settings.unifi` model. The plugin host calls the optional `bind_credentials` hook after
+`plugin_settings.unifi` model; every key is listed in the README under "The UniFi plugin", and the setup of each credential is under "Setting up UniFi and Home Assistant sources". The plugin host calls the optional `bind_credentials` hook after
 validation with the config's named credentials, so the plugin can check that `credential` names a
 `unifi` credential and `classic_credential` a `unifi_classic` one, and fail startup with a
 PluginError that never contains a secret. The host now calls `configure` before it reads

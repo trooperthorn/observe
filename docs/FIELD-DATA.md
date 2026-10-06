@@ -306,3 +306,18 @@ The package `observe_pockethernet` in `plugins/pockethernet` (entry point `pocke
 - **UniFi ports mode.** The `unifi_network` check in mode `ports` reads one device detail and reports `detail.ports` keyed by port index, which feeds the live-port lookup for the map. Speed comes from `speedMbps`; VLAN and PoE watts are unknown (shown as unknown, never zero) because the Integration API does not provide them. The `interfaces.ports` field names are unverified against a live console.
 
 - **UniFi inventory plugin.** The `unifi` plugin keeps the current devices of one UniFi site in `unifi_devices` (site, id, MAC, name, model, state, IP, firmware, a firmware update flag that is NULL when unknown, first seen, last seen), polled every 120 seconds from the Integration API. `unifi_clients` and `unifi_cameras` are described in the next item. Records unseen for 30 days are deleted. Field names come from ha_Int_soc `docs/UNIFI-LOCAL-API-CONTRACT.md`; the update flag on the list row is unverified against a live console. The map feed is described in the next item. The optional classic client (`classic_credential`) can read PoE watts and class, per-port native and tagged VLAN, the LLDP neighbour table, uplink port numbers, WAN health and offline clients through `classic_snapshot()`; the offline clients, port numbers and SSIDs are stored in `unifi_clients` and the port values feed the map; WAN health is parsed but not stored or shown, and every classic field name (`port_table`, `poe_power`, `lldp_table`, `uplink`, `stat/health` wan row) is unverified against a live console.
+- **Which UniFi API each port field comes from.** Port facts are split between two APIs, and the infrastructure map keeps the source of each value.
+
+  | Port field | Source | API call | Verified |
+  |---|---|---|---|
+  | Port index, link state, speed | Integration API | `GET /devices/{id}` (`interfaces.ports`, check mode `ports`) | Shape unverified against a live console |
+  | Maximum speed, PoE state | Integration API | same call | Shape unverified |
+  | PoE watts and class | Classic controller | `stat/device` (`port_table`, `poe_power`, `poe_class`) | Unverified |
+  | Native and tagged VLAN | Classic controller | `stat/device` (`native_vlan`, `tagged_vlan_mgmt`) | Unverified |
+  | LLDP neighbours | Classic controller | `stat/device` (`lldp_table`) | Unverified |
+  | Uplink device and port number | Integration API (device) and classic `uplink` | device list, `stat/device` | Unverified |
+  | Connected client port and SSID | Classic controller | `stat/sta` (`sw_port`, `essid`) | Unverified |
+  | Offline clients | Classic controller | `rest/user` | Unverified |
+  | WAN health | Classic controller | `stat/health` (parsed, not stored) | Unverified |
+
+  The Integration API gives no VLAN or PoE watts, so without the classic account those values show as unknown, never zero.
