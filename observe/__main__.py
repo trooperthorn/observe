@@ -286,7 +286,7 @@ def main() -> int:
     try:
         config = load_config(compat.resolve_config_path(args.config))
         config.server.db_path = compat.resolve_db_path(config.server.db_path)
-    except ConfigError as err:
+    except (ConfigError, compat.DatabaseMissing) as err:
         print(f"config error: {err}", file=sys.stderr)
         return 2
     if args.validate:

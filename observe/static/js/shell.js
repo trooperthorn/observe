@@ -99,10 +99,29 @@ function themeButton() {
 async function getJson(path) {
   try {
     const r = await fetch(path);
+    if (r.status === 401) return { expired: true };
     return r.ok ? await r.json() : null;
   } catch (_) {
     return null;
   }
+}
+
+// The last known role, so the nav is drawn at once on every page instead of after the session
+// round trip. It only decides which links are drawn; the server still checks every request.
+const ROLE_KEY = "observe.nav.admin";
+
+function cachedAdmin() {
+  try { return window.sessionStorage.getItem(ROLE_KEY) === "1"; } catch (_) { return false; }
+}
+
+function rememberAdmin(isAdmin) {
+  try { window.sessionStorage.setItem(ROLE_KEY, isAdmin ? "1" : "0"); } catch (_) { /* private mode */ }
+}
+
+// Send an expired session to sign in, coming back to this page afterwards.
+export function toLogin() {
+  const back = window.location.pathname + window.location.search;
+  window.location.assign(`/login?next=${encodeURIComponent(back)}`);
 }
 
 export async function mountShell() {
@@ -112,8 +131,11 @@ export async function mountShell() {
   applyStoredTheme();
   header.prepend(brand());
   header.append(themeButton());
+  renderNav(nav, visibleItems(cachedAdmin(), null), window.location.pathname);
   const [session, plugins] = await Promise.all([getJson("/api/session"), getJson("/api/plugins")]);
+  if (session && session.expired) { toLogin(); return; }
   const isAdmin = !!(session && session.is_admin);
+  rememberAdmin(isAdmin);
   if (session && typeof session.username === "string") {
     header.append(el("span", "shell-user", session.username));
   }

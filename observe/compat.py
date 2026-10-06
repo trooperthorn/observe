@@ -54,12 +54,34 @@ def resolve_config_path(path: str | None) -> str:
     return DEFAULT_CONFIG
 
 
+class DatabaseMissing(Exception):
+    """The configured database file is missing but the same database exists under the other name."""
+
+
+_DB_NAMES = ("observe.db", "watchpost.db")
+
+
 def resolve_db_path(path: str) -> str:
-    """Keep using an existing old database file when the default new one is absent."""
+    """Keep using an existing old database file when the default new one is absent.
+
+    Never start on a new, empty database while the real one sits beside it under the other name:
+    that happens when the file was renamed but `server.db_path` was not, and it looks like every
+    user, key and host has vanished. Starting is refused with the exact fix instead.
+    """
     if path == DEFAULT_DB and not Path(DEFAULT_DB).exists() and Path(LEGACY_DB).exists():
         _warn_once("db", f"using {LEGACY_DB}, the old name; rename it to {DEFAULT_DB} "
                          "(see docs/UPGRADING-FROM-WATCHPOST.md)")
         return LEGACY_DB
+    target = Path(path)
+    if path != ":memory:" and target.name in _DB_NAMES and not target.exists():
+        for other in _DB_NAMES:
+            sibling = target.with_name(other)
+            if other != target.name and sibling.exists() and sibling.stat().st_size > 0:
+                raise DatabaseMissing(
+                    f"server.db_path is {path}, which does not exist, but {sibling} does. "
+                    f"Starting now would create a new, empty database. Set server.db_path to "
+                    f"{sibling.as_posix() if os.sep == '/' else sibling} in the config, or rename the "
+                    f"file to {target.name}, then start again.")
     return path
 
 

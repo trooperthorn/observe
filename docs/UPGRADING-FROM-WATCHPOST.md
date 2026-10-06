@@ -28,6 +28,7 @@ git pull
 ls config secrets data   # confirm the real file names before renaming anything
 mv -n config/watchpost.yaml config/observe.yaml
 mv -n data/watchpost.db data/observe.db
+sed -i 's#/data/watchpost.db#/data/observe.db#' config/observe.yaml   # db_path must follow the rename
 sed -i 's/WATCHPOST_/OBSERVE_/g' .env config/observe.yaml
 ```
 
@@ -55,6 +56,8 @@ Check three things after the edit:
 3. Alert targets of type `mqtt` that relied on the default `topic_prefix` now publish under `observe/`, and Observe logs one warning when such a target sends. Set `topic_prefix: watchpost` on the target if Home Assistant or another subscriber still listens on the old topics.
 
 Update Prometheus rules, Grafana panels and any scrape job that use `watchpost_` metric names to the `observe_` names. Remove the old image with `docker image rm watchpost:local` once the new container is healthy.
+
+Observe refuses to start if `server.db_path` names a database file that does not exist while the same database sits beside it under the other name, because starting would create a new, empty database. The message names the file it found; point `server.db_path` at it and start again.
 
 ## What the warnings mean
 

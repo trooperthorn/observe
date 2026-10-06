@@ -102,6 +102,24 @@ def test_database_falls_back_to_the_old_file_without_moving_it(monkeypatch, tmp_
     assert old.read_bytes() == b"data" and not (tmp_path / "observe.db").exists()
 
 
+@pytest.mark.parametrize("configured,existing", [("observe.db", "watchpost.db"),
+                                                  ("watchpost.db", "observe.db")])
+def test_a_renamed_database_is_never_replaced_by_a_new_empty_one(tmp_path, configured, existing):
+    # The owner renamed watchpost.db to observe.db but db_path still named the old file, and
+    # Observe started on a new empty database: every user, key and host seemed gone.
+    (tmp_path / existing).write_bytes(b"real data")
+    with pytest.raises(compat.DatabaseMissing) as err:
+        compat.resolve_db_path(str(tmp_path / configured))
+    assert existing in str(err.value) and "db_path" in str(err.value)
+    assert not (tmp_path / configured).exists()
+
+
+def test_a_missing_database_with_no_sibling_starts_fresh(tmp_path):
+    assert compat.resolve_db_path(str(tmp_path / "observe.db")) == str(tmp_path / "observe.db")
+    (tmp_path / "watchpost.db").write_bytes(b"")
+    assert compat.resolve_db_path(str(tmp_path / "observe.db")) == str(tmp_path / "observe.db")
+
+
 def test_database_uses_the_new_file_when_present_or_path_is_custom(monkeypatch, tmp_path, caplog):
     _point_at(monkeypatch, tmp_path)
     (tmp_path / "watchpost.db").write_bytes(b"old")
