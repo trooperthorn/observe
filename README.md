@@ -696,15 +696,18 @@ plugin_settings:
     site: Default          # the only site when omitted
     interval: 120
     retention_days: 30
-    # classic_credential: unifi_view   # optional; checked at startup, not used yet
+    # classic_credential: unifi_view   # optional; enables the read-only classic client
 ```
 
 The collector sends only GET requests, never follows a redirect, refuses a response over 4 MB
 and a list over 50 pages. After a 401 or 403 it stops sending requests, waits one interval, and
 doubles the wait on each further rejection up to one hour, so a revoked key is not hammered.
-The optional classic account is a local view-only account for later reads of PoE watts, per-port
-VLAN and LLDP neighbours; this release only checks that the name refers to a `unifi_classic`
-credential.
+The optional classic account is a dedicated local view-only account. With it the plugin can log in
+and read PoE watts, per-port VLAN, LLDP neighbours, uplink port numbers, WAN health and offline
+clients. It sends only the login and logout POSTs and GETs of four read views, keeps the session in
+memory, re-logs in once on a 401 and then backs off, and never follows a redirect. The values are
+parsed but not yet stored or shown, and the classic field names are unverified against a live
+console.
 
 ## Not implemented
 

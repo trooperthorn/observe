@@ -799,3 +799,17 @@ of one interval, doubled per consecutive rejection up to 3600 s; calls during th
 deletes devices and clients with `last_seen` older than `retention_days`. Row fields follow ha_Int_soc
 `docs/UNIFI-LOCAL-API-CONTRACT.md`; that `firmwareUpdatable` is on the device list row is unverified, so
 an absent value is stored as NULL.
+
+`classic.py` is the optional classic controller client. `ClassicClient` logs in with the
+`unifi_classic` credential (`POST /api/auth/login`), keeps the `TOKEN` cookie and `X-CSRF-Token` in
+memory only, and reads only `stat/device`, `stat/sta`, `rest/user` and `stat/health` under
+`/proxy/network/api/s/{site}` with GET (any other path is refused before a request). A 401 triggers
+one re-login and one retry; a second rejection, or a rejected login, backs off for one interval,
+doubled per failure up to 3600 s, and `ClassicBackedOff` is raised without a request. Redirects are
+refused and a body is capped at 8 MB. `logout()` posts `/api/auth/logout` and forgets the session;
+the plugin's `close()` calls it, but the plugin host has no shutdown hook yet, so nothing calls it
+automatically. The parsers return per-port PoE watts and class, native and tagged VLAN fields, the
+LLDP neighbour table, the uplink MAC with local and remote port numbers, the WAN health row and the
+known clients that are not active. `UniFiPlugin.classic_snapshot()` returns all of these. Nothing
+stores or displays them yet. Every classic field name is unverified against a live console, because
+ha_Int_soc does not read this API.

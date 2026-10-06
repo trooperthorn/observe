@@ -7,7 +7,8 @@ the key of a `unifi` credential named in the settings, and keeps the current sna
 
 After a 401 or 403 the collector backs off, doubling its pause up to an hour, and sends no
 request until the pause is over, so a revoked key is not hammered. The optional classic
-controller credential is validated and kept for a later slice; this slice never uses it.
+controller credential, when set, builds a read-only classic client (`classic.py`) used by
+`classic_snapshot`; the Integration API path works without it.
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from observe.plugins import Collector, Migration, PluginBase, PluginError
 from observe.store import Store
 
+from .classic import (ClassicClient, parse_devices, parse_offline_clients,
+                      parse_wan_health)
 from .client import AuthRejected, IntegrationClient, UniFiError
 from .records import MIGRATIONS, parse_device, prune_unseen, save_devices
 
@@ -42,7 +45,7 @@ class UniFiSettings(BaseModel):
     ca_bundle: str | None = None
     base_path: str = "/proxy/network/integration/v1"
     credential: str = ""  # name of a `unifi` credential (the Integration API key)
-    # Name of a `unifi_classic` credential. Optional; validated here, used by a later slice.
+    # Name of a `unifi_classic` credential. Optional; enables the classic read-only client.
     classic_credential: str | None = None
     site: str | None = None  # site name; the only site when omitted
     interval: int = Field(default=120, ge=30, le=3600)
@@ -62,6 +65,8 @@ class UniFiPlugin(PluginBase):
     def __init__(self) -> None:
         self.settings = UniFiSettings()
         self.api_key: str | None = None
+        self.classic: ClassicClient | None = None
+        self._classic_login: tuple[str, str] | None = None
         self.clock: Callable[[], float] = time.monotonic  # a test replaces it
         self.wall: Callable[[], float] = time.time
         self.transport: httpx.AsyncBaseTransport | None = None  # a test replaces it
@@ -74,6 +79,8 @@ class UniFiPlugin(PluginBase):
     def configure(self, settings: Any) -> None:
         self.settings = settings or UniFiSettings()
         self.api_key = None
+        self.classic = None
+        self._classic_login = None
         self._failures = 0
         self._retry_at = 0.0
 
@@ -92,6 +99,37 @@ class UniFiPlugin(PluginBase):
                                   f"{s.classic_credential!r} must name a credential of type "
                                   "unifi_classic")
         self.api_key = cred.api_key
+        if s.classic_credential is not None:
+            self._classic_login = (classic.username, classic.password)
+
+    def _classic_client(self) -> ClassicClient | None:
+        if self.classic is None and self._classic_login is not None:
+            s = self.settings
+            scheme = "https" if s.https else "http"
+            self.classic = ClassicClient(
+                f"{scheme}://{s.host}:{s.port}", *self._classic_login, s.site or "default",
+                s.verify_tls, s.ca_bundle, s.timeout, self.transport, self.clock,
+                float(s.interval))
+        return self.classic
+
+    async def classic_snapshot(self) -> dict[str, Any]:
+        """Read the four classic views and parse them. Raises UniFiError, AuthRejected or
+        ClassicBackedOff; returns an empty dict when no classic credential is set."""
+        c = self._classic_client()
+        if c is None:
+            return {}
+        devices = await c.get("stat/device")
+        active = await c.get("stat/sta")
+        known = await c.get("rest/user")
+        health = await c.get("stat/health")
+        return {"devices": parse_devices(devices), "wan": parse_wan_health(health),
+                "offline_clients": parse_offline_clients(known, active)}
+
+    async def close(self) -> None:
+        """Log out of the classic session. The host has no shutdown hook yet, so a caller
+        invokes this; the session is memory only and is lost on exit either way."""
+        if self.classic is not None:
+            await self.classic.logout()
 
     def migrations(self) -> list[Migration]:
         return list(MIGRATIONS)
