@@ -150,3 +150,15 @@ def test_audit_retention_is_independent_of_sample_retention(tmp_path):
     asyncio.run(store.prune(7))  # default audit retention is a year
     assert store._exec("SELECT COUNT(*) FROM audit")[0][0] == 1
     store.close()
+
+
+def test_history_over_the_row_limit_returns_the_newest_rows_in_time_order(tmp_path):
+    store = Store(str(tmp_path / "h.db"))
+    now = time.time()
+    for i in range(10):
+        db_ts = now - (9 - i) * 60
+        store._exec("INSERT INTO results VALUES ('a', ?, 'ok', ?, 1.0, '')", (db_ts, float(i)))
+    hist = asyncio.run(store.history("a", 24 * 30, limit=4))
+    store.close()
+    assert [h["value"] for h in hist] == [6.0, 7.0, 8.0, 9.0]
+    assert [h["ts"] for h in hist] == sorted(h["ts"] for h in hist)

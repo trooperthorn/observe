@@ -109,6 +109,8 @@ at least a year. The audit log has its own setting,
 `server.audit_retention_days` (default 365), so shortening poll retention never
 shortens the audit trail. Expired sessions are deleted in the same pass.
 
+`Store.history` returns the poll results of one monitor in a window, oldest first, capped at 20000 rows. When the window holds more rows than the cap, it keeps the newest rows, so a long window always ends at the present.
+
 ## Host-bound keys
 
 An ingest key is created by an admin for exactly one host name. The key is

@@ -421,13 +421,16 @@ class Store:
             (monitor, tr.at, tr.previous.value, tr.current.value, tr.message),
         )
 
-    async def history(self, monitor: str, hours: float) -> list[dict[str, Any]]:
+    async def history(self, monitor: str, hours: float,
+                      limit: int = 20000) -> list[dict[str, Any]]:
+        """Rows in the window, oldest first. At the row limit the newest rows are kept."""
         since = time.time() - hours * 3600
         rows = await self._run(
             "SELECT ts, result, value, latency_ms, message FROM results "
-            "WHERE monitor=? AND ts>=? ORDER BY ts LIMIT 20000",
-            (monitor, since),
+            "WHERE monitor=? AND ts>=? ORDER BY ts DESC LIMIT ?",
+            (monitor, since, limit),
         )
+        rows.reverse()
         return [dict(zip(("ts", "result", "value", "latency_ms", "message"), r)) for r in rows]
 
     async def events(self, limit: int = 200, monitor: str | None = None) -> list[dict[str, Any]]:
