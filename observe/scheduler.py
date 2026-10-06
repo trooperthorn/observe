@@ -32,6 +32,7 @@ from .alerts import Alerter
 from .checks import build_check
 from .checks.base import CheckResult, Result
 from .config import Config
+from . import recheck_settings
 from .forecast import Forecast, project
 from .rollup import Rollup
 from .state import MonitorState, State, Transition
@@ -61,6 +62,10 @@ class Scheduler:
             for m in self.monitors
         }
         self.rollup = Rollup(config, self.states)
+        # The admin's saved re-check values (observe/recheck_settings.py): global and per monitor.
+        self._recheck_global: dict[str, Any] = {}
+        self._recheck_overrides: dict[str, dict[str, Any]] = {}
+        self._recheck_loaded = False
         self.forecasts: dict[str, Forecast] = {}
         self._locks = {m.slug: asyncio.Lock() for m in self.monitors}
         self._sem = asyncio.Semaphore(config.server.max_concurrency)
@@ -77,8 +82,30 @@ class Scheduler:
         """Seconds until the monitor is polled again: the re-check interval while it is
         Degraded, the polling interval otherwise."""
         if self.states[monitor.slug].degraded:
-            return float(self.config.effective(monitor, "recheck_interval"))
+            return float(self.recheck_value(monitor, "interval"))
         return float(self.config.effective(monitor, "interval"))
+
+    def recheck_value(self, monitor: Any, name: str) -> float | int:
+        """The re-check window, interval or good-reply count in force for a monitor: the saved
+        per-monitor override beats the config entry of the monitor, which beats the saved global
+        value, which beats the config default."""
+        return recheck_settings.resolve(self.config, monitor, name, self._recheck_global,
+                                        self._recheck_overrides)
+
+    def apply_recheck(self, glob: dict[str, Any], overrides: dict[str, dict[str, Any]]) -> None:
+        """Use new saved values now: a monitor already in its window keeps the window it started
+        with only until its next result, which reads the new values."""
+        self._recheck_global, self._recheck_overrides = dict(glob), dict(overrides)
+        self._recheck_loaded = True
+        for m in self.monitors:
+            st = self.states[m.slug]
+            st.recheck_window = float(self.recheck_value(m, "window"))
+            st.recheck_good = int(self.recheck_value(m, "good"))
+
+    async def load_recheck(self) -> None:
+        """Read the saved values from the storage, once before the first poll."""
+        glob, overrides = await self.store.storage.read(recheck_settings.load)
+        self.apply_recheck(glob, overrides)
 
     async def restore(self, monitor: Any) -> None:
         """Take the monitor's state from its newest stored result (the latest table), so a
@@ -226,6 +253,8 @@ class Scheduler:
 
     async def _loop(self, monitor: Any) -> None:
         interval = self.config.effective(monitor, "interval")
+        if not self._recheck_loaded:
+            await self.load_recheck()
         await self.restore(monitor)
         await asyncio.sleep(random.uniform(0, min(interval, 10)))  # spread the first wave
         while True:

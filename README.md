@@ -524,6 +524,13 @@ An admin can change the retention levels, the compaction delay and
 per-metric retention overrides with `GET` and `PUT /api/admin/retention` (admin session and CSRF
 token). Every change is audited with its old and new values.
 
+An admin can also change the fast re-check with `GET` and `PUT /api/admin/recheck` or the page
+`/admin/recheck` (Admin menu): the re-check window in seconds (0 turns it off), the re-check
+interval (at least 5 seconds) and the good replies in a row that return a monitor to Up, as global
+values and as an override per monitor. A saved per-monitor override beats the value in the monitor's
+config entry, which beats the saved global value, which beats `defaults` in the config file. A change
+applies at the next result of each monitor and is audited with its old and new values.
+
 The hostwatch wire schema models exist in `observe/ingest/schema.py`, with
 size and count limits, ignoring of unknown fields, and rejection of unknown schema
 versions. `POST /internal/v1/ingest` (the path hostwatch agents use; `/api/ingest`

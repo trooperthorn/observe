@@ -20,6 +20,7 @@ export const NAV = [
   { workspace: "admin", label: "Users and keys", href: "/admin", also: [], admin: true },
   { workspace: "admin", label: "Audit", href: "/audit", also: [], admin: true },
   { workspace: "admin", label: "Retention", href: "/admin/retention", also: [], admin: true },
+  { workspace: "admin", label: "Re-check", href: "/admin/recheck", also: [], admin: true },
 ];
 
 const WORKSPACE_IDS = new Set(WORKSPACES.map(([id]) => id));

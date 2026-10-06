@@ -180,7 +180,19 @@ session, CSRF on the PUT) read and change them; a refused value is 422 and audit
 
 The admin retention page `GET /admin/retention` (admin session, in the Admin menu) is written by
 the server (`observe/retention_page.py`) so the CSRF token and the last-run table are in the first
-response; `admin-retention.js` saves the form with `PUT /api/admin/retention`. The table reads
+response; `admin-retention.js` saves the form with `PUT /api/admin/retention`.
+
+The re-check settings (`observe/recheck_settings.py`) are the global window, interval and good-reply
+count and one optional override per monitor. They are `app_settings` keys `recheck.window`,
+`recheck.interval`, `recheck.good` and `recheck.overrides` (one JSON value of monitor slug to values),
+written through `Storage.write` on both backends together with one `recheck_settings_changed` audit row
+holding the old and new values. `GET` and `PUT /api/admin/recheck` need an admin session, the PUT needs
+the CSRF token, and a refused value answers 422 and writes `recheck_settings_failed`. The scheduler
+loads the values before the first poll and again after each save (`Scheduler.apply_recheck`), and
+`Scheduler.recheck_value` resolves a value as: saved per-monitor override, then the monitor's own config
+value, then the saved global value, then the config default. The page `/admin/recheck` is written by
+`observe/recheck_page.py` and saved by `admin-recheck.js`.
+ The table reads
 `rollup_state`: one row per trimmed level (`raw`, `5m`, `1h`, `1d`) with the time it was trimmed to,
 when, the rows removed and the first coverage problem, and one `compaction` row that the
 maintenance loop writes after each pass (poll rows removed, and the error text, cut to 200

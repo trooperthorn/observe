@@ -33,7 +33,8 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from . import audit
 from . import auth as authmod
-from . import enrol, hosttasks, layout, retention, retention_page, scripts, taskscripts
+from . import (enrol, hosttasks, layout, recheck_page, recheck_settings, retention,
+               retention_page, scripts, taskscripts)
 from . import hostview
 from .alerts import Alerter
 from .checks.host import LATEST_WINDOW_S
@@ -896,6 +897,46 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                                detail={"reason": str(err)})
             return JSONResponse({"detail": str(err)}, status_code=422)
         return JSONResponse(out)
+
+    async def recheck_view() -> dict[str, Any]:
+        glob, overrides = await store.storage.read(recheck_settings.load)
+        return recheck_settings.describe(config, glob, overrides)
+
+    @app.get("/api/admin/recheck", include_in_schema=False)
+    async def get_recheck(_: authmod.Session = Depends(guards.admin)) -> dict[str, Any]:
+        """The global re-check window, interval and good-reply count, the per-monitor overrides
+        and the bounds. Admin session; an ingest key is not a session and is refused."""
+        return await recheck_view()
+
+    @app.get("/admin/recheck", include_in_schema=False)
+    async def recheck_admin_page(sess: authmod.Session = Depends(guards.admin)) -> Response:
+        """The re-check form, written by the server so the CSRF token is in the first response.
+        Admin session only."""
+        return Response(recheck_page.render(await recheck_view(), csrf=sess.csrf),
+                        media_type="text/html")
+
+    @app.put("/api/admin/recheck", include_in_schema=False)
+    async def put_recheck(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Change any global value in the body (null resets one) and, with `overrides`, replace
+        the whole per-monitor list. Admin session and CSRF. Refused values answer 422 and are
+        audited; a change is audited with its old and new values and applies at the next result
+        of each monitor."""
+        remote = request.client.host if request.client else ""
+        body = await body_of(request)
+        try:
+            changes, overrides = recheck_settings.validate(body, {m.slug for m in config.monitors})
+        except recheck_settings.RecheckError as err:
+            await audit.record(store, "recheck_settings_failed", actor=sess.username,
+                               method="PUT", path=recheck_settings.PATH, status=422,
+                               remote=remote, detail={"reason": str(err)})
+            return JSONResponse({"detail": str(err)}, status_code=422)
+        await store.storage.write(lambda db: recheck_settings.save(
+            db, changes, overrides, now=auth_clock(), actor=sess.username, remote=remote),
+            touches=("admin", "audit"))
+        glob, saved = await store.storage.read(recheck_settings.load)
+        scheduler.apply_recheck(glob, saved)
+        return JSONResponse(recheck_settings.describe(config, glob, saved))
 
     @app.post("/api/hosts", include_in_schema=False)
     async def create_host(

@@ -868,6 +868,8 @@ When an availability poll gets no reply, Observe does not wait for the next 30 s
 
 Built in slice r3-state-and-rules.1: the monitor state machine (`observe/state.py`), `defaults` and per-monitor `recheck_interval`, `recheck_window` and `recheck_good`, the pushed-host ping or TCP re-check (`address`, `recheck_port`), `notify_degraded` on alert targets, and dependency handling (a child of a Down parent starts no re-check; a child's alert is held while its parent is re-checked). The Degraded episode is recorded in `events` and so in `availability_history`, with the duration in the recovery message. Monitor poll results are also written to the series store (`monitor.up`, `monitor.result`, `monitor.value`, `monitor.latency`), and availability and the forecast series are read from `metric_5m` and `metric_hourly`. The raw `results` rows stay for the message and detail of each poll.
 
+Built in slice r3-state-and-rules.1.2: an admin changes the global re-check window, interval and good-reply count, and a per-monitor override of each, with `GET` and `PUT /api/admin/recheck` and the page `/admin/recheck`. The values are saved in `app_settings` (`recheck.window`, `recheck.interval`, `recheck.good`, `recheck.overrides`) on both backends. For one monitor the engine uses the saved override first, then the value in the monitor's config entry, then the saved global value, then the `defaults` of the config file. A change applies at the next result of each monitor and is audited as `recheck_settings_changed` with the old and new values.
+
 ### 10.4 Threshold rules for statistics
 
 Each metric threshold is a rule, not a single comparison of the last value. A rule has:
