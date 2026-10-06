@@ -192,6 +192,20 @@ loads the values before the first poll and again after each save (`Scheduler.app
 `Scheduler.recheck_value` resolves a value as: saved per-monitor override, then the monitor's own config
 value, then the saved global value, then the config default. The page `/admin/recheck` is written by
 `observe/recheck_page.py` and saved by `admin-recheck.js`.
+
+The threshold rule engine (`observe/rules.py`) evaluates the rules of section 10.4 of the data design.
+A rule is one of four kinds: `consecutive` (X polls in a row), `ratio` (X of the last Y polls),
+`window` (min, max or average over a time window) and `missing` (no data for a gap, or fewer than X of
+the last Y polls returned data), with a condition of above, below, equal, not equal or outside a range
+against a warn and a crit value. `RuleEngine` keeps a `SeriesState` per series: the latest value next to
+a ring of the last 100 samples (`RING_CAPACITY`), so an evaluation reads memory and never scans history,
+and no rule may look back further than the ring. State clears only after N polls with the condition
+false (hysteresis, default N equal to X); a poll that breaches on its own restarts that count, and a
+move to a higher level is immediate. The clock is a function passed to the engine, and `tick` re-checks
+the missing-data rules for time that passed with no sample. The rule set is validated by
+`rules.validate` (fixed bounds, unique ids, at most 500 rules) and stored as the `app_settings` key
+`rules.config` by `rules.save` inside one `Storage.write` unit with one `rules_changed` audit row holding
+the old and new rules. The engine is not yet wired to ingest or to an admin route.
  The table reads
 `rollup_state`: one row per trimmed level (`raw`, `5m`, `1h`, `1d`) with the time it was trimmed to,
 when, the rows removed and the first coverage problem, and one `compaction` row that the

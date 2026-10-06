@@ -77,6 +77,15 @@ A child of a Down parent shows Unreachable and starts no re-check of its own.
 While a parent is in its re-check window, the child's alert is held; if the
 parent recovers and the child still fails, the child is alerted then.
 
+### Threshold rules
+
+`observe/rules.py` holds the threshold rule engine. A rule compares a metric with a warn value and a
+crit value (above, below, equal, not equal or outside a range) and fires when the condition holds for
+X polls in a row, in X of the last Y polls, or over a time window (min, max or average), or when the
+metric has no data for a gap or fewer than X of the last Y polls returned data. A rule clears only
+after the condition has been false for N polls, so a value at the line does not flap. Rules are
+validated and stored in the database; they are not yet connected to polling, ingest or the console.
+
 Availability and the hourly series behind forecasts are read from the summary
 views (`metric_5m`, `metric_hourly`), not from raw poll rows.
 

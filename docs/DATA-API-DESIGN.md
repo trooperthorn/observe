@@ -886,6 +886,8 @@ Each metric threshold is a rule, not a single comparison of the last value. A ru
 - Rules are evaluated at ingest for pushed data and at poll time for pulled data, using the latest table and a small per-series ring of the last Y results kept in memory and in the database, so evaluation never scans history.
 - The resulting state per metric feeds the host's group status (Good, Warning, Critical), the dashboard and alerts through the normal confirmation path.
 
+Built in slice r3-state-and-rules.2: the rule engine, the per-series ring and the stored rule set in `observe/rules.py`. The four evaluations are `consecutive`, `ratio`, `window` and `missing`; a missing value is unknown, breaching or not breaching (`missing` field), and a `missing` rule fires on a gap in seconds or on fewer than X of the last Y polls returning data. The ring holds the last 100 samples next to the latest value and lives in memory only; it can be refilled from `samples` with `RuleEngine.seed`. The rule set is saved in `app_settings` (`rules.config`) with an audit row on both backends. Wiring to ingest and polling, the alert path and the web console editor (global, per host, per metric) are later slices.
+
 ## 11. Owner decisions on open questions and migration (2026-10-06)
 
 - Open questions 2 to 13 in section 9.5: the recommended defaults are accepted. Question 1 is replaced by section 10.2; question 14 (merge order) is decided separately.
