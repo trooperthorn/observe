@@ -410,7 +410,8 @@ def _settings(name: str, model: type[BaseModel] | None,
 
 
 def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
-              settings_raw: Mapping[str, Any]) -> LoadedPlugin:
+              settings_raw: Mapping[str, Any],
+              credentials: Mapping[str, Any] | None = None) -> LoadedPlugin:
     if not isinstance(plugin, Plugin):
         raise PluginError(f"plugin {listed!r}: the entry point does not provide a Plugin")
     name = plugin.name
@@ -420,6 +421,9 @@ def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
     _check_core_version(plugin, core)
     try:
         settings = _settings(name, plugin.config_model(), settings_raw)
+        # Configured before collectors() is read, so a collector can take its interval from the
+        # settings. A plugin that fails later still stops startup, so nothing runs half set up.
+        plugin.configure(settings)
         routers, scopes = plugin.routers(), plugin.key_scopes()
         migrations, pages = plugin.migrations(), plugin.pages()
         static_dir = plugin.static_dir()
@@ -436,7 +440,17 @@ def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
     _check_nav_and_pages(name, nav, pages, static_dir)
     _check_monitor_types(name, mtypes)
     _check_collectors(name, collectors)
-    plugin.configure(settings)
+    bind = getattr(plugin, "bind_credentials", None)
+    if callable(bind):
+        # Optional hook: the plugin gets the named credentials of the config, so its settings
+        # can refer to one by name. A plugin raises PluginError for a name it cannot use.
+        try:
+            bind(dict(credentials or {}))
+        except PluginError:
+            raise
+        except Exception as err:
+            raise PluginError(f"plugin {name!r}: a hook failed: {type(err).__name__}: "
+                              f"{err}") from err
     return LoadedPlugin(plugin, tuple(routers), tuple(scopes), tuple(migrations), tuple(pages),
                         static_dir, tuple(nav), dict(mtypes), settings, tuple(collectors))
 
@@ -465,5 +479,5 @@ def load_plugins(config: Config, entry_points: EntryPoints = installed_entry_poi
             raise PluginError(f"plugin {name!r} failed to import: "
                               f"{type(err).__name__}: {err}") from err
         out.append(_validate(name, obj, core_version, scopes_seen,
-                             config.plugin_settings.get(name, {})))
+                             config.plugin_settings.get(name, {}), config.credentials))
     return LoadedPlugins(tuple(out))

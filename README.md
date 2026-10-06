@@ -674,6 +674,38 @@ labelled by number and colour name, and the list has a filter box. The dashboard
 list; a warning that nobody has acknowledged turns a port that passes its live check to
 Warning on the port page and the map.
 
+### The UniFi plugin
+
+The `unifi` plugin lives in `plugins/unifi` and is installed into the image with
+`pip install ./plugins/unifi`; it needs `plugins: [unifi]` to load. This release holds the
+settings, the tables and the devices collector. Every `interval` seconds (default 120) it reads
+the site list and the device list from the UniFi Network Integration API with the API key of a
+`unifi` credential, and keeps the current snapshot in two tables, `unifi_devices` and
+`unifi_clients`, with a first seen and last seen time and no per-poll history. Only
+`unifi_devices` is filled so far. A record not seen for `retention_days` (default 30) is deleted.
+
+```yaml
+credentials:
+  unifi_key: {type: unifi, api_key: ${UNIFI_API_KEY}}
+  unifi_view: {type: unifi_classic, username: observe, password: ${UNIFI_VIEW_PASSWORD}}  # optional
+plugins: [unifi]
+plugin_settings:
+  unifi:
+    host: 192.0.2.1
+    credential: unifi_key
+    site: Default          # the only site when omitted
+    interval: 120
+    retention_days: 30
+    # classic_credential: unifi_view   # optional; checked at startup, not used yet
+```
+
+The collector sends only GET requests, never follows a redirect, refuses a response over 4 MB
+and a list over 50 pages. After a 401 or 403 it stops sending requests, waits one interval, and
+doubles the wait on each further rejection up to one hour, so a revoked key is not hammered.
+The optional classic account is a local view-only account for later reads of PoE watts, per-port
+VLAN and LLDP neighbours; this release only checks that the name refers to a `unifi_classic`
+credential.
+
 ## Not implemented
 
 Network discovery, automated remediation actions, native DCOM WMI,

@@ -526,9 +526,16 @@ monitors:
       - {source: hwmon, metric: cpu_temp_c, direction: above, warn: 75, crit: 90}
 
 # Plugins (observe/plugins.py). Only names listed here are loaded.
-# plugins: [pockethernet, control]
+# plugins: [pockethernet, control, unifi]
 # plugin_settings:
 #   pockethernet:
 #     evidence_retention_days: 365  # how long a report body is kept
 #   control:
 #     signing_key_file: /run/secrets/observe_control_key   # from --control-keygen
+#   unifi:
+#     host: 192.0.2.1
+#     credential: unifi_key        # a credential of type unifi
+#     site: Default                # the only site when omitted
+#     interval: 120                # seconds between device polls
+#     retention_days: 30           # delete devices unseen this long
+#     # classic_credential: unifi_view   # optional, type unifi_classic; not used yet

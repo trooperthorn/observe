@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY observe ./observe
 # Plugins are loaded only when listed under plugins: in the config, so installing them is harmless.
 COPY plugins ./plugins
-RUN pip install --no-cache-dir --no-deps ./plugins/pockethernet ./plugins/control  && rm -rf ./plugins
+RUN pip install --no-cache-dir --no-deps ./plugins/pockethernet ./plugins/control ./plugins/unifi  && rm -rf ./plugins
 
 # Fixed non-root UID/GID so volume ownership is predictable on the host.
 RUN groupadd --gid 10001 observe \

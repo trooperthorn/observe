@@ -145,3 +145,7 @@ matters.
 ## UniFi ports mode
 
 The `ports` mode of `unifi_network` sends only GET requests with the existing API key. It does not follow redirects, so a hostile or misconfigured console cannot send the key to another host, and it refuses a device detail body larger than 1 MB so a response cannot exhaust memory.
+
+## UniFi plugin
+
+The `unifi` plugin reads the Integration API with the key of a `unifi` credential. It sends only GET requests, never follows a redirect so the key cannot be forwarded to another host, caps each response at 4 MB and a list at 50 pages, and never writes the key to the database, a log line or an error message. After a 401 or 403 it backs off, doubling its pause up to one hour, so a revoked key is not retried every interval. A device row holds names, MAC and IP addresses and firmware versions, so the database is as sensitive as the inventory already in it. Records unseen for 30 days are deleted. The optional `unifi_classic` credential is a dedicated local view-only account; this release only validates its name and never sends it. The plugin runs in process with the full trust described under Plugin host above.

@@ -1,0 +1,14 @@
+[project]
+name = "observe-unifi"
+dynamic = ["version"]
+description = "UniFi inventory for Observe"
+requires-python = ">=3.12"
+
+[project.entry-points."observe.plugins"]
+unifi = "observe_unifi:plugin"
+
+[tool.setuptools]
+packages = ["observe_unifi"]
+
+[tool.setuptools.dynamic]
+version = {attr = "observe_unifi.__version__"}

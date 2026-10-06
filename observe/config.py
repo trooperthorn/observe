@@ -220,6 +220,16 @@ class UniFiCredential(Strict):
     api_key: str
 
 
+class UniFiClassicCredential(Strict):
+    """A dedicated local view-only account on the UniFi OS console, used only by the observe_unifi
+    plugin for the classic controller reads (PoE watts, per-port VLAN, LLDP neighbours). The
+    Integration API key path works without it."""
+
+    type: Literal["unifi_classic"]
+    username: str
+    password: str
+
+
 class TechnitiumCredential(Strict):
     """An API token (Administration > Sessions > Create Token), ideally for a
     user whose only permission is Dashboard: View."""
@@ -232,7 +242,7 @@ Credential = Annotated[
     Union[SnmpV2Credential, SnmpV3Credential, WinRMCredential, MqttCredential,
           SshCredential, LdapCredential, TrueNASCredential, ProxmoxCredential,
           VSphereCredential, HomeAssistantCredential, UniFiCredential,
-          TechnitiumCredential],
+          UniFiClassicCredential, TechnitiumCredential],
     Field(discriminator="type"),
 ]
 

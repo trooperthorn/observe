@@ -302,3 +302,5 @@ The package `observe_pockethernet` in `plugins/pockethernet` (entry point `pocke
 6. Optional automatic queueing.
 
 - **UniFi ports mode.** The `unifi_network` check in mode `ports` reads one device detail and reports `detail.ports` keyed by port index, which feeds the live-port lookup for the map. Speed comes from `speedMbps`; VLAN and PoE watts are unknown (shown as unknown, never zero) because the Integration API does not provide them. The `interfaces.ports` field names are unverified against a live console.
+
+- **UniFi inventory plugin.** The `unifi` plugin keeps the current devices of one UniFi site in `unifi_devices` (site, id, MAC, name, model, state, IP, firmware, a firmware update flag that is NULL when unknown, first seen, last seen), polled every 120 seconds from the Integration API. `unifi_clients` exists for a later collector and is empty. Records unseen for 30 days are deleted. Field names come from ha_Int_soc `docs/UNIFI-LOCAL-API-CONTRACT.md`; the update flag on the list row is unverified against a live console. The map feed, PoE watts, per-port VLAN and LLDP neighbours are later slices.

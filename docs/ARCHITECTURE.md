@@ -778,3 +778,24 @@ audit action namespace (`control.*`) reserved for phase 2.
 ### UniFi ports mode
 
 The `unifi_network` check has a `ports` mode that issues one GET for a device detail with redirects disabled and a 1 MB body cap. It returns `detail.ports` keyed by the string port index, with `speed_mbps`, `max_speed_mbps`, `state`, `poe`, and `vlan` and `poe_w` fixed at None. `live_port` in `web.py` reads that detail for a matched UniFi port. The field names under `interfaces.ports` are unverified against a live console.
+
+### UniFi plugin
+
+`plugins/unifi/observe_unifi` is a plugin with no routes or pages yet. `UniFiSettings` is its
+`plugin_settings.unifi` model. The plugin host calls the optional `bind_credentials` hook after
+validation with the config's named credentials, so the plugin can check that `credential` names a
+`unifi` credential and `classic_credential` a `unifi_classic` one, and fail startup with a
+PluginError that never contains a secret. The host now calls `configure` before it reads
+`collectors()`, so a collector can take its interval from the settings.
+
+`client.py` is the read-only Integration API client: GET only, `follow_redirects=False`, a 4 MB
+cap per response, `offset` and `limit` paging that ends on an empty page, on `totalCount`, or on a
+page shorter than the limit when there is no `totalCount`, and at most 50 pages. `records.py` holds
+migration 1 (`unifi_devices` and `unifi_clients`, one row per site and id, `first_seen` and
+`last_seen`) and the upsert and prune. The `devices` collector (`collect_devices`, interval 120 s)
+picks the site by name, or the only site, and replaces each device row. A 401 or 403 sets a pause
+of one interval, doubled per consecutive rejection up to 3600 s; calls during the pause raise
+`BackedOff` without a request, so the scheduler logs one failure streak. The plugin's `prune` hook
+deletes devices and clients with `last_seen` older than `retention_days`. Row fields follow ha_Int_soc
+`docs/UNIFI-LOCAL-API-CONTRACT.md`; that `firmwareUpdatable` is on the device list row is unverified, so
+an absent value is stored as NULL.
