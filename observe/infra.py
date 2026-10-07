@@ -131,14 +131,14 @@ class InfraTx:
             raise InfraError("too many management addresses")
         ts = time.time() if now is None else now
         self.conn.execute(
-            "INSERT INTO infra_switches (switch_id, name, mgmt_addresses, vendor, platform, "
+            "INSERT INTO infra_switches AS t (switch_id, name, mgmt_addresses, vendor, platform, "
             "first_seen, last_seen) VALUES (?,?,?,?,?,?,?) ON CONFLICT(switch_id) DO UPDATE SET "
-            "name=CASE WHEN excluded.name != '' THEN excluded.name ELSE name END, "
+            "name=CASE WHEN excluded.name != '' THEN excluded.name ELSE t.name END, "
             "mgmt_addresses=CASE WHEN excluded.mgmt_addresses != '[]' "
-            "THEN excluded.mgmt_addresses ELSE mgmt_addresses END, "
-            "vendor=CASE WHEN excluded.vendor != '' THEN excluded.vendor ELSE vendor END, "
-            "platform=CASE WHEN excluded.platform != '' THEN excluded.platform ELSE platform END, "
-            "last_seen=MAX(last_seen, excluded.last_seen)",
+            "THEN excluded.mgmt_addresses ELSE t.mgmt_addresses END, "
+            "vendor=CASE WHEN excluded.vendor != '' THEN excluded.vendor ELSE t.vendor END, "
+            "platform=CASE WHEN excluded.platform != '' THEN excluded.platform ELSE t.platform END, "
+            "last_seen=MAX(t.last_seen, excluded.last_seen)",
             (sid, name, json.dumps(addrs), vendor, platform, ts, ts))
         return sid
 
@@ -159,14 +159,14 @@ class InfraTx:
                             (sid,)).fetchone() is None:
             raise InfraError("unknown switch")
         self.conn.execute(
-            "INSERT INTO infra_ports (switch_id, port_key, raw_port_id, if_index, unifi_index, "
+            "INSERT INTO infra_ports AS t (switch_id, port_key, raw_port_id, if_index, unifi_index, "
             "role, first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?) "
             "ON CONFLICT(switch_id, port_key) DO UPDATE SET "
             "raw_port_id=CASE WHEN excluded.raw_port_id != '' THEN excluded.raw_port_id "
-            "ELSE raw_port_id END, if_index=COALESCE(excluded.if_index, if_index), "
-            "unifi_index=COALESCE(excluded.unifi_index, unifi_index), "
-            "role=CASE WHEN excluded.role != 'unknown' THEN excluded.role ELSE role END, "
-            "last_seen=MAX(last_seen, excluded.last_seen)",
+            "ELSE t.raw_port_id END, if_index=COALESCE(excluded.if_index, t.if_index), "
+            "unifi_index=COALESCE(excluded.unifi_index, t.unifi_index), "
+            "role=CASE WHEN excluded.role != 'unknown' THEN excluded.role ELSE t.role END, "
+            "last_seen=MAX(t.last_seen, excluded.last_seen)",
             (sid, key, raw, if_index, unifi_index, role, ts, ts))
         return key
 
@@ -199,17 +199,17 @@ class InfraTx:
                 (sid, key)).fetchone() is None:
             raise InfraError("unknown port")
         self.conn.execute(
-            "INSERT INTO infra_jacks (jack_key, room, site, switch_id, port_key, first_seen, "
+            "INSERT INTO infra_jacks AS t (jack_key, room, site, switch_id, port_key, first_seen, "
             "last_seen) VALUES (?,?,?,?,?,?,?) ON CONFLICT(jack_key) DO UPDATE SET "
-            "room=CASE WHEN excluded.room != '' AND (excluded.last_seen >= last_seen "
-            "OR room = '') THEN excluded.room ELSE room END, "
-            "site=CASE WHEN excluded.site != '' AND (excluded.last_seen >= last_seen "
-            "OR site = '') THEN excluded.site ELSE site END, "
-            "switch_id=CASE WHEN excluded.last_seen >= last_seen OR switch_id IS NULL "
-            "THEN COALESCE(excluded.switch_id, switch_id) ELSE switch_id END, "
-            "port_key=CASE WHEN excluded.last_seen >= last_seen OR switch_id IS NULL "
-            "THEN COALESCE(excluded.port_key, port_key) ELSE port_key END, "
-            "last_seen=MAX(last_seen, excluded.last_seen)",
+            "room=CASE WHEN excluded.room != '' AND (excluded.last_seen >= t.last_seen "
+            "OR t.room = '') THEN excluded.room ELSE t.room END, "
+            "site=CASE WHEN excluded.site != '' AND (excluded.last_seen >= t.last_seen "
+            "OR t.site = '') THEN excluded.site ELSE t.site END, "
+            "switch_id=CASE WHEN excluded.last_seen >= t.last_seen OR t.switch_id IS NULL "
+            "THEN COALESCE(excluded.switch_id, t.switch_id) ELSE t.switch_id END, "
+            "port_key=CASE WHEN excluded.last_seen >= t.last_seen OR t.switch_id IS NULL "
+            "THEN COALESCE(excluded.port_key, t.port_key) ELSE t.port_key END, "
+            "last_seen=MAX(t.last_seen, excluded.last_seen)",
             (jack, room, site, sid, key, ts, ts))
         return jack
 
@@ -224,11 +224,11 @@ class InfraTx:
         mac, address = _text(mac, "mac", 32), _text(address, "address", 64)
         ts = time.time() if now is None else now
         self.conn.execute(
-            "INSERT INTO infra_endpoints (kind, ref, mac, address, first_seen, last_seen) "
+            "INSERT INTO infra_endpoints AS t (kind, ref, mac, address, first_seen, last_seen) "
             "VALUES (?,?,?,?,?,?) ON CONFLICT(kind, ref) DO UPDATE SET "
-            "mac=CASE WHEN excluded.mac != '' THEN excluded.mac ELSE mac END, "
-            "address=CASE WHEN excluded.address != '' THEN excluded.address ELSE address END, "
-            "last_seen=MAX(last_seen, excluded.last_seen)", (kind, ref, mac, address, ts, ts))
+            "mac=CASE WHEN excluded.mac != '' THEN excluded.mac ELSE t.mac END, "
+            "address=CASE WHEN excluded.address != '' THEN excluded.address ELSE t.address END, "
+            "last_seen=MAX(t.last_seen, excluded.last_seen)", (kind, ref, mac, address, ts, ts))
         return int(self.conn.execute("SELECT id FROM infra_endpoints WHERE kind=? AND ref=?",
                                     (kind, ref)).fetchone()[0])
 
@@ -277,14 +277,14 @@ class InfraTx:
             if not self._end_exists(kind, ref):
                 raise InfraError(f"unknown {kind} in link")
         self.conn.execute(
-            "INSERT INTO infra_links (a_kind, a_ref, b_kind, b_ref, source, confidence, "
+            "INSERT INTO infra_links AS t (a_kind, a_ref, b_kind, b_ref, source, confidence, "
             "first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?) "
             "ON CONFLICT(a_kind, a_ref, b_kind, b_ref, source) DO UPDATE SET "
-            "confidence=CASE WHEN excluded.last_seen >= last_seen THEN excluded.confidence "
-            "ELSE confidence END, "
-            "closed_at=CASE WHEN closed_at IS NOT NULL AND closed_at > excluded.last_seen "
-            "THEN closed_at ELSE NULL END, "
-            "last_seen=MAX(last_seen, excluded.last_seen)",
+            "confidence=CASE WHEN excluded.last_seen >= t.last_seen THEN excluded.confidence "
+            "ELSE t.confidence END, "
+            "closed_at=CASE WHEN t.closed_at IS NOT NULL AND t.closed_at > excluded.last_seen "
+            "THEN t.closed_at ELSE NULL END, "
+            "last_seen=MAX(t.last_seen, excluded.last_seen)",
             (*ends[0], *ends[1], source, float(confidence), ts, ts))
         self._close_contradicted(ends, source, ts)
         return int(self.conn.execute(

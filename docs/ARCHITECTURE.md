@@ -222,7 +222,12 @@ rewrites them in `observe/storage/pg_dialect.py`: `?` becomes `%s`, `INSERT OR I
 `REAL` becomes `DOUBLE PRECISION` and `INTEGER` becomes `BIGINT`, the two-argument `MAX` and `MIN`
 become `GREATEST` and `LEAST`, and `PRAGMA table_info` becomes a catalogue query. `INSERT OR
 REPLACE` is refused. The core steps and the plugin steps run through the same rewrite, and an
-advisory lock makes two starting processes migrate one at a time.
+advisory lock makes two starting processes migrate one at a time. The pooled readers add their
+statement timeout to the `options` of the connection string instead of replacing them, so a
+`search_path` in the string reaches every connection and the readers see the same schema as the
+writer. In an upsert, a column the existing row keeps is named through the table (or an alias on
+the `INSERT`, such as `INSERT INTO infra_switches AS sw`), because PostgreSQL rejects a bare name
+there as ambiguous with the `excluded` row; both backends accept the alias form.
 
 Series storage and the summary levels are shared. Migration 16 adds `resources`, `scopes`,
 `series`, `samples` and `latest` (`observe/storage/series.py`), and migration 17 adds `rollup_5m`,

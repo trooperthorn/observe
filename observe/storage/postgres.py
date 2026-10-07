@@ -23,7 +23,7 @@ from typing import Any
 
 import psycopg
 from psycopg import errors as pg_errors
-from psycopg.conninfo import make_conninfo
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from . import compaction, pg_timescale, rollups
@@ -158,7 +158,7 @@ class PgStorage:
             self._pool = ConnectionPool(
                 self._conninfo, min_size=read_pool_size, max_size=read_pool_size, open=False,
                 timeout=read_deadline_s, configure=self._configure_reader, name="observe-read",
-                kwargs={"options": f"-c statement_timeout={int(read_deadline_s * 1000)}"})
+                kwargs={"options": self._reader_options(read_deadline_s)})
             self._pool.open(wait=True, timeout=connect_timeout_s)
             self._read_exec = ThreadPoolExecutor(max_workers=read_pool_size,
                                                  thread_name_prefix="db-read")
@@ -177,6 +177,14 @@ class PgStorage:
         return "PgStorage(postgres)"
 
     # ---- start-up -------------------------------------------------------------------------
+
+    def _reader_options(self, deadline_s: float) -> str:
+        """The server options for a pooled reader: those already in the connection string (a
+        search_path, for one) followed by the statement timeout. A bare `options` keyword would
+        replace the ones in the string, so the pool would lose the schema the writer uses."""
+        have = conninfo_to_dict(self._conninfo).get("options")
+        timeout = f"-c statement_timeout={int(deadline_s * 1000)}"
+        return f"{have} {timeout}" if have else timeout
 
     @staticmethod
     def _configure_reader(conn: psycopg.Connection[Any]) -> None:

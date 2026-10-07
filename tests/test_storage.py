@@ -208,6 +208,7 @@ async def test_retention_drops_raw_samples_past_the_raw_level(storage):
     await put(storage, [(old, "h", "cpu", "temp", "{}", 1.0, "C")])
     await storage.execute(
         "INSERT INTO app_settings (key, value, updated) VALUES ('retention.raw_days', '7', 1)")
+    await settle(storage)
     await storage.apply_retention(now=now, retention_days=30, audit_retention_days=365)
     assert await storage.fetchall("SELECT COUNT(*) FROM samples") == [(0,)]
 
@@ -400,6 +401,7 @@ async def test_hourly_series_returns_plain_floats_on_every_backend(storage):
                                     (Result.FAIL, 999.0), (Result.OK, None)]):
         await st.record("m", base + i * 60 + 0.5, CheckResult(res, "", value=val))
     await st.record("m", base + 3600 + 5, CheckResult(Result.WARN, "", value=40.0))
+    await settle(storage)
     got = await st.hourly_series("m", 1)
     assert got == [(base + 1800, 15.0), (base + 5400, 40.0)]
     assert all(type(t) is float and type(v) is float for t, v in got)
@@ -411,6 +413,7 @@ async def test_availability_is_a_plain_float_percentage_on_every_backend(storage
     now = time.time()
     for i, res in enumerate([Result.OK, Result.OK, Result.WARN, Result.FAIL]):
         await st.record("m", now - 10 - i, CheckResult(res, ""))
+    await settle(storage)
     got = await st.availability("m", 1)
     assert got == 75.0 and type(got) is float
     assert await st.availability("none", 1) is None

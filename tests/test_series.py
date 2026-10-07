@@ -20,7 +20,7 @@ from observe.storage import compaction, pg_timescale, series
 from observe.storage.postgres import PgStorage
 from observe.storage.rollups import RetentionLevels
 
-from .dbq import put, settle
+from .dbq import put, run_summary_policies, settle
 from .test_storage import storage  # noqa: F401  (the fixture)
 
 LEVELS = (("rollup_5m", 300_000), ("rollup_1h", 3_600_000), ("rollup_1d", 86_400_000))
@@ -250,7 +250,8 @@ async def test_churned_series_are_collected_after_retention_and_the_cap_frees(st
     assert full.dropped == 1  # the dead series still count against the cap
     await settle(storage)
     await storage.apply_retention(now=now, retention_days=7, audit_retention_days=365)
-    await settle(storage)
+    await run_summary_policies(storage)
+    await storage.apply_retention(now=now, retention_days=7, audit_retention_days=365)
     assert await storage.fetchall("SELECT metric FROM series ORDER BY metric") == [("k",)]
     assert await storage.fetchall("SELECT name FROM resources") == [("keep",)]
     assert await storage.fetchall("SELECT COUNT(*) FROM latest") == [(1,)]
@@ -296,8 +297,9 @@ async def test_compaction_keeps_what_the_levels_above_still_cover(storage):
               for age in range(1, 31) for k in range(3)]
     await put(storage, [row(ts / 1000, m, v) for m, ts, v in points])
     await settle(storage)
+    # No settle after the trim: a refresh over the whole range would rebuild the aggregates from
+    # the raw chunks already dropped and lose the buckets they exist to keep.
     await storage.apply_retention(now=now, retention_days=7, audit_retention_days=365)
-    await settle(storage)
     cuts = compaction.cuts_for(RetentionLevels(), "m", now)
     ts_list = [ts for _, ts, _ in points]
     chunked = bool(getattr(storage, "timescale", False))  # whole chunks, so up to a day late

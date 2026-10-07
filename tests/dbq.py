@@ -46,3 +46,18 @@ async def settle(storage: Any) -> None:
     if getattr(storage, "timescale", False):
         storage._admin_run([f"CALL refresh_continuous_aggregate('{view}', NULL, NULL)"
                             for view in ("rollup_5m", "rollup_1h", "rollup_1d")])
+
+
+async def run_summary_policies(storage: Any) -> None:
+    """Run the retention policies of the summary levels now. On TimescaleDB they trim the
+    continuous aggregates on a schedule, so a test that needs the trim to have happened runs the
+    jobs itself; on the other backends compaction already trims every level."""
+    if getattr(storage, "timescale", False):
+        jobs = await storage.fetchall(
+            "SELECT j.job_id FROM timescaledb_information.jobs j "
+            "JOIN timescaledb_information.continuous_aggregates c "
+            "ON c.materialization_hypertable_name = j.hypertable_name "
+            "AND c.materialization_hypertable_schema = j.hypertable_schema "
+            "WHERE j.proc_name = 'policy_retention' AND c.view_schema = current_schema() "
+            "ORDER BY j.job_id")
+        storage._admin_run([f"CALL run_job({int(job)})" for (job,) in jobs])

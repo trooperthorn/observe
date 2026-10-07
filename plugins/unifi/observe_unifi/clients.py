@@ -164,7 +164,7 @@ def _up_sql(keep_classic: bool) -> str:
     def col(name: str) -> str:
         if not keep_classic:
             return f"{name}=excluded.{name}"
-        return f"{name}=CASE WHEN excluded.enriched=1 THEN excluded.{name} ELSE {name} END"
+        return f"{name}=CASE WHEN excluded.enriched=1 THEN excluded.{name} ELSE unifi_clients.{name} END"
     return f"""INSERT INTO unifi_clients (site_id, client_id, mac, name, ip, kind, uplink_device_id,
   connected, connected_at, ssid, uplink_mac, sw_port, enriched, classic_seen, first_seen, last_seen)
   VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)
@@ -180,11 +180,11 @@ def _up_sql(keep_classic: bool) -> str:
 # retention instead of looking new on every poll. That choice is made in Python, with two
 # statements, because PostgreSQL cannot infer the type of a bare `? IS NULL` parameter.
 def _off_sql(known: bool) -> str:
-    seen = ", last_seen=MAX(last_seen, excluded.last_seen)" if known else ""
+    seen = ", last_seen=MAX(unifi_clients.last_seen, excluded.last_seen)" if known else ""
     return f"""INSERT INTO unifi_clients (site_id, client_id, mac, name, connected, first_seen,
   last_seen) VALUES (?,?,?,?,0,?,?)
   ON CONFLICT (site_id, client_id) DO UPDATE SET connected=0,
-  name=CASE WHEN excluded.name != '' THEN excluded.name ELSE name END{seen}"""
+  name=CASE WHEN excluded.name != '' THEN excluded.name ELSE unifi_clients.name END{seen}"""
 
 
 _OFF_KNOWN, _OFF_UNKNOWN = _off_sql(True), _off_sql(False)
