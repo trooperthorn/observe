@@ -57,8 +57,28 @@ def live_pg(timescale: str | None = None, plugins=None):
         yield s
     finally:
         s.close()
-        with psycopg.connect(dsn, autocommit=True) as admin:
-            admin.execute(f"DROP SCHEMA {schema} CASCADE")
+        _drop_schema(psycopg, dsn, schema)
+
+
+def _drop_schema(psycopg, dsn: str, schema: str) -> None:
+    """Drop a throwaway schema. On TimescaleDB its background jobs are removed first, and the drop
+    is retried on a deadlock: with parallel workers, another worker's catalogue updates or a
+    scheduled continuous aggregate refresh can take the same locks in the opposite order."""
+    for attempt in range(5):
+        try:
+            with psycopg.connect(dsn, autocommit=True) as admin:
+                has_ts = admin.execute(
+                    "SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'").fetchone()
+                if has_ts:
+                    admin.execute(
+                        "SELECT delete_job(job_id) FROM timescaledb_information.jobs "
+                        "WHERE hypertable_schema = %s OR config::text LIKE %s",
+                        (schema, f'%"{schema}"%'))
+                admin.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+            return
+        except psycopg.errors.DeadlockDetected:
+            time.sleep(0.2 * (attempt + 1))
+    raise RuntimeError(f"could not drop test schema {schema} after retries")
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
