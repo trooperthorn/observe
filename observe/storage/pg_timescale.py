@@ -35,6 +35,8 @@ def integer_now_statement(relation: str, *, tolerant: bool = False) -> str:
             f"RAISE WARNING 'set_integer_now_func on {relation} failed: %', SQLERRM; END $$")
 
 
+# Real-time aggregation (materialized_only = false) adds the not yet refreshed rows to every
+# read, so a summary view never lags behind the raw samples the way a plain continuous aggregate does.
 def _aggregate(name: str, width: int, source: str, level_below: bool) -> str:
     bucket = f"time_bucket({width}::bigint, {'bucket' if level_below else 'ts'})"
     if level_below:
@@ -43,7 +45,7 @@ def _aggregate(name: str, width: int, source: str, level_below: bool) -> str:
     else:
         cols = "count(value) AS n, sum(value) AS sum_v, min(value) AS min_v, max(value) AS max_v"
         where = " WHERE value IS NOT NULL"
-    return (f"CREATE MATERIALIZED VIEW IF NOT EXISTS {name} WITH (timescaledb.continuous) AS "
+    return (f"CREATE MATERIALIZED VIEW IF NOT EXISTS {name} WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS "
             f"SELECT series_id, {bucket} AS bucket, {cols} FROM {source}{where} "
             f"GROUP BY series_id, {bucket} WITH NO DATA")
 

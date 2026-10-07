@@ -62,7 +62,7 @@ def test_the_hypertable_is_chunked_by_day_on_whole_milliseconds():
     assert "timescaledb.compress_segmentby = 'series_id'" in text
     assert "host_samples" not in text and "ts_s" not in text
     for name in ("rollup_5m", "rollup_1h", "rollup_1d"):
-        assert f"CREATE MATERIALIZED VIEW IF NOT EXISTS {name} WITH (timescaledb.continuous)" in text
+        assert f"CREATE MATERIALIZED VIEW IF NOT EXISTS {name} WITH (timescaledb.continuous, timescaledb.materialized_only = false)" in text
     # The levels are built on each other and carry the columns of the shared summary tables.
     assert "time_bucket(300000::bigint, ts)" in text
     assert "FROM rollup_5m GROUP BY series_id" in text and "FROM rollup_1h GROUP BY series_id" in text
