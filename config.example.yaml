@@ -571,7 +571,7 @@ monitors:
     crash_hold_s: 3600
     crash_result: warn
     components:
-      - {source: hwmon, metric: cpu_temp_c, direction: above, warn: 75, crit: 90}
+      - {source: hostwatch.collector.hwmon, metric: hw.temperature, direction: above, warn: 75, crit: 90}
 
 # Plugins (observe/plugins.py). Only names listed here are loaded.
 # plugins: [pockethernet, control, unifi]

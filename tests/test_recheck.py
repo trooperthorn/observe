@@ -249,7 +249,7 @@ def batch(host, ts):
     return Batch.model_validate({
         "schema_version": 1, "agent_version": "t", "host": host, "platform": "linux",
         "sent_at": ts, "sources": [{"source": "hwmon", "available": True}],
-        "samples": [{"source": "hwmon", "metric": "cpu_temp_c", "value": 40.0, "unit": "C",
+        "samples": [{"source": "hostwatch.collector.hwmon", "metric": "hw.temperature", "value": 40.0, "unit": "C",
                      "labels": {}, "ts": ts}]})
 
 

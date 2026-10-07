@@ -565,7 +565,7 @@ def test_a_host_listed_in_the_config_cannot_be_removed(tmp_path, monkeypatch):
     from tests.conftest import make_config
     from tests.test_auth import Env
     pushed = {"name": "nas01", "type": "pushed_host", "host": "nas01", "group": "storage",
-              "components": [{"source": "hwmon", "metric": "cpu_temp_c", "direction": "above",
+              "components": [{"source": "hostwatch.collector.hwmon", "metric": "hw.temperature", "direction": "above",
                               "warn": 70, "crit": 90}], "stale_after": 120}
     monkeypatch.setattr(test_auth, "make_config",
                         lambda monitors, **kw: make_config([*monitors, pushed], **kw))

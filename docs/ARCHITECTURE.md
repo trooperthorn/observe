@@ -237,7 +237,7 @@ on every backend: `metric_5m`, `metric_hourly`, `metric_daily` and `availability
 
 A resource is an entity that produces data; a pushed host is a resource of kind `host` whose
 identity is its `host.name`. A scope is the producer of a point, which for a pushed host is the
-source name (`hwmon`, `zfs`, `thermalctl`). A series is a resource, a scope, a metric and the
+source name (`hostwatch.collector.hwmon`, `hostwatch.collector.zfs`). A series is a resource, a scope, a metric and the
 point attributes (a host's labels), stored once with a stable integer id; its key is a BLAKE2b
 digest of the canonical form, attributes sorted by key, scalar values only. The design leaves the
 scope out of the series identity, but until the OpenTelemetry normalizer gives every producer one
@@ -338,8 +338,10 @@ the old and new rules. `PUT /api/admin/rules` (admin session, CSRF) replaces the
 with a `rules_failed` audit row for a refused rule; the page `/admin/rules` (`admin-rules.js`) edits the
 list. The scheduler owns one engine and wires it in two places. For pushed data, `POST /v1/metrics` calls
 `Scheduler.observe_pushed` after a batch is stored (not for a resend), which feeds every sample whose
-series a rule applies to; the rule metric is `<source>.<metric>` (for example `hwmon.cpu_temp_c`) and the
-rule host is the pushed host name. For pulled data, `poll_once` feeds `monitor.value` and `monitor.latency`
+series a rule applies to; the rule metric is the OpenTelemetry metric name (for example `hw.temperature`, which applies to
+every sensor of the host; the engine key also carries the scope and the point attributes, so two
+collectors never share a state), or `<source>.<metric>` for a source outside the
+`hostwatch.collector.` scopes (`observe/otelnames.py`), and the rule host is the pushed host name. For pulled data, `poll_once` feeds `monitor.value` and `monitor.latency`
 of each poll (a failed poll feeds no value, so a missing-data rule sees it), and the rule host is the
 monitor slug. A series with no applicable rule gets no ring, so memory follows the rules and not the data.
 A series seen for the first time after a restart has its ring filled from the newest stored samples
@@ -492,7 +494,9 @@ non-finite numbers.
 ## Boot and crash events
 
 The agent gathers the evidence (heartbeat, pstore, watchdog status, previous
-boot journal) and sends one `boot.<kind>` event per detected reboot. The
+boot journal) and sends one `boot.<kind>` event per detected reboot (as an OTLP log with `event.name`
+`observe.host.boot`, the kind in `observe.event.kind` and the agent's severity in `observe.severity`,
+which the normalizer reads back as the event kind and severity). The
 classifier in `observe/ingest/boot.py`, adapted from hostwatch, reduces the
 kind to clean (`clean_shutdown`), crash (`kernel_panic`, `watchdog_reset`,
 `power_loss`, `unknown_unclean`, `unclean_shutdown`) or unknown (anything else,
@@ -582,11 +586,17 @@ Each pushed host has a page at `/host?name=HOST`, linked from the dashboard
 row of its `pushed_host` monitor. It is served by two v2 routes, `GET /api/v2/hosts`
 (one summary row per host, paged by name) and `GET /api/v2/hosts/{name:path}` (host names may contain slashes; the full document), both
 built by `observe/hostview.py` (through `observe/api/hosts.py`, which finds the monitor behind the host and writes the timestamps as RFC 3339) from the newest sample per series in the store.
+A reading is matched to its section by the scope name `hostwatch.collector.<source>` and the
+OpenTelemetry metric name of docs/DATA-API-DESIGN.md section 3.2, and the point attributes are its
+labels; utilization, charge and wear are ratios from 0 to 1, so the built-in limits and a monitor's
+`components` limits are ratios too. The memory section adds the computed `system.memory.utilization`.
+The golden files of the agent are kept in `tests/fixtures/otel` and drive `tests/test_otel_contract.py`.
 The sections are CPU, memory, power, temperatures, fans with the fan controller
 state, RAID, ZFS pools, disks, UPS, Home Assistant, containers, alerts and events, plus the boot state and
 the list of sources. Each section and each reading carries Good, Warning or
 Critical. Built-in limits live in `hostview.py`; thresholds on the monitor in the
-YAML override them, and the agent never sets any.
+YAML override them (a component names the scope and metric, for example `source:
+hostwatch.collector.hwmon` and `metric: hw.temperature`), and the agent never sets any.
 
 A `homeassistant` monitor with `mode: host` feeds the same page without an agent. Every 300 s
 (or its `interval`) it reads `/api/config` and `/api/states` with the existing non-admin token,

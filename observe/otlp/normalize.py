@@ -22,6 +22,11 @@ What a host producer sends:
 - A log record is an event. `event.name` is its kind, the body its title, `observe.source` its
   source, `observe.dedup_key` its dedup key (else a hash of the record), `observe.boot_id` its
   boot id and severityNumber or severityText its severity. The other attributes are its detail.
+  The agent's own shapes are read back: `observe.event.kind` (a boot classification such as
+  `boot.power_loss`, sent under event.name `observe.host.boot`) replaces event.name as the kind, a
+  `hostwatch.` prefix on event.name is dropped, `observe.severity` (the severity the agent kept,
+  because a critical boot is sent as WARN) replaces the severity of the record, and the
+  `observe.detail.` prefix is removed from detail keys.
 """
 
 from __future__ import annotations
@@ -47,6 +52,8 @@ MAX_UNIT = 32
 MAX_NS = (1 << 63) - 1
 _METRIC = re.compile(r"^[a-z][a-z0-9_.]{0,127}$")
 _UNIT = re.compile(r"^[A-Za-z0-9%/.{}_\[\]^*()' -]{0,32}$")
+EVENT_PREFIX = "hostwatch."
+DETAIL_PREFIX = "observe.detail."
 SOURCE_AVAILABLE = "observe.source.available"
 SOURCE_PRESENT = "observe.source.present"
 FLAG_NO_VALUE = 1
@@ -432,6 +439,26 @@ def _severity(number: Any, text: Any) -> str:
     return "info"
 
 
+def _event_kind(name: str, kind: Any) -> str:
+    """The kind of an agent event. A boot classification arrives as event.name `observe.host.boot`
+    with the classification (`boot.power_loss`) in `observe.event.kind`, and every other agent
+    event as `hostwatch.<kind>`; the kind is what the boot classifier and the host view read
+    (design section 3.9). An event of another producer keeps its event.name."""
+    if isinstance(kind, str) and kind and len(kind) <= MAX_NAME:
+        return kind
+    if name.startswith(EVENT_PREFIX) and len(name) > len(EVENT_PREFIX):
+        return name[len(EVENT_PREFIX):]
+    return name
+
+
+def _event_severity(sent: Any, number: Any, text: Any) -> str:
+    """The severity the agent kept in `observe.severity` (a critical event is severity number 17 or,
+    for a boot, 13), else the one the log record carries."""
+    if isinstance(sent, str) and sent.strip():
+        return normalize_severity(sent)
+    return _severity(number, text)
+
+
 def _body_text(body: Any) -> str | None:
     if isinstance(body, dict) and isinstance(body.get("stringValue"), str):
         return body["stringValue"]
@@ -515,7 +542,11 @@ def normalize_logs(req: Any, bound_host: str, now: float) -> Normalized:
         source = attrs.pop("observe.source", None)
         dedup = attrs.pop("observe.dedup_key", None)
         boot = attrs.pop("observe.boot_id", None)
-        detail = {k: v for k, v in attrs.items() if v is not _COMPLEX and v is not None}
+        kind = _event_kind(kind, attrs.pop("observe.event.kind", None))
+        sent_severity = attrs.pop("observe.severity", None)
+        attrs.pop("observe.host.clean_shutdown", None)  # the classification is read from the kind
+        detail = {(k[len(DETAIL_PREFIX):] or k) if k.startswith(DETAIL_PREFIX) else k: v
+                  for k, v in attrs.items() if v is not _COMPLEX and v is not None}
         if len(detail) > MAX_DETAIL_KEYS or len(json.dumps(detail)) > MAX_DETAIL_BYTES:
             rejects.add("a log record has too much detail")
             continue
@@ -526,7 +557,8 @@ def normalize_logs(req: Any, bound_host: str, now: float) -> Normalized:
             dedup = f"otlp:{digest}"
         try:
             events.append(Event(
-                kind=kind, severity=_severity(rec.get("severityNumber"), rec.get("severityText")),
+                kind=kind, severity=_event_severity(sent_severity, rec.get("severityNumber"),
+                                                    rec.get("severityText")),
                 source=source if isinstance(source, str) and source and len(source) <= MAX_NAME
                 else scope, ts=ts, title=(body if body else kind)[:MAX_TEXT], detail=detail,
                 dedup_key=dedup, boot_id=boot[:MAX_NAME] if isinstance(boot, str) and boot

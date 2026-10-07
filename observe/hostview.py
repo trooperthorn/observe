@@ -13,8 +13,13 @@ reading is graded Good, Warning or Critical here. Nothing is guessed:
   not make the host look worse. They are listed under `sources` so the page
   can say so.
 
+A reading is matched by its OpenTelemetry scope name (`hostwatch.collector.<source>`) and metric
+name, with the point attributes as its labels (docs/DATA-API-DESIGN.md section 3). Utilization,
+charge and wear are ratios from 0 to 1, so their limits are too. The source status of a section is
+read by the short collector id the agent reports in `observe.source`.
+
 Thresholds listed in the YAML for a pushed_host monitor override the built-in
-defaults for that source and metric. The agent never sets thresholds.
+defaults for that scope and metric. The agent never sets thresholds.
 """
 
 from __future__ import annotations
@@ -24,9 +29,11 @@ from typing import Any
 
 from .checks.host import CRITICAL, GOOD, WARNING, grade
 from .config import Thresholds
+from .otelnames import collector_scope, short_source
 from .store import ABSENT_REASON
 
 _RANK = {GOOD: 0, WARNING: 1, CRITICAL: 2}
+UTILIZATION = "system.memory.utilization"  # the computed memory ratio of the memory section
 ALERT_WINDOW_S = 86400.0
 HA_UNAVAILABLE_WARN = 25  # unavailable entities at or above this make the HA section Warning
 
@@ -92,7 +99,7 @@ def _flag(level: str, which: str, why: str) -> Grader:
 
 
 def _ups_flag(v: float, labels: dict[str, str]) -> tuple[str, str]:
-    flag = labels.get("flag", "")
+    flag = labels.get("observe.ups.flag", "")
     if flag == "LB" and v >= 1:
         return CRITICAL, "UPS battery is low"
     if flag == "OB" and v >= 1:
@@ -100,11 +107,65 @@ def _ups_flag(v: float, labels: dict[str, str]) -> tuple[str, str]:
     return GOOD, ""
 
 
+def _thermal_mode(v: float, labels: dict[str, str]) -> tuple[str, str]:
+    """The controller mode gauge is 1 for the mode it is in; failsafe is a Warning."""
+    if v and labels.get("observe.thermal.mode") == "failsafe":
+        return WARNING, "fan controller is in failsafe"
+    return GOOD, ""
+
+
+class _Only:
+    """A grader that claims a reading only when a point attribute has the given value, so one
+    metric name can be shown in two sections (a Windows pool and a physical disk are both
+    `hw.status`, told apart by `hw.type`)."""
+
+    def __init__(self, key: str, value: str, grader: Grader) -> None:
+        self.key, self.value, self.grader = key, value, grader
+
+    def accepts(self, labels: dict[str, str]) -> bool:
+        return labels.get(self.key) == self.value
+
+    def __call__(self, v: float, labels: dict[str, str]) -> tuple[str, str]:
+        return self.grader(v, labels)
+
+
 _ARRAY_STATES = {"clean": GOOD, "active": GOOD, "active-idle": GOOD, "idle": GOOD,
                  "write-pending": GOOD, "readonly": WARNING, "broken": CRITICAL}
 _SYNC_ACTIONS = {"idle": GOOD, "check": GOOD}
 _POOL_STATES = {"online": GOOD, "degraded": CRITICAL, "faulted": CRITICAL,
                 "unavail": CRITICAL, "suspended": CRITICAL}
+
+
+def _state_gauge(table: dict[str, str]) -> Grader:
+    """`hw.status` with one point per state: 1 says the object is in the state `hw.state` names,
+    0 says it is not, which claims nothing."""
+    def fn(v: float, labels: dict[str, str]) -> tuple[str, str]:
+        if v <= 0:
+            return GOOD, ""
+        state = labels.get("hw.state", "unknown")
+        level = table.get(state.lower(), WARNING)
+        return level, "" if level == GOOD else f"state is {state}"
+    return fn
+
+
+def _pool_status(v: float, labels: dict[str, str]) -> tuple[str, str]:
+    """`hw.status` of a ZFS pool: its state, and the `healthy` and `warning` flags TrueNAS adds."""
+    state = labels.get("hw.state", "").lower()
+    if state == "healthy":
+        return (GOOD, "") if v else (CRITICAL, "pool unhealthy")
+    if state == "warning":
+        return (WARNING, "pool has a warning") if v else (GOOD, "")
+    return _state_gauge(_POOL_STATES)(v, labels)
+
+
+def _smart_status(v: float, labels: dict[str, str]) -> tuple[str, str]:
+    """`hw.status{hw.state=smart_ok}`: 1 when the drive passes its SMART self assessment."""
+    return (GOOD, "") if v else (CRITICAL, "SMART failed")
+
+
+def _ok_flag(why: str, level: str = WARNING) -> Grader:
+    return lambda v, _l: (GOOD, "") if v else (level, why)
+
 
 def _count_by_label(table: dict[str, str], key: str) -> Grader:
     """A count labelled by class: zero is Good, otherwise the label picks the level."""
@@ -122,53 +183,86 @@ _INTEGRATION_CATEGORIES = {"failing": CRITICAL, "credential": WARNING, "communic
                            "disabled": GOOD}
 _REPAIR_SEVERITIES = {"critical": CRITICAL, "error": WARNING, "warning": WARNING}
 
-# section -> {(source, metric): grader}. Sources are the hostwatch collector ids.
+
+def _c(source: str, metric: str) -> tuple[str, str]:
+    """The rule key of a hostwatch collector's point: its scope name and OpenTelemetry metric."""
+    return collector_scope(source), metric
+
+
+_LOADS = ("system.cpu.load_average.1m", "system.cpu.load_average.5m",
+          "system.cpu.load_average.15m")
+_UTIL = _above(0.90, 0.98)  # a ratio of 0 to 1, as the design sends it
+_FAN_SOURCES = ("hwmon", "thermalctl", "win_thermalsuite")
+
+# section -> {(scope, metric): grader}. The scope is the agent's `hostwatch.collector.<source>`
+# and the metric the OpenTelemetry name of docs/DATA-API-DESIGN.md section 3.2; the point
+# attributes are the labels a grader reads. A metric the agent could not map arrives as
+# `observe.legacy.<source>.<metric>` and is graded like the reading it carried. The `snmp`,
+# `homeassistant`, `hassio` and `ha_*` keys are the sources Observe's own pollers and ha_Int_soc
+# write, which keep their names until those producers move to OpenTelemetry names.
 RULES: dict[str, dict[tuple[str, str], Grader]] = {
-    "cpu": {("cpu", "utilization_pct"): _above(90, 98), ("cpu", "load"): _info,
-            ("cpu", "freq_mhz"): _info, ("cpu", "idle_residency_pct"): _info,
-            ("cpu", "core_throttle_count"): _info, ("cpu", "package_throttle_count"): _info,
+    "cpu": {_c("cpu", "system.cpu.utilization"): _UTIL,
+            _c("win_cpu", "system.cpu.utilization"): _UTIL,
+            **{_c("cpu", m): _info for m in _LOADS},
+            _c("cpu", "system.cpu.frequency"): _info,
+            _c("cpu", "observe.cpu.idle_residency"): _info,
             ("snmp", "cpu_pct"): _above(90, 98), ("snmp", "cpu_core_pct"): _info},
-    "memory": {("memory", "mem_total"): _info, ("memory", "mem_available"): _info,
-               ("memory", "swap_total"): _info, ("memory", "swap_free"): _info,
+    "memory": {_c("memory", "system.memory.limit"): _info,
+               _c("memory", "system.memory.usage"): _info,
+               _c("memory", "system.paging.usage"): _info,
+               _c("memory", "observe.legacy.memory.commit_used"): _info,
                ("snmp", "mem_used_pct"): _above(90, 97), ("snmp", "mem_total_bytes"): _info,
                ("snmp", "mem_used_bytes"): _info},
-    "power": {("rapl", "watts"): _info, ("hwmon", "power"): _info},
-    "temperatures": {("hwmon", "temp"): _above(80, 90), ("thermalctl", "zone_temp"): _above(80, 90),
-                     ("rpi", "soc_temp"): _above(70, 80)},
-    "fans": {("hwmon", "fan"): _fan, ("thermalctl", "fan"): _fan,
-             ("thermalctl", "fan_duty"): _info, ("thermalctl", "fan_target"): _info,
-             ("thermalctl", "zone_load"): _info,
-             ("thermalctl", "failsafe"): _nonzero(WARNING, "fan controller is in failsafe"),
-             ("rpi", "throttle_flag"): _info},
-    "raid": {("mdraid", "degraded"): _nonzero(CRITICAL, "array is missing members"),
-             ("mdraid", "raid_disks"): _info, ("mdraid", "array_state"):
-             _label_state(_ARRAY_STATES, "state"),
-             ("mdraid", "sync_action"): _label_state(_SYNC_ACTIONS, "action"),
-             ("mdraid", "sync_progress_pct"): _info,
-             ("mdraid", "mismatch_cnt"): _nonzero(WARNING, "mismatched sectors found"),
-             ("win_storage", "virtual_disk_health"): _level_value},
-    "zfs": {("zfs", "pool_state"): _label_state(_POOL_STATES, "state"),
-            ("win_storage", "pool_health"): _level_value,
-            ("truenas", "pool_health"): _level_value,
-            ("truenas", "pool_healthy"): lambda v, _l: (GOOD, "") if v else (CRITICAL, "pool unhealthy"),
-            ("truenas", "pool_state"): _label_state(_POOL_STATES, "state"),
-            ("truenas", "pool_scan_errors"): _nonzero(WARNING, "scan found errors"),
-            ("truenas", "pool_warning"): _nonzero(WARNING, "pool has a warning"),
-            ("zfs", "vdev_self_healed_bytes"): _info},
-    "disks": {("scrutiny", "device_status"): _nonzero(CRITICAL, "SMART or Scrutiny reports failure"),
-              ("scrutiny", "temp"): _above(50, 60), ("scrutiny", "power_on_hours"): _info,
-              ("scrutiny", "api_up"): lambda v, _l: (GOOD, "") if v else (WARNING, "Scrutiny API is down"),
-              ("win_storage", "disk_health"): _level_value, ("win_storage", "disk_temp_c"):
-              _above(50, 60), ("win_storage", "wear_pct"): _above(80, 95),
-              ("win_smartctl", "smart_passed"): lambda v, _l: (GOOD, "") if v else (CRITICAL, "SMART failed"),
-              ("truenas", "disk_temp_c"): _above(50, 60),
+    "power": {_c("rapl", "hw.power"): _info, _c("hwmon", "hw.power"): _info,
+              _c("hwmon", "hw.voltage"): _info},
+    "temperatures": {_c("hwmon", "hw.temperature"): _above(80, 90),
+                     _c("thermalctl", "hw.temperature"): _above(80, 90),
+                     _c("win_thermalsuite", "hw.temperature"): _above(80, 90),
+                     _c("rpi", "hw.temperature"): _above(70, 80)},
+    "fans": {**{_c(src, "hw.fan.speed"): _fan for src in _FAN_SOURCES},
+             **{_c(src, m): _info for src in ("thermalctl", "win_thermalsuite")
+                for m in ("observe.thermal.fan.duty", "observe.thermal.zone.load")},
+             _c("win_thermalsuite", "observe.thermal.zone.duty"): _info,
+             _c("win_thermalsuite", "observe.thermal.fan.target_duty"): _info,
+             _c("thermalctl", "observe.thermal.mode"): _thermal_mode,
+             _c("win_thermalsuite", "observe.thermal.mode"): _thermal_mode,
+             _c("win_thermalsuite", "observe.thermal.failsafe"):
+             _nonzero(WARNING, "fan controller is in failsafe"),
+             _c("rpi", "observe.rpi.throttled"): _info,
+             _c("rpi", "observe.rpi.throttled_raw"): _info},
+    "raid": {_c("mdraid", "hw.status"): _state_gauge(_ARRAY_STATES),
+             _c("mdraid", "observe.mdraid.sync_action"):
+             _label_state(_SYNC_ACTIONS, "observe.mdraid.action"),
+             _c("mdraid", "observe.mdraid.sync_progress"): _info,
+             _c("mdraid", "observe.legacy.mdraid.degraded"):
+             _nonzero(CRITICAL, "array is missing members"),
+             _c("win_storage", "hw.status"): _Only("hw.type", "logical_disk", _level_value)},
+    "zfs": {_c("zfs", "hw.status"): _pool_status,
+            _c("truenas", "hw.status"): _pool_status,
+            _c("truenas", "observe.zfs.pool.health"): _level_value,
+            _c("truenas", "observe.zfs.pool.scan.errors"): _nonzero(WARNING, "scan found errors"),
+            _c("truenas", "observe.zfs.pool.scan.state"): _info,
+            _c("truenas", "hw.errors"): _nonzero(WARNING, "read, write or checksum errors counted"),
+            _c("truenas", "observe.zfs.vdev.self_healed"): _info},
+    "disks": {_c("scrutiny", "hw.status"):
+              _nonzero(CRITICAL, "SMART or Scrutiny reports failure"),
+              _c("scrutiny", "observe.legacy.scrutiny.temp"): _above(50, 60),
+              _c("scrutiny", "observe.scrutiny.up"): _ok_flag("Scrutiny API is down"),
+              _c("win_storage", "hw.status"): _Only("hw.type", "physical_disk", _level_value),
+              _c("win_storage", "observe.legacy.win_storage.temp"): _above(50, 60),
+              _c("win_smartctl", "hw.status"): _smart_status,
+              _c("win_smartctl", "hw.errors"): _nonzero(WARNING, "media errors counted"),
+              _c("win_smartctl", "hw.physical_disk.endurance_utilization"): _above(0.80, 0.95),
+              _c("truenas", "hw.temperature"): _above(50, 60),
               ("hassio", "disk_used_pct"): _above(85, 95), ("hassio", "disk_free_gb"): _info,
               ("hassio", "disk_used_gb"): _info, ("hassio", "disk_total_gb"): _info,
               ("snmp", "disk_used_pct"): _above(85, 95), ("snmp", "disk_total_bytes"): _info,
               ("snmp", "disk_used_bytes"): _info},
-    "ups": {("nut", "ups_status_flag"): _ups_flag,
-            ("nut", "battery_charge_pct"): _below(50, 20), ("nut", "battery_runtime_s"): _info,
-            ("nut", "input_voltage_v"): _info, ("nut", "ups_load_pct"): _above(80, 95)},
+    "ups": {_c("nut", "observe.ups.status"): _ups_flag,
+            _c("nut", "hw.battery.charge"): _below(0.50, 0.20),
+            _c("nut", "hw.battery.time_left"): _info,
+            _c("nut", "hw.voltage"): _info,
+            _c("nut", "observe.ups.load"): _above(0.80, 0.95)},
     "ha": {("homeassistant", "running"):
            lambda v, _l: (GOOD, "") if v else (CRITICAL, "Home Assistant is not running"),
            ("homeassistant", "safe_mode"): _nonzero(WARNING, "Home Assistant is in safe mode"),
@@ -221,7 +315,7 @@ SECTIONS = ("cpu", "memory", "power", "temperatures", "fans", "raid", "zfs", "di
 
 
 def _sources_of(section: str) -> list[str]:
-    return sorted({src for src, _ in RULES[section]})
+    return sorted({short_source(src) for src, _ in RULES[section]})
 
 
 def source_views(sources: dict[str, dict[str, Any]], now: float,
@@ -275,9 +369,9 @@ def _section(name: str, samples: list[dict[str, Any]], sources: dict[str, dict[s
     for s in sorted(samples, key=lambda x: (x["source"], x["metric"],
                                              sorted(x["labels"].items()))):
         rule = rules.get((s["source"], s["metric"]))
-        if rule is None:
+        if rule is None or not getattr(rule, "accepts", lambda _l: True)(s["labels"]):
             continue
-        info = sources.get(s["source"])
+        info = sources.get(short_source(s["source"]))
         items.append(_item(rule, overrides.get((s["source"], s["metric"])), s, now,
                            stale_after, info, host_stale))
     names = _sources_of(name)
@@ -304,26 +398,36 @@ def _section(name: str, samples: list[dict[str, Any]], sources: dict[str, dict[s
 
 
 def _memory_extra(sec: dict[str, Any], overrides: dict[tuple[str, str], Thresholds]) -> None:
-    """Add used_pct, computed from the newest total and available, graded 90 and 97."""
-    by = {i["metric"]: i for i in sec["items"] if i["source"] == "memory"}
-    total, avail = by.get("mem_total"), by.get("mem_available")
-    if not total or not avail or total["value"] is None or avail["value"] is None \
-            or total["value"] <= 0:
+    """Add system.memory.utilization (a ratio), computed from the newest limit and used bytes
+    (or the limit minus the free bytes), graded 0.90 and 0.97."""
+    scope = collector_scope("memory")
+    by = {(i["metric"], i["labels"].get("system.memory.state", "")): i
+          for i in sec["items"] if i["source"] == scope}
+    total = by.get(("system.memory.limit", ""))
+    used_item, free_item = by.get(("system.memory.usage", "used")),         by.get(("system.memory.usage", "free"))
+    if not total or total["value"] is None or total["value"] <= 0:
         return
-    used = round(100 * (1 - avail["value"] / total["value"]), 1)
-    level, why = _above(90, 97)(used, {})
-    th = overrides.get(("memory", "used_pct"))
+    if used_item and used_item["value"] is not None:
+        used, parts = used_item["value"], [total, used_item]
+    elif free_item and free_item["value"] is not None:
+        used, parts = total["value"] - free_item["value"], [total, free_item]
+    else:
+        return
+    ratio = round(used / total["value"], 4)
+    level, why = _above(0.90, 0.97)(ratio, {})
+    key = (scope, UTILIZATION)
+    th = overrides.get(key)
     if th is not None:
-        level = grade(used, th)
-        why = f"{used:g} past the configured limit" if level != GOOD else ""
-    stale = total["stale"] or avail["stale"]
+        level = grade(ratio, th)
+        why = f"{ratio:g} past the configured limit" if level != GOOD else ""
+    stale = any(p["stale"] for p in parts)
     reasons = [why] if why else []
     if stale:
         level = worst([level, WARNING])
         reasons.append("memory reading is stale")
-    sec["items"].append({"source": "memory", "metric": "used_pct", "labels": {}, "value": used,
-                         "unit": "%", "ts": min(total["ts"], avail["ts"]),
-                         "age_seconds": max(total["age_seconds"], avail["age_seconds"]),
+    sec["items"].append({"source": scope, "metric": UTILIZATION, "labels": {}, "value": ratio,
+                         "unit": "1", "ts": min(p["ts"] for p in parts),
+                         "age_seconds": max(p["age_seconds"] for p in parts),
                          "stale": stale, "status": level, "reason": "; ".join(reasons)})
     sec["status"] = worst([sec["status"], level])
 

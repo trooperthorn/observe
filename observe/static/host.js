@@ -77,7 +77,7 @@ function itemsTable(items) {
     const st = el("span");
     st.append(chip(i.status));
     if (i.reason) st.append(" ", el("span", "muted", i.reason));
-    return [`${i.source}.${i.metric}`, labelText(i.labels), fmtValue(i), st,
+    return [`${i.source.replace(/^hostwatch\.collector\./, "")}.${i.metric}`, labelText(i.labels), fmtValue(i), st,
       `${ago(i.age_seconds)}${i.stale ? " (stale)" : ""}`];
   }));
 }

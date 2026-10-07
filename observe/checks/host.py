@@ -7,6 +7,10 @@ is as bad as its worst component. The result then goes through the ordinary
 state machine, so `failures_to_down` confirmation, dependencies, groups,
 alerts and /metrics apply with no special cases.
 
+A component names the OpenTelemetry scope (`hostwatch.collector.<source>`) and metric of the
+points it grades; its name in the result is the short collector id and the metric. `require_sources`
+names collector ids, as the agent reports them in `observe.source`.
+
 Mapping: Critical is FAIL (DOWN once confirmed), Warning is WARN, Good is OK.
 No batch within `stale_after` seconds is FAIL, the same as an unreachable host.
 A component whose newest sample is older than `stale_after` is stale, also FAIL, even
@@ -24,6 +28,7 @@ from icmplib import async_ping
 from icmplib.exceptions import ICMPLibError
 
 from ..config import Config, Thresholds
+from ..otelnames import short_source
 from .base import Check, CheckResult, Result
 
 GOOD, WARNING, CRITICAL, STALE = "good", "warning", "critical", "stale"
@@ -129,7 +134,7 @@ class PushedHostCheck(Check):
                 reasons[name] = why
 
         for th in m.components:
-            name = f"{th.source}.{th.metric}"
+            name = f"{short_source(th.source)}.{th.metric}"
             components.setdefault(name, GOOD)
             for s in data["samples"]:
                 if s["source"] != th.source or s["metric"] != th.metric or s["value"] is None:

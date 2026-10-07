@@ -42,6 +42,7 @@ from .checks.base import CheckResult, Result
 from .config import Config
 from . import recheck_settings, rules
 from .forecast import Forecast, project
+from .otelnames import rule_metric
 from .rollup import Rollup
 from .state import MonitorState, State, Transition
 from .storage import series
@@ -167,9 +168,9 @@ class Scheduler:
             if not self._rules_loaded:
                 await self.load_rules()
             for s in samples:
-                metric = f"{s.source}.{s.metric}"
+                metric = rule_metric(s.source, s.metric)
                 attrs = series.canonical(s.labels)
-                key = f"host:{host}:{metric}:{attrs}"
+                key = f"host:{host}:{s.source}:{s.metric}:{attrs}"
                 await self._feed_rules(host, key, metric,
                                        ("host", host, s.source, s.metric, attrs),
                                        s.value, min(s.ts, now))

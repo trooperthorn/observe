@@ -21,7 +21,7 @@ from observe.web import create_app
 from .conftest import make_config
 
 T0 = 10_000.0
-COMPONENTS = [{"source": "hwmon", "metric": "cpu_temp_c", "direction": "above",
+COMPONENTS = [{"source": "hostwatch.collector.hwmon", "metric": "hw.temperature", "direction": "above",
                "warn": 70, "crit": 90}]
 
 
@@ -50,7 +50,7 @@ def batch(host="nas01", temp: float | None = 50.0, ts=T0, sources=None):
     return Batch.model_validate({
         "schema_version": 1, "agent_version": "t", "host": host, "platform": "linux",
         "sent_at": ts, "sources": sources or [{"source": "hwmon", "available": True}],
-        "samples": [{"source": "hwmon", "metric": "cpu_temp_c", "value": temp, "unit": "C",
+        "samples": [{"source": "hostwatch.collector.hwmon", "metric": "hw.temperature", "value": temp, "unit": "C",
                      "labels": {}, "ts": ts}],
     })
 
@@ -97,7 +97,7 @@ async def test_threshold_mapping_good_warning_critical():
         await env.push(temp=temp)
         res = await env.poll()
         assert res.result.value == result, temp
-        assert res.detail["components"]["hwmon.cpu_temp_c"] == component
+        assert res.detail["components"]["hwmon.hw.temperature"] == component
     assert env.state() == "down"
 
 
@@ -225,7 +225,7 @@ async def test_metrics_lines():
     assert 'observe_state{monitor="nas01",group="storage",type="pushed_host"} 1' in text
     assert 'observe_group_state{group="storage"} 1' in text
     assert ('observe_host_component_state{monitor="nas01",group="storage",host="nas01",'
-            'component="hwmon.cpu_temp_c"} 1') in text
+            'component="hwmon.hw.temperature"} 1') in text
     assert 'observe_host_age_seconds{monitor="nas01",group="storage",host="nas01"} 0' in text
     samples = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
     assert samples and all(ln.startswith("observe_") for ln in samples)
@@ -241,7 +241,7 @@ async def test_future_dated_sample_does_not_mask_later_reading():
     await env.push(temp=95)
     res = await env.poll()
     assert res.result.value == "fail"
-    assert res.detail["components"]["hwmon.cpu_temp_c"] == "critical"
+    assert res.detail["components"]["hwmon.hw.temperature"] == "critical"
 
 
 async def test_samples_older_than_stale_window_grade_stale_and_fail():
@@ -250,7 +250,7 @@ async def test_samples_older_than_stale_window_grade_stale_and_fail():
     await env.store.ingest_batch(batch(temp=50.0, ts=old), {}, now=env.clock.now)
     res = await env.poll()
     assert res.result.value == "fail"
-    assert res.detail["components"]["hwmon.cpu_temp_c"] == "stale"
+    assert res.detail["components"]["hwmon.hw.temperature"] == "stale"
     assert env.state() == "down"
 
 
@@ -348,7 +348,7 @@ async def test_stored_severity_normalized_and_raw_kept():
 
 
 async def test_component_silent_beyond_the_window_still_fails_while_others_report():
-    comps = COMPONENTS + [{"source": "hwmon", "metric": "fan_rpm", "direction": "below",
+    comps = COMPONENTS + [{"source": "hostwatch.collector.hwmon", "metric": "hw.fan.speed", "direction": "below",
                            "warn": 100, "crit": 50}]
     env = Env([host_mon(components=comps)], f2d=1)
     env.clock.now = T0 + 6000
@@ -357,10 +357,10 @@ async def test_component_silent_beyond_the_window_still_fails_while_others_repor
     fresh = Batch.model_validate({
         "schema_version": 1, "agent_version": "t", "host": "nas01", "platform": "linux",
         "sent_at": now, "sources": [{"source": "hwmon", "available": True}],
-        "samples": [{"source": "hwmon", "metric": "fan_rpm", "value": 900.0, "unit": "rpm",
+        "samples": [{"source": "hostwatch.collector.hwmon", "metric": "hw.fan.speed", "value": 900.0, "unit": "rpm",
                      "labels": {}, "ts": now}]})
     await env.store.ingest_batch(fresh, {}, now=now)
     res = await env.poll()
     assert res.result.value == "fail"
-    assert res.detail["components"]["hwmon.cpu_temp_c"] == "stale"
-    assert res.detail["components"]["hwmon.fan_rpm"] == "good"
+    assert res.detail["components"]["hwmon.hw.temperature"] == "stale"
+    assert res.detail["components"]["hwmon.hw.fan.speed"] == "good"

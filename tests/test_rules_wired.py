@@ -86,9 +86,9 @@ async def test_removing_the_rules_stops_their_effect(storage):  # noqa: F811
 async def test_pushed_samples_are_evaluated_and_feed_the_host_poll(storage):  # noqa: F811
     env = Env(storage, [{"name": "nas", "type": "pushed_host", "host": "nas",
                          "stale_after": 120}], failures_to_down=1)
-    await save(env, {"id": "cpu", "kind": "consecutive", "metric": "hwmon.cpu_temp_c",
+    await save(env, {"id": "cpu", "kind": "consecutive", "metric": "hw.temperature",
                      "condition": "above", "crit": 90, "x": 1, "host": "nas"})
-    hot = SimpleNamespace(source="hwmon", metric="cpu_temp_c", value=99.0, labels={}, ts=T0)
+    hot = SimpleNamespace(source="hostwatch.collector.hwmon", metric="hw.temperature", value=99.0, labels={}, ts=T0)
     await env.sched.observe_pushed("nas", [hot], T0)
     assert env.sched.rules.worst("nas")[0] == rules.CRITICAL
     await env.poll("nas")
@@ -101,7 +101,7 @@ async def test_a_restart_seeds_the_ring_from_stored_samples(storage):  # noqa: F
                          "stale_after": 120}])
     for i in range(2):
         await env.store.ingest_batch(_hot(T0 + i), {}, now=T0 + i)
-    await save(env, {"id": "cpu", "kind": "consecutive", "metric": "hwmon.cpu_temp_c",
+    await save(env, {"id": "cpu", "kind": "consecutive", "metric": "hw.temperature",
                      "condition": "above", "crit": 30, "x": 3, "host": "nas"})
     # A fresh process: empty rings. Two stored hot samples plus the new one make three in a row.
     third = _hot(T0 + 2)
@@ -114,7 +114,7 @@ def _hot(ts: float) -> Batch:
     return Batch.model_validate({
         "schema_version": 1, "agent_version": "t", "host": "nas", "platform": "linux",
         "sent_at": ts, "sources": [{"source": "hwmon", "available": True}],
-        "samples": [{"source": "hwmon", "metric": "cpu_temp_c", "value": 40.0, "unit": "C",
+        "samples": [{"source": "hostwatch.collector.hwmon", "metric": "hw.temperature", "value": 40.0, "unit": "C",
                      "labels": {}, "ts": ts}]})
 
 
@@ -127,11 +127,11 @@ def test_otlp_ingest_reaches_the_rule_engine(tmp_path):
     client = TestClient(create_app(cfg, store, sched, Alerter(cfg)))
     key = asyncio.run(create_key(store, "nas"))[0]
     sched.apply_rules(rules.validate([{
-        "id": "cpu", "kind": "consecutive", "metric": "hwmon.cpu_temp_c", "condition": "above",
+        "id": "cpu", "kind": "consecutive", "metric": "hw.temperature", "condition": "above",
         "crit": 30, "x": 1}]))
     body = {"schema_version": 1, "agent_version": "t", "host": "nas", "platform": "linux",
             "sent_at": T0, "sources": [{"source": "hwmon", "available": True}],
-            "samples": [{"source": "hwmon", "metric": "cpu_temp_c", "value": 40.0, "unit": "C",
+            "samples": [{"source": "hostwatch.collector.hwmon", "metric": "hw.temperature", "value": 40.0, "unit": "C",
                          "labels": {}, "ts": T0}]}
     assert post_batch(client, body, key).status_code == 200
     assert sched.rules.worst("nas")[0] == rules.CRITICAL

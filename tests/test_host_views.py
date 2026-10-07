@@ -1,5 +1,6 @@
 """GET /api/v2/hosts and /api/v2/hosts/{host}: shape per component, status labels, missing
-and stale sources, and the login requirement."""
+and stale sources, and the login requirement. The readings carry the OpenTelemetry scope and
+metric names of docs/DATA-API-DESIGN.md section 3."""
 
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from observe.api.models import rfc3339
 from observe.alerts import Alerter
 from observe.ingest.boot import classify_events
 from observe.ingest.schema import Batch
+from observe.otelnames import collector_scope
 from observe.scheduler import Scheduler
 from observe.store import Store
 from observe.web import create_app
@@ -36,9 +38,10 @@ class Clock:
 
 
 def s(source: str, metric: str, value: float | None, unit: str = "", ts: float = NOW - 5,
-      **labels: str) -> dict[str, Any]:
-    return {"source": source, "metric": metric, "value": value, "unit": unit,
-            "labels": labels, "ts": ts}
+      labels: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A point as the agent sends it: the scope is hostwatch.collector.<source>."""
+    return {"source": collector_scope(source), "metric": metric, "value": value, "unit": unit,
+            "labels": labels or {}, "ts": ts}
 
 
 def batch(host: str = "nas01", samples: list | None = None, sources: list | None = None,
@@ -50,21 +53,26 @@ def batch(host: str = "nas01", samples: list | None = None, sources: list | None
 
 
 FULL = [
-    s("cpu", "utilization_pct", 12.0, "%"), s("cpu", "load", 0.5, "", span="1m"),
-    s("memory", "mem_total", 16e9, "B"), s("memory", "mem_available", 8e9, "B"),
-    s("rapl", "watts", 14.5, "W", zone="package-0", domain="package"),
-    s("hwmon", "temp", 41.0, "C", chip="coretemp", sensor="Package id 0"),
-    s("hwmon", "temp", 93.0, "C", chip="nvme", sensor="Composite"),
-    s("hwmon", "fan", 1200.0, "RPM", chip="nct", sensor="fan1"),
-    s("thermalctl", "fan_duty", 40.0, "%", fan="a"), s("thermalctl", "failsafe", 1.0, ""),
-    s("mdraid", "degraded", 1.0, "count", array="md0", level="raid1"),
-    s("mdraid", "array_state", 1.0, "", array="md0", state="clean"),
-    s("zfs", "pool_state", 1.0, "", pool="tank", state="ONLINE"),
-    s("zfs", "pool_state", 1.0, "", pool="old", state="DEGRADED"),
-    s("scrutiny", "device_status", 0.0, "", wwn="w1", device="sda"),
-    s("scrutiny", "temp", 35.0, "C", wwn="w1", device="sda"),
-    s("nut", "battery_charge_pct", 100.0, "%"),
-    s("nut", "ups_status_flag", 1.0, "", flag="OB", status="OB"),
+    s("cpu", "system.cpu.utilization", 0.12, "1"),
+    s("cpu", "system.cpu.load_average.1m", 0.5, "{thread}"),
+    s("memory", "system.memory.limit", 16e9, "By"),
+    s("memory", "system.memory.usage", 8e9, "By", labels={"system.memory.state": "used"}),
+    s("memory", "system.memory.usage", 8e9, "By", labels={"system.memory.state": "free"}),
+    s("rapl", "hw.power", 14.5, "W", labels={"hw.id": "rapl:intel-rapl:0", "hw.type": "cpu"}),
+    s("hwmon", "hw.temperature", 41.0, "Cel", labels={"hw.id": "coretemp:Package id 0"}),
+    s("hwmon", "hw.temperature", 93.0, "Cel", labels={"hw.id": "nvme:Composite"}),
+    s("hwmon", "hw.fan.speed", 1200.0, "{rpm}", labels={"hw.id": "nct:fan1"}),
+    s("thermalctl", "observe.thermal.fan.duty", 0.4, "1", labels={"hw.id": "fan:a"}),
+    s("win_thermalsuite", "observe.thermal.failsafe", 1.0, "{reason}"),
+    s("mdraid", "observe.legacy.mdraid.degraded", 1.0, "{count}", labels={"array": "md0"}),
+    s("mdraid", "hw.status", 1.0, "1", labels={"hw.id": "md:md0", "hw.state": "clean"}),
+    s("zfs", "hw.status", 1.0, "1", labels={"hw.id": "zpool:tank", "hw.state": "ONLINE"}),
+    s("zfs", "hw.status", 1.0, "1", labels={"hw.id": "zpool:old", "hw.state": "DEGRADED"}),
+    s("scrutiny", "hw.status", 0.0, "1", labels={"hw.id": "disk:w1"}),
+    s("scrutiny", "observe.legacy.scrutiny.temp", 35.0, "Cel", labels={"wwn": "w1"}),
+    s("nut", "hw.battery.charge", 1.0, "1", labels={"hw.id": "ups:ups"}),
+    s("nut", "observe.ups.status", 1.0, "1",
+      labels={"hw.id": "ups:ups", "observe.ups.flag": "OB"}),
 ]
 FULL_SOURCES = [{"source": n, "available": True} for n in
                 ("cpu", "memory", "rapl", "hwmon", "thermalctl", "mdraid", "zfs", "scrutiny", "nut")]
@@ -119,9 +127,11 @@ def detail(env: Env, host: str = "nas01") -> dict[str, Any]:
     return r.json()
 
 
-def reading(d: dict[str, Any], section: str, metric: str, **labels: str) -> dict[str, Any]:
+def reading(d: dict[str, Any], section: str, metric: str,
+            labels: dict[str, str] | None = None, **more: str) -> dict[str, Any]:
+    want = {**(labels or {}), **more}
     return next(i for i in d[section]["items"] if i["metric"] == metric
-                and all(i["labels"].get(k) == v for k, v in labels.items()))
+                and all(i["labels"].get(k) == v for k, v in want.items()))
 
 
 def test_login_is_required_for_every_host_route(env):
@@ -160,18 +170,23 @@ def test_json_shape_per_component(env):
         for item in sec["items"]:
             assert set(item) == ITEM_KEYS
             assert item["status"] in {"good", "warning", "critical"}
-    assert {i["metric"] for i in d["cpu"]["items"]} == {"utilization_pct", "load"}
+    assert {i["metric"] for i in d["cpu"]["items"]} == {
+        "system.cpu.utilization", "system.cpu.load_average.1m"}
     assert {i["metric"] for i in d["memory"]["items"]} == {
-        "mem_total", "mem_available", "used_pct"}
-    used = reading(d, "memory", "used_pct")
-    assert used["value"] == 50.0 and used["status"] == "good"
-    assert [i["metric"] for i in d["power"]["items"]] == ["watts"]
+        "system.memory.limit", "system.memory.usage", "system.memory.utilization"}
+    used = reading(d, "memory", "system.memory.utilization")
+    assert used["value"] == 0.5 and used["status"] == "good"
+    assert [i["metric"] for i in d["power"]["items"]] == ["hw.power"]
     assert len(d["temperatures"]["items"]) == 2
-    assert {i["metric"] for i in d["fans"]["items"]} == {"fan", "fan_duty", "failsafe"}
-    assert {i["metric"] for i in d["raid"]["items"]} == {"degraded", "array_state"}
+    assert {i["metric"] for i in d["fans"]["items"]} == {
+        "hw.fan.speed", "observe.thermal.fan.duty", "observe.thermal.failsafe"}
+    assert {i["metric"] for i in d["raid"]["items"]} == {
+        "observe.legacy.mdraid.degraded", "hw.status"}
     assert len(d["zfs"]["items"]) == 2
-    assert {i["metric"] for i in d["disks"]["items"]} == {"device_status", "temp"}
-    assert {i["metric"] for i in d["ups"]["items"]} == {"battery_charge_pct", "ups_status_flag"}
+    assert {i["metric"] for i in d["disks"]["items"]} == {
+        "hw.status", "observe.legacy.scrutiny.temp"}
+    assert {i["metric"] for i in d["ups"]["items"]} == {
+        "hw.battery.charge", "observe.ups.status"}
     assert d["boot"] == {"boot_id": "b", "boot_ts": rfc3339(NOW - 100), "clean_shutdown": False}
     assert [e["kind"] for e in d["events"]] == ["boot.unclean_shutdown", "md.degraded"]
     assert d["events"][0]["detail"]["classification"] == "crash"
@@ -185,20 +200,21 @@ def test_status_labels(env):
     env.login()
     d = detail(env)
     assert d["cpu"]["status"] == "good"
-    assert reading(d, "temperatures", "temp", sensor="Package id 0")["status"] == "good"
-    assert reading(d, "temperatures", "temp", sensor="Composite")["status"] == "critical"
+    temp = "hw.temperature"
+    assert reading(d, "temperatures", temp, {"hw.id": "coretemp:Package id 0"})["status"] == "good"
+    assert reading(d, "temperatures", temp, {"hw.id": "nvme:Composite"})["status"] == "critical"
     assert d["temperatures"]["status"] == "critical"
-    assert reading(d, "fans", "failsafe")["status"] == "warning"
-    assert reading(d, "raid", "degraded")["status"] == "critical"
-    assert reading(d, "zfs", "pool_state", pool="tank")["status"] == "good"
-    assert reading(d, "zfs", "pool_state", pool="old")["status"] == "critical"
-    assert reading(d, "ups", "ups_status_flag")["status"] == "warning"
+    assert reading(d, "fans", "observe.thermal.failsafe")["status"] == "warning"
+    assert reading(d, "raid", "observe.legacy.mdraid.degraded")["status"] == "critical"
+    assert reading(d, "zfs", "hw.status", {"hw.id": "zpool:tank"})["status"] == "good"
+    assert reading(d, "zfs", "hw.status", {"hw.id": "zpool:old"})["status"] == "critical"
+    assert reading(d, "ups", "observe.ups.status")["status"] == "warning"
     assert d["power"]["status"] == "good"
     assert d["status"] == "critical" and not d["stale"]
 
 
 def test_null_value_is_warning_not_zero(env):
-    env.push(batch(samples=[s("cpu", "utilization_pct", None, "%")],
+    env.push(batch(samples=[s("cpu", "system.cpu.utilization", None, "1")],
                    sources=[{"source": "cpu", "available": True}]))
     env.login()
     item = detail(env)["cpu"]["items"][0]
@@ -208,7 +224,7 @@ def test_null_value_is_warning_not_zero(env):
 
 def test_missing_source_is_reported_honestly(env):
     env.push(batch(
-        samples=[s("cpu", "utilization_pct", 5.0, "%")],
+        samples=[s("cpu", "system.cpu.utilization", 0.05, "1")],
         sources=[{"source": "cpu", "available": True},
                  {"source": "nut", "available": False, "present": False},
                  {"source": "mdraid", "available": False, "reason": "permission denied"}]))
@@ -225,8 +241,8 @@ def test_missing_source_is_reported_honestly(env):
 
 
 def test_stale_reading_and_stale_host_are_marked(env):
-    env.push(batch(samples=[s("cpu", "utilization_pct", 5.0, "%", ts=NOW - 600),
-                            s("memory", "mem_total", 8e9, "B")],
+    env.push(batch(samples=[s("cpu", "system.cpu.utilization", 0.05, "1", ts=NOW - 600),
+                            s("memory", "system.memory.limit", 8e9, "By")],
                    sources=[{"source": "cpu", "available": True}]))
     env.login()
     d = detail(env)
@@ -244,13 +260,13 @@ def test_stale_reading_and_stale_host_are_marked(env):
 
 def test_listing_unknown_host_and_monitor_state(tmp_path):
     e = Env(tmp_path, [{"name": "NAS", "type": "pushed_host", "host": "nas01",
-                        "components": [{"source": "hwmon", "metric": "temp", "warn": 30,
-                                        "crit": 40}]},
+                        "components": [{"source": "hostwatch.collector.hwmon",
+                                        "metric": "hw.temperature", "warn": 30, "crit": 40}]},
                        {"name": "Silent", "type": "pushed_host", "host": "ghost"}])
     try:
-        e.push(batch(samples=[s("hwmon", "temp", 35.0, "C", sensor="x")],
+        e.push(batch(samples=[s("hwmon", "hw.temperature", 35.0, "Cel", labels={"hw.id": "x"})],
                      sources=[{"source": "hwmon", "available": True}]))
-        e.push(batch("other", samples=[s("cpu", "load", 1.0)]))
+        e.push(batch("other", samples=[s("cpu", "system.cpu.load_average.1m", 1.0)]))
         e.login()
         assert e.client.get("/api/v2/hosts/nope").status_code == 404
         rows = {r["host"]: r for r in e.client.get("/api/v2/hosts").json()["items"]}
@@ -287,11 +303,12 @@ def test_host_name_with_slash_opens_in_api_and_page_link(env):
 
 def test_configured_component_silent_for_long_stays_stale_on_the_page(tmp_path):
     e = Env(tmp_path, [{"name": "NAS", "type": "pushed_host", "host": "nas01",
-                        "components": [{"source": "cpu", "metric": "utilization_pct",
-                                        "warn": 80, "crit": 95}]}])
+                        "components": [{"source": "hostwatch.collector.cpu",
+                                        "metric": "system.cpu.utilization",
+                                        "warn": 0.8, "crit": 0.95}]}])
     try:
-        e.push(batch(samples=[s("cpu", "utilization_pct", 5.0, "%", ts=NOW - 5000),
-                              s("memory", "mem_total", 8e9, "B")]))
+        e.push(batch(samples=[s("cpu", "system.cpu.utilization", 0.05, "1", ts=NOW - 5000),
+                              s("memory", "system.memory.limit", 8e9, "By")]))
         e.login()
         d = detail(e)
         assert d["cpu"]["items"][0]["stale"] is True

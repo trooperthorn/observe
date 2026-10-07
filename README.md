@@ -630,10 +630,12 @@ A pushed host becomes a monitor when you list it in the YAML with
 confirmation: a host that pushes but is not listed is stored and never alerts.
 Nothing is polled. Each check reads the latest batch and grades every entry in
 `components` (a `source` and `metric` with `warn` and `crit` thresholds, same
-`direction` rule as other monitors) as Good, Warning or Critical. Critical maps
+`direction` rule as other monitors; the source is the agent's scope such as
+`hostwatch.collector.hwmon`, the metric its OpenTelemetry name such as `hw.temperature`, and a
+utilization or charge limit is a ratio from 0 to 1) as Good, Warning or Critical. Critical maps
 to a failed check, Warning to a warning, and Good to OK, so the usual
 `failures_to_down` and `recoveries_to_up` confirmation applies before anything
-pages. `require_sources` names sources that must be available; one that is not
+pages. `require_sources` names collector ids (`hwmon`, `nut`) that must be available; one that is not
 is a Warning. A null reading is skipped, never treated as zero. If no batch
 arrives within `stale_after` seconds (default three intervals), or none ever
 arrived, the check fails like an unreachable host. A component whose newest reading is older than `stale_after` is graded stale and also fails, even when a recent batch arrived. Timestamps more than 300 seconds ahead of receive time are clamped to receive time, and a replayed batch older than the stored one (by `sent_at`) does not overwrite the host row or source status. `group`, `depends_on` and
