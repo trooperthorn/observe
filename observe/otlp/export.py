@@ -213,11 +213,11 @@ class Exporter:
             return
         if "metrics" in self.cfg.signals:
             # On a large table this holds the write lock until it is built, so say so.
-            log.info("OTLP export: making sure the samples_ts index exists; the first start on a "
+            log.info("OTLP export: making sure the samples_seq index exists; the first start on a "
                      "large database can take a while and ingest waits meanwhile")
             started = time.monotonic()
             await self.store.storage.execute(SAMPLES_INDEX)
-            log.info("OTLP export: the samples_ts index is ready after %.1f s",
+            log.info("OTLP export: the samples_seq index is ready after %.1f s",
                      time.monotonic() - started)
         self._ready = True
 

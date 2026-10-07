@@ -334,17 +334,37 @@ BATCH_BODY_HASH = (_add_body_hash,)
 # The insertion order of raw points, for the OTLP exporter (docs/DATA-API-DESIGN.md section 6.6).
 # Every point stored for the first time takes the next number of the `ingest_seq` counter in its
 # own transaction, so the exporter can follow insertion order instead of point timestamps and a
-# point that arrives late is still exported. Rows stored before this step have no number.
+# point that arrives late is still exported. Rows stored before this step have no number
+# unless a saved metrics cursor says they were still to be sent (see below).
 def _add_sample_seq(db: sqlite3.Connection) -> None:
     columns = {row[1] for row in db.execute("PRAGMA table_info(samples)")}
     if "seq" not in columns:
         db.execute("ALTER TABLE samples ADD COLUMN seq INTEGER")
 
 
+# Before this step the metrics cursor held (ts, series id) and the exporter sent rows after it in
+# (ts, series id) order. The exporter now reads last_id as an insertion number, so a saved cursor
+# is converted: the rows it had not yet sent are numbered in that order, the counter starts after
+# them and the cursor points before the first of them. Nothing the old cursor had not sent is lost.
+def _convert_metrics_cursor(db: sqlite3.Connection) -> None:
+    row = db.execute("SELECT ts, last_id FROM export_cursor WHERE signal = 'metrics'").fetchone()
+    if row is None:
+        return
+    ts, sid = int(row[0]), int(row[1])
+    pending = db.execute(
+        "SELECT series_id, ts FROM samples WHERE seq IS NULL AND (ts > ? OR (ts = ? AND series_id > ?)) "
+        "ORDER BY ts, series_id", (ts, ts, sid)).fetchall()
+    db.executemany("UPDATE samples SET seq = ? WHERE series_id = ? AND ts = ?",
+                   [(n, int(r[0]), int(r[1])) for n, r in enumerate(pending, 1)])
+    db.execute("UPDATE ingest_seq SET seq = ? WHERE name = 'samples'", (len(pending),))
+    db.execute("UPDATE export_cursor SET last_id = 0 WHERE signal = 'metrics'")
+
+
 SAMPLE_SEQ_TABLES = (
     _add_sample_seq,
     "CREATE TABLE IF NOT EXISTS ingest_seq (name TEXT PRIMARY KEY, seq INTEGER NOT NULL DEFAULT 0)",
     "INSERT OR IGNORE INTO ingest_seq (name, seq) VALUES ('samples', 0)",
+    _convert_metrics_cursor,
 )
 
 # The step that creates the summary levels. TimescaleDB runs its own version of it.

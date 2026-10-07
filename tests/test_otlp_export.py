@@ -667,3 +667,38 @@ def test_the_status_route_and_metrics_show_the_exporter(tmp_path):
         assert env.get("/admin/exporter", headers=env.token("operator", "o")).status_code == 403
     finally:
         env.store.close()
+
+
+async def test_a_version_21_cursor_is_converted_so_no_unsent_point_is_lost(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "upgrade.db")
+    collector = Collector()
+    store = Store(path)
+    # Three points of one series and three of another, stored before the upgrade.
+    await put(store, [1.0, 2.0, 3.0], base=T0 + 10)
+    await put(store, [4.0, 5.0, 6.0], base=T0 + 10, metric="cpu.load")
+    store.close()
+    raw = sqlite3.connect(path)
+    cut = series.to_ms(T0 + 11)
+    # The state a version 21 database had: no numbers, and a cursor of (ts, series id) that had
+    # sent everything up to and including the second second of the first series.
+    raw.execute("UPDATE samples SET seq = NULL")
+    raw.execute("UPDATE ingest_seq SET seq = 0")
+    sid = raw.execute("SELECT MIN(series_id) FROM samples").fetchone()[0]
+    raw.execute("DELETE FROM schema_version WHERE version = 22")
+    raw.execute("INSERT OR REPLACE INTO export_cursor (signal, ts, last_id, updated) "
+                "VALUES ('metrics', ?, ?, 0)", (cut, sid))
+    raw.commit()
+    raw.close()
+    store = Store(path)
+    try:
+        clock = Clock()
+        clock.now = T0 + 1000
+        exp = make(store, collector, clock)
+        await exp.cycle()
+        sent = sorted(v for _, v in collector.points())
+        # Exactly what follows (cut, first series id) in (ts, series id) order.
+        assert sent == [3.0, 5.0, 6.0]
+        assert exp.stats.dropped == 0
+    finally:
+        store.close()
