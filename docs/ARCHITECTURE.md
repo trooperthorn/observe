@@ -350,7 +350,7 @@ the missing-data rules for time that passed with no sample. The rule set is vali
 `rules.validate` (fixed bounds, unique ids, at most 500 rules) and stored as the `app_settings` key
 `rules.config` by `rules.save` inside one `Storage.write` unit with one `rules_changed` audit row holding
 the old and new rules. `PUT /api/admin/rules` (admin session, CSRF) replaces the whole list and answers 422
-with a `rules_failed` audit row for a refused rule; the page `/admin/rules` (`admin-rules.js`) edits the
+with a `rules_failed` audit row for a refused rule. A submitted rule whose metric is an old `<collector>.<metric>` name (`validate(..., refuse_legacy=True)`) is refused with 422 naming the OpenTelemetry replacement and the unit change (`otelnames.legacy_rule_advice`). A rule already stored with an old name still loads, and `rules.describe` marks it with an `invalid` sentence in `GET /api/v2/admin/settings/rules` and in the `PUT` answer; the console shows an Invalid chip with that sentence, and the scheduler still logs it once at start. The page `/admin/rules` (`admin-rules.js`) edits the
 list. The scheduler owns one engine and wires it in two places. For pushed data, `POST /v1/metrics` calls
 `Scheduler.observe_pushed` after a batch is stored (not for a resend), which feeds every sample whose
 series a rule applies to; the rule metric is the OpenTelemetry metric name (for example `hw.temperature`, which applies to

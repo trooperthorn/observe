@@ -589,8 +589,10 @@ from `GET /api/v2/admin/settings/storage`.
 
 An admin can keep threshold rules on the page `/admin/rules` (Admin menu, "Threshold rules"), saved as a whole
 list with `PUT /api/admin/rules` (admin session and CSRF token; the list is `GET /api/v2/admin/settings/rules`).
-Every change is audited with the old and new rules. The rules are validated and stored; no engine evaluates the
-saved rules yet, and the page says so.
+Every change is audited with the old and new rules. A rule whose metric is a pre-OpenTelemetry name such as
+`cpu.utilization_pct` is refused with 422 that names the replacement (`system.cpu.utilization`) and the unit change
+(a ratio from 0 to 1, not percent). A rule saved earlier with such a name is listed with an `invalid` reason and an
+Invalid mark on the page, because it matches no series.
 
 An admin can also change the fast re-check with `PUT /api/admin/recheck` or the page
 `/admin/recheck` (Admin menu; the document is `GET /api/v2/admin/settings/recheck`): the re-check window in seconds (0 turns it off), the re-check

@@ -290,8 +290,8 @@ def recheck_view(db: Any, ctx: ApiContext) -> dict[str, Any]:
 
 
 def rule_settings(db: Any) -> dict[str, Any]:
-    """The saved threshold rules."""
-    return {"rules": [r.as_dict() for r in rules.load(db)], "max_rules": rules.MAX_RULES}
+    """The saved threshold rules; one that names a pre-OpenTelemetry metric carries `invalid`."""
+    return {"rules": rules.describe(rules.load(db)), "max_rules": rules.MAX_RULES}
 
 
 class StorageOut(BaseModel):

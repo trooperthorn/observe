@@ -824,7 +824,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         remote = request.client.host if request.client else ""
         body = await body_of(request)
         try:
-            parsed = rules.validate(body)
+            parsed = rules.validate(body, refuse_legacy=True)
         except rules.RuleError as err:
             await audit.record(store, "rules_failed", actor=sess.username, method="PUT",
                                path=rules.PATH, status=422, remote=remote,
@@ -834,7 +834,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             db, parsed, now=auth_clock(), actor=sess.username, remote=remote),
             touches=("admin", "audit"))
         scheduler.apply_rules(parsed)
-        return JSONResponse({"rules": [r.as_dict() for r in parsed], "max_rules": rules.MAX_RULES})
+        return JSONResponse({"rules": rules.describe(parsed), "max_rules": rules.MAX_RULES})
 
     @app.post("/api/hosts", include_in_schema=False)
     async def create_host(

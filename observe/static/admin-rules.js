@@ -107,6 +107,12 @@ function draw() {
     { key: "rule", label: "Rule", get: (r) => ruleSummary(r) },
     { key: "enabled", label: "State", get: (r) => (r.enabled ? 0 : 1),
       render: (r) => (r.enabled ? statusChip("up", "Enabled") : statusChip("pending", "Disabled")) },
+    { key: "problem", label: "Problem", get: (r) => r.invalid || "",
+      render: (r) => {
+        const box = el("span");
+        if (r.invalid) box.append(statusChip("down", "Invalid"), el("span", "muted", ` ${r.invalid}`));
+        return box;
+      } },
     { key: "act", label: "Actions", render: (r) => {
       const box = el("span", "row-actions");
       box.append(
@@ -120,7 +126,7 @@ function draw() {
 }
 
 function load(doc) {
-  rules = doc.rules.map((r) => ({ ...r }));
+  rules = doc.rules.map((r) => ({ ...r }));  // `invalid` is shown, never sent back
   maxRules = doc.max_rules;
   dirty = false;
   draw();
@@ -145,7 +151,8 @@ form.addEventListener("submit", (ev) => {
 document.getElementById("rules-save").addEventListener("click", async () => {
   showError(msg, "");
   try {
-    const out = await api("PUT", "/api/admin/rules", csrf, { rules });
+    const sendable = rules.map(({ invalid, ...rest }) => rest);
+    const out = await api("PUT", "/api/admin/rules", csrf, { rules: sendable });
     toast("Rules saved.", "up");
     load(out);
   } catch (e) { showError(msg, e.message); }

@@ -3610,7 +3610,7 @@
     },
     "/admin/settings/rules": {
       "get": {
-        "description": "The saved threshold rules.",
+        "description": "The saved threshold rules; one that names a pre-OpenTelemetry metric carries `invalid`.",
         "operationId": "settings_rules",
         "responses": {
           "200": {

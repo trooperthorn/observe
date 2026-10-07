@@ -50,7 +50,7 @@ def _read(rel: str) -> str:
 
 
 def _rule(**over):
-    rule = {"id": "r1", "kind": "consecutive", "metric": "cpu.temp", "condition": "above",
+    rule = {"id": "r1", "kind": "consecutive", "metric": "hw.temperature", "condition": "above",
             "warn": 70, "crit": 85, "x": 3}
     rule.update(over)
     return rule

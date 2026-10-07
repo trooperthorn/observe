@@ -30,6 +30,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from .otelnames import legacy_rule_advice
 from .storage.base import Conn
 
 SETTINGS_KEY = "rules.config"
@@ -157,7 +158,7 @@ def _check_order(rule: Rule) -> None:
         raise RuleError("the crit range must contain the warn range for an outside rule")
 
 
-def parse_rule(raw: Any) -> Rule:
+def parse_rule(raw: Any, *, refuse_legacy: bool = False) -> Rule:
     if not isinstance(raw, dict):
         raise RuleError("each rule must be an object")
     unknown = sorted(str(k) for k in raw if k not in _FIELDS)
@@ -171,6 +172,8 @@ def parse_rule(raw: Any) -> Rule:
     metric = raw.get("metric")
     if not isinstance(metric, str) or not _NAME.match(metric):
         raise RuleError(f"{where}: metric must be a metric name")
+    if refuse_legacy and (advice := legacy_rule_advice(metric)):
+        raise RuleError(f"{where}: {advice}")
     host = raw.get("host", "")
     if not isinstance(host, str) or (host and not _NAME.match(host)):
         raise RuleError(f"{where}: host must be empty or a host name")
@@ -225,15 +228,17 @@ def parse_rule(raw: Any) -> Rule:
     return rule
 
 
-def validate(body: Any) -> tuple[Rule, ...]:
-    """Parse the whole rule list. Ids are unique and the list is bounded."""
+def validate(body: Any, *, refuse_legacy: bool = False) -> tuple[Rule, ...]:
+    """Parse the whole rule list. Ids are unique and the list is bounded. With `refuse_legacy`
+    (a submitted list) a rule whose metric is a pre-OpenTelemetry name is refused with the
+    replacement named; a stored list is read without it so `describe` can flag such a rule."""
     if isinstance(body, dict):
         body = body.get("rules")
     if not isinstance(body, list):
         raise RuleError("send a list of rules")
     if len(body) > MAX_RULES:
         raise RuleError(f"at most {MAX_RULES} rules are allowed")
-    rules = tuple(parse_rule(item) for item in body)
+    rules = tuple(parse_rule(item, refuse_legacy=refuse_legacy) for item in body)
     seen: set[str] = set()
     for rule in rules:
         if rule.id in seen:
@@ -254,6 +259,17 @@ def load(db: Conn) -> tuple[Rule, ...]:
         return validate(json.loads(row[0]))
     except (TypeError, ValueError):
         return ()
+
+
+def invalid_reason(rule: Rule) -> str | None:
+    """Why a stored rule can never match a series now, or None for a usable rule."""
+    return legacy_rule_advice(rule.metric)
+
+
+def describe(items: Iterable[Rule]) -> list[dict[str, Any]]:
+    """The rules for the API and the console: each rule's fields plus `invalid`, a sentence for a
+    rule that names an old metric (it matches nothing) or null."""
+    return [{**r.as_dict(), "invalid": invalid_reason(r)} for r in items]
 
 
 def save(db: Conn, rules: Iterable[Rule], *, now: float, actor: str, remote: str) -> dict:
