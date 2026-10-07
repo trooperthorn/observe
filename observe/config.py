@@ -307,6 +307,18 @@ class ComponentThresholds(Thresholds):
     source: str = Field(min_length=1)
     metric: str = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def _no_old_source(self) -> "ComponentThresholds":
+        """A bare collector id names no series now, so the component would match nothing and
+        read Good for ever. Refuse it, and say what to write instead."""
+        from .otelnames import collector_scope, legacy_source
+        if legacy_source(self.source):
+            raise ValueError(
+                f"component source '{self.source}' is an old hostwatch key; use the scope "
+                f"'{collector_scope(self.source)}' and the OpenTelemetry metric name, with "
+                "limits in the metric's unit (utilization, charge and wear are ratios 0 to 1)")
+        return self
+
 
 class PushedHostMonitor(MonitorBase):
     """A host that pushes OTLP metrics and logs to POST /v1/metrics and /v1/logs.

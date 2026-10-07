@@ -298,9 +298,8 @@ async def test_a_yaml_limit_on_an_opentelemetry_name_overrides_the_default(tmp_p
         limit = ComponentThresholds(source=scope, metric="hw.temperature", warn=40, crit=50)
         page = await view(store, overrides={(scope, "hw.temperature"): limit})
         assert page["temperatures"]["items"][0]["status"] == WARN
-        old = ComponentThresholds(source="hwmon", metric="temp", warn=40, crit=50)
-        page = await view(store, overrides={("hwmon", "temp"): old})
-        assert page["temperatures"]["items"][0]["status"] == GOOD  # an old key matches nothing
+        with pytest.raises(ValueError):  # an old key would match nothing, so it is refused
+            ComponentThresholds(source="hwmon", metric="temp", warn=40, crit=50)
     finally:
         store.close()
 

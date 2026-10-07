@@ -29,3 +29,23 @@ def rule_metric(scope: str, metric: str) -> str:
     the host; the series of two collectors stay apart because the engine key carries the scope.
     A source outside the collector scopes keeps the older `<source>.<metric>` form."""
     return metric if scope.startswith(COLLECTOR_PREFIX) else f"{scope}.{metric}"
+
+
+# The collector ids of the hostwatch agent. Before the OpenTelemetry names, a series was keyed by
+# one of these as its source (`hwmon`) and a short metric (`temp`); a saved configuration or rule
+# that still does so matches nothing now, and its limits were in other units (percent, not ratio).
+LEGACY_COLLECTORS = frozenset({
+    "cpu", "memory", "rapl", "hwmon", "thermalctl", "linux_thermal", "rpi", "mdraid", "zfs",
+    "truenas", "scrutiny", "nut", "win_cpu", "win_memory", "win_storage", "win_smartctl",
+    "win_thermalsuite"})
+
+
+def legacy_source(source: str) -> bool:
+    """True for a bare hostwatch collector id used where a scope name is now required."""
+    return source in LEGACY_COLLECTORS
+
+
+def legacy_rule_metric(metric: str) -> bool:
+    """True for a saved rule metric in the old `<collector>.<metric>` form."""
+    head, dot, _ = metric.partition(".")
+    return bool(dot) and head in LEGACY_COLLECTORS

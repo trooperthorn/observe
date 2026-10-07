@@ -42,7 +42,7 @@ from .checks.base import CheckResult, Result
 from .config import Config
 from . import recheck_settings, rules
 from .forecast import Forecast, project
-from .otelnames import rule_metric
+from .otelnames import legacy_rule_metric, rule_metric
 from .rollup import Rollup
 from .state import MonitorState, State, Transition
 from .storage import series
@@ -139,7 +139,13 @@ class Scheduler:
 
     async def load_rules(self) -> None:
         """Read the saved rules from the storage, once before the first poll."""
-        self.apply_rules(await self.store.storage.read(rules.load))
+        loaded = await self.store.storage.read(rules.load)
+        for r in loaded:
+            if legacy_rule_metric(r.metric):
+                log.warning("threshold rule %s names the old metric '%s', which no host series "
+                            "matches now; edit it to the OpenTelemetry metric name (limits in "
+                            "its unit)", r.id, r.metric)
+        self.apply_rules(loaded)
 
     async def _feed_rules(self, host: str, key: str, metric: str,
                           where: tuple[str, str, str, str, str],
