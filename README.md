@@ -930,7 +930,7 @@ routes (`/api/monitors`, `/api/monitors/<slug>/history`, `/api/groups`, `/api/fo
 `/api/events`, `GET /api/hosts` and `GET /api/hosts/<host>`, and since slice r6 `/api/infra/map`,
 `/api/infra/port`, `/api/infra/findings`, `/api/audit` and `/api/plugins`, and since slice r8 the
 settings, enrolment, dependency and unlinked-switch reads and the UniFi and Pockethernet page routes) were removed with no
-adapter and no deprecation period; use the table below. Responses are always valid JSON: an aggregate that overflows is `null`, never `Infinity` or `NaN`.
+adapter and no deprecation period; use the table below. Responses are always valid JSON: any number that is infinite or not a number, such as an overflowing aggregate or a monitor reading of "nan", is written as `null`, never `Infinity` or `NaN`.
 A host whose summary is `warning` or `critical` always carries a non-empty `status_reason` that
 names the section and reading (or the alert) behind it. A pushed point dropped by the series cap
 is counted and explained in the partial success of the ingest answer. The schema is `docs/openapi-v2.json`, also served at

@@ -358,7 +358,7 @@ def _aggregate(db: Any, name: str, table: str | None, ids: list[int], step: int,
                 cur["last"] = value
         for (sid, b), c in sorted(by.items()):
             full = pack(c["n"], c["sum"], c["min"], c["max"])
-            full["last"] = c["last"]
+            full["last"] = finite(c["last"])
             out[sid].append([b // 1000, *[full[a] for a in aggs]])
         return out
     if name == "raw":

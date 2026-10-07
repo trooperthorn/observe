@@ -100,8 +100,12 @@ A value whose magnitude is above 1e300 is rejected per point ("a value is too la
 because rollups add values up and two values near the float limit sum to infinity, which JSON
 cannot carry. The pushed-batch schema refuses such a value the same way as a non-finite one. The
 metrics query and the latest values also turn any aggregate that is still not finite into `null`,
-and the JSON encoder of the v2 routes is run with `allow_nan=False`, so no response holds
-`Infinity` or `NaN`. A valid point that is not stored is named in the partial success message:
+and the JSON encoder of the v2 routes first turns every remaining non-finite float, such as a
+monitor reading of "nan", into `null` and then runs with `allow_nan=False`, so no response holds
+`Infinity` or `NaN`. An integer point (`asInt`) is bounded like a double, as an integer, so a
+huge one is refused with "a value is too large to store". On PostgreSQL the ingest bound is the
+guard, because a float8 sum raises an overflow error instead of giving infinity; rows stored
+above the bound before it existed are not cleaned up. A valid point that is not stored is named in the partial success message:
 "N points dropped: series limit reached (at most 2000 series per resource and 50000 in all)" for
 the cardinality guard, and "N points ignored: older than the raw retention" for late points. Both
 count in `rejected_data_points`. `Store.ingest_batch` fills an `IngestOutcome` with the two counts

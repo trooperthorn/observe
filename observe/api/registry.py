@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import math
 import logging
 import threading
 import time
@@ -471,7 +472,20 @@ class ApiRegistry:
         self._declared.update(domains)
 
 
+def _scrub(v: Any) -> Any:
+    """The same data with every NaN or infinite float replaced by None, because JSON has no such
+    number."""
+    if isinstance(v, float):
+        return v if math.isfinite(v) else None
+    if isinstance(v, dict):
+        return {k: _scrub(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_scrub(x) for x in v]
+    return v
+
+
 def _dump(data: Any) -> bytes:
+    data = _scrub(data)
     return json.dumps(data, separators=(",", ":"), ensure_ascii=False,
                       allow_nan=False).encode("utf-8")
 

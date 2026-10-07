@@ -219,10 +219,13 @@ def _number(raw: dict[str, Any]) -> tuple[float | None, str]:
         v = raw["asInt"]
         if isinstance(v, bool):
             return None, "a value is not a number"
-        if isinstance(v, int):
-            return float(v), ""
         if isinstance(v, str) and re.fullmatch(r"-?[0-9]{1,19}", v):
-            return float(int(v)), ""
+            v = int(v)
+        if isinstance(v, int):
+            # Compare as an integer: float() of a huge integer raises OverflowError.
+            if abs(v) > int(MAX_ABS_VALUE):
+                return None, "a value is too large to store"
+            return float(v), ""
         return None, "a value is not a number"
     return None, "a point has no value"
 

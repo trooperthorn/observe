@@ -28,11 +28,12 @@ Shapes, from the Home Assistant REST API and the ha_Int_soc code:
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 from typing import Any
 
-from ..ingest.schema import MAX_SAMPLES, MAX_TEXT, Batch
+from ..ingest.schema import MAX_ABS_VALUE, MAX_SAMPLES, MAX_TEXT, Batch
 
 AGENT_VERSION = "observe-ha-host"
 MAX_PENDING = 100
@@ -64,7 +65,8 @@ def _number(raw: Any) -> float | None:
         v = float(raw)
     except (TypeError, ValueError):
         return None
-    return v if v == v and v not in (float("inf"), float("-inf")) else None
+    # A value too large to store is dropped here, not left to fail the whole batch.
+    return v if math.isfinite(v) and abs(v) <= MAX_ABS_VALUE else None
 
 
 def update_is_pending(st: dict[str, Any]) -> bool:

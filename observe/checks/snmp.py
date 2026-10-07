@@ -19,13 +19,14 @@ Output is requested with -On (numeric OIDs), -Oq (no type labels),
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import time
 from collections.abc import Callable
 from typing import Any
 
 from ..config import SnmpV2Credential, SnmpV3Credential
-from ..ingest.schema import MAX_TEXT, Batch
+from ..ingest.schema import MAX_ABS_VALUE, MAX_TEXT, Batch
 from .base import Check, CheckResult, Result
 
 SYS_UPTIME = ".1.3.6.1.2.1.1.3.0"
@@ -308,6 +309,8 @@ def host_batch(host: str, mode: str, res: CheckResult, now: float) -> Batch | No
     samples: list[dict[str, Any]] = []
 
     def add(metric: str, value: float | None, unit: str = "", **labels: str) -> None:
+        if value is not None and not (math.isfinite(value) and abs(value) <= MAX_ABS_VALUE):
+            return
         samples.append({"source": "snmp", "metric": metric, "value": value, "unit": unit,
                         "labels": {k: str(v)[:MAX_TEXT] for k, v in labels.items()}, "ts": now})
 

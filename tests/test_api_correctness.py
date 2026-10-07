@@ -74,10 +74,39 @@ def test_a_value_that_could_overflow_a_rollup_is_refused_at_ingest(otlp):
     assert [row[4] for row in otlp.stored()] == [5.0]
 
 
-def test_the_json_encoder_never_writes_infinity(env):
+def test_the_json_encoder_never_writes_infinity():
+    """A monitor value of nan (an MQTT payload "nan") must not turn a response into a 500."""
     from observe.api.registry import _dump
-    with pytest.raises(ValueError):
-        _dump({"v": float("inf")})
+    body = _dump({"items": [{"value": float("nan"), "n": 1}, {"value": float("-inf")}],
+                  "pair": (float("inf"), 2.5)})
+    got = json.loads(body, parse_constant=lambda c: pytest.fail(f"{c} in the body"))
+    assert got == {"items": [{"value": None, "n": 1}, {"value": None}], "pair": [None, 2.5]}
+
+
+def test_a_huge_integer_point_is_refused_not_stored_or_raised():
+    """asInt as a JSON number was unbounded: 1.7e308 was stored and 10**400 raised."""
+    from observe.otlp.normalize import _number
+    for v in (17 * 10 ** 307, -(10 ** 301), 10 ** 400, 10 ** 301):
+        assert _number({"asInt": v}) == (None, "a value is too large to store")
+    assert _number({"asInt": 12}) == (12.0, "")
+    assert _number({"asInt": "-9223372036854775807"}) == (-9223372036854775807.0, "")
+
+
+def test_a_huge_integer_point_on_the_field_path_is_refused():
+    from observe.otlp.normalize import normalize_field_metrics
+    dp = {"timeUnixNano": str(int(T0 * 1e9)), "asInt": 17 * 10 ** 307}
+    req = {"resourceMetrics": [{"resource": {"attributes": []}, "scopeMetrics": [{
+        "scope": {"name": "s"}, "metrics": [{"name": "m", "gauge": {"dataPoints": [dp]}}]}]}]}
+    points, rejects = normalize_field_metrics(req, "tester1", T0)
+    assert points == []
+    assert rejects.reasons == {"a value is too large to store": 1}
+
+
+def test_a_pull_check_drops_only_the_oversized_reading():
+    from observe.checks import ha_host
+    assert ha_host._number("1e301") is None
+    assert ha_host._number("nan") is None
+    assert ha_host._number("42.5") == 42.5
 
 
 # ---- login-chunked-body-unbounded -----------------------------------------------------------
