@@ -351,3 +351,41 @@ async def test_a_replaced_revision_is_retracted_and_derived_in_the_same_commit(s
     assert got.outcome.result == "replaced" and got.derived is not None
     assert await rows(storage, "SELECT revision, derive_status FROM field_reports") == [
         (2, "ok")]
+
+
+async def test_a_database_failure_in_the_feed_fails_the_cycle_and_is_not_skipped(
+        store, storage, monkeypatch):
+    def broken(self: Any, *a: Any, **k: Any) -> Any:
+        raise DB_ERRORS[0]("disk full")
+
+    monkeypatch.setattr(InfraTx, "upsert_switch", broken)
+    with pytest.raises(DB_ERRORS):
+        await feed_integration(store, [parse_device("s", device(1))], NOW)
+    assert await rows(storage, "SELECT COUNT(*) FROM infra_switches") == [(0,)]
+
+
+async def test_a_populated_version_17_database_gains_the_map_tables_and_fills_them(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "v17.db")
+    s = open_storage(path, PLUGINS)
+    st = Store.__new__(Store)
+    st.storage = s
+    st.map_stale_days = 90
+    await feed_classic(st, parsed(classic_data()), NOW)
+    s.close()
+    raw = sqlite3.connect(path)
+    for table in ("map_nodes", "map_edges", "port_current"):
+        raw.execute(f"DROP TABLE {table}")
+    raw.execute("DELETE FROM schema_version WHERE version=18")
+    raw.commit()
+    raw.close()
+    s = open_storage(path, PLUGINS)
+    try:
+        st.storage = s
+        assert await rows(s, "SELECT COUNT(*) FROM map_nodes") == [(0,)]
+        assert await rows(s, "SELECT COUNT(*) FROM infra_switches") != [(0,)]
+        mapper, _, _ = make_map(st)
+        await mapper.tick()
+        assert await rows(s, "SELECT COUNT(*) FROM map_nodes") != [(0,)]
+    finally:
+        s.close()

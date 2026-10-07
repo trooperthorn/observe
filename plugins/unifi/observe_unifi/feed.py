@@ -17,8 +17,8 @@ write, and each one cycle in one write unit and so one commit (docs/DATA-API-DES
   neighbour that is a known UniFi device or an already known switch.
 
 Every device, port and link is one item with its own SAVEPOINT. An item that fails is rolled
-back to its savepoint, counted in `skipped` and left behind, and the rest of the cycle is kept
-and committed. The map tables are brought up to date in the same unit, so a reader never sees
+back to its savepoint, counted in `skipped`, logged and left behind, and the rest of the cycle is kept
+and committed. A database failure is not an item failure: it fails the cycle. The map tables are brought up to date in the same unit, so a reader never sees
 the feed's rows without the map that shows them.
 
 Properties go through InfraTx.append_property, which adds a history row only when the value
@@ -29,24 +29,28 @@ Nothing here creates or changes a monitor.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
 from observe.infra import InfraError, InfraTx, write_cycle
 from observe.portkey import mac_digits, port_key, switch_id, unifi_port_key
-from observe.storage import DB_ERRORS, Conn, savepoint
+from observe.storage import Conn, savepoint
 from observe.store import Store
 
 from .records import Device, write_devices
+
+log = logging.getLogger(__name__)
 
 SOURCE = "unifi"
 VENDOR = "Ubiquiti"
 UPLINK_PORT = "uplink"
 CONFIG_CONFIDENCE = 0.8
 DEVICE_LINK_CONFIDENCE = 0.5
-# What a malformed or refused item can raise. Anything else is a bug and stops the cycle.
-ITEM_ERRORS = (InfraError, ValueError, KeyError, TypeError, *DB_ERRORS)
+# What a malformed or refused item can raise. Anything else, a database failure included, stops
+# the cycle so the poll fails and is reported instead of every item being skipped unseen.
+ITEM_ERRORS = (InfraError, ValueError, KeyError, TypeError)
 
 
 @dataclass
@@ -131,6 +135,13 @@ def integrate_devices(db: Conn, devices: Iterable[Device], now: float) -> FeedRe
     return result
 
 
+def _noted(feed: str, result: FeedResult) -> FeedResult:
+    if result.skipped:
+        log.warning("UniFi %s feed skipped %d malformed item(s); the rest of the cycle was kept",
+                    feed, result.skipped)
+    return result
+
+
 async def feed_integration(store: Store, devices: Iterable[Device], now: float, *,
                            save_devices: bool = False) -> FeedResult:
     """One Integration cycle in one transaction. With `save_devices` the poll's device rows
@@ -141,7 +152,7 @@ async def feed_integration(store: Store, devices: Iterable[Device], now: float, 
         if save_devices:
             write_devices(db, items, now)
         return integrate_devices(db, items, now)
-    return await write_cycle(store, cycle, now=now, touches=("unifi",))  # type: ignore[no-any-return]
+    return _noted("integration", await write_cycle(store, cycle, now=now, touches=("unifi",)))
 
 
 def _props(p: dict[str, Any]) -> list[tuple[str, Any, str]]:
@@ -237,8 +248,8 @@ def integrate_classic(db: Conn, devices: list[dict[str, Any]], now: float) -> Fe
 
 async def feed_classic(store: Store, devices: list[dict[str, Any]], now: float) -> FeedResult:
     """One classic cycle in one transaction."""
-    return await write_cycle(  # type: ignore[no-any-return]
-        store, lambda db: integrate_classic(db, devices, now), now=now, touches=("unifi",))
+    return _noted("classic", await write_cycle(
+        store, lambda db: integrate_classic(db, devices, now), now=now, touches=("unifi",)))
 
 
 def _uplink_link(db: Conn, tx: InfraTx, sid: str, dev: dict[str, Any], sids: dict[str, str],
