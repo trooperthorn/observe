@@ -7,9 +7,11 @@ collector has answered, so a restart, an outage or a crash repeats at most one b
 nothing that raw retention still holds.
 
 A batch is sent as protobuf or JSON, gzip compressed, to {endpoint}/v1/metrics or /v1/logs.
-Network errors and the answers 429, 502, 503 and 504 are retried after an exponential backoff
-with full jitter that honours Retry-After. Any other answer is final: the batch is logged,
-counted as dropped and skipped. A partial success moves the cursor on and counts the rejects.
+Network errors and the answers 401, 403, 408, 429, 502, 503 and 504 are retried after an
+exponential backoff with full jitter that honours Retry-After, so a wrong or expired credential
+holds the data instead of losing it. The answer 413 halves the batch size and sends the same
+points again in smaller batches. Any other answer is final: the batch is logged, counted as
+dropped and skipped. A partial success moves the cursor on and counts the rejects.
 
 Samples are read up to `settle_s` seconds behind the clock, so a point that arrives a little late
 is still sent. A point that arrives later than that, with a timestamp the cursor has passed, is
@@ -44,7 +46,8 @@ from . import encode
 log = logging.getLogger("observe.export")
 
 BACKOFF_START_S, BACKOFF_MAX_S, RETRY_AFTER_MAX_S = 1.0, 300.0, 3600.0
-RETRYABLE = frozenset({429, 502, 503, 504})
+RETRYABLE = frozenset({401, 403, 408, 429, 502, 503, 504})
+TOO_LARGE = 413
 ID_CHUNK = 500
 SAMPLES_INDEX = "CREATE INDEX IF NOT EXISTS samples_ts ON samples(ts, series_id)"
 SEVERITY = {"debug": 5, "info": 9, "notice": 10, "warning": 13, "warn": 13, "error": 17,
@@ -96,6 +99,7 @@ class Outcome:
     wait: float | None = None  # Retry-After
     rejected: int = 0
     reason: str = ""
+    too_large: bool = False
 
 
 @dataclass
@@ -133,6 +137,7 @@ class Exporter:
     _gaps: list[dict[str, Any]] = field(default_factory=list)
     _own_client: bool = False
     _ready: bool = False
+    _limit: int = 0  # the batch size after a 413, 0 while the configured size works
 
     # ---- lifecycle ---------------------------------------------------------------------
 
@@ -177,6 +182,10 @@ class Exporter:
     # ---- cursors -----------------------------------------------------------------------
 
     @property
+    def batch_limit(self) -> int:
+        return self._limit or self.cfg.max_batch_points
+
+    @property
     def signals(self) -> list[str]:
         out = list(self.cfg.signals)
         if self.cfg.include_audit:
@@ -187,7 +196,13 @@ class Exporter:
         if self._ready:
             return
         if "metrics" in self.cfg.signals:
+            # On a large table this holds the write lock until it is built, so say so.
+            log.info("OTLP export: making sure the samples_ts index exists; the first start on a "
+                     "large database can take a while and ingest waits meanwhile")
+            started = time.monotonic()
             await self.store.storage.execute(SAMPLES_INDEX)
+            log.info("OTLP export: the samples_ts index is ready after %.1f s",
+                     time.monotonic() - started)
         self._ready = True
 
     async def _cursor(self, signal: str) -> tuple[int, int]:
@@ -242,6 +257,16 @@ class Exporter:
                     self.stats.consecutive_failures += 1
                     await self._measure_lag()
                     return self._backoff(outcome.wait)
+                if outcome.too_large and batch.count > 1:
+                    self._limit = max(1, batch.count // 2)
+                    self.stats.consecutive_failures = 0
+                    log.warning("OTLP collector refused a request as too large; sending %d at "
+                                "a time", self._limit)
+                    if batch.count:
+                        self._gaps = batch.gaps + self._gaps
+                    continue
+                if batch.count:  # a gap notice rides on with the next records, not the drop
+                    self._gaps = batch.gaps + self._gaps
                 # A final answer: skip the batch so one bad request cannot block the stream.
                 self.stats.dropped += batch.count
                 self.stats.consecutive_failures = 0
@@ -299,7 +324,7 @@ class Exporter:
             rows = await self.store.fetch(
                 "SELECT series_id, ts, value FROM samples WHERE (ts, series_id) > (?, ?) "
                 "AND ts <= ? ORDER BY ts, series_id LIMIT ?",
-                (ts, last, horizon, self.cfg.max_batch_points))
+                (ts, last, horizon, self.batch_limit))
             if not rows:
                 if horizon > ts:  # nothing pending: move on, so lag and the gap check stay honest
                     await self._save("metrics", (horizon, 0))
@@ -370,7 +395,7 @@ class Exporter:
         _, last = await self._cursor("logs")
         rows = await self.store.fetch(
             "SELECT id, host, ts, kind, severity, source, title, detail FROM host_events "
-            "WHERE id > ? ORDER BY id LIMIT ?", (last, self.cfg.max_batch_points))
+            "WHERE id > ? ORDER BY id LIMIT ?", (last, self.batch_limit))
         gaps, self._gaps = self._gaps, []
         if not rows and not gaps:
             return None
@@ -396,7 +421,7 @@ class Exporter:
         _, last = await self._cursor("audit")
         rows = await self.store.fetch(
             "SELECT id, ts, actor, kind, method, path, status, remote, detail FROM audit "
-            "WHERE id > ? ORDER BY id LIMIT ?", (last, self.cfg.max_batch_points))
+            "WHERE id > ? ORDER BY id LIMIT ?", (last, self.batch_limit))
         if not rows:
             return None
         recs = [{"timeUnixNano": str(int(float(ts) * 1e9)), "severityNumber": 9,
@@ -458,7 +483,8 @@ class Exporter:
         if status in RETRYABLE:
             return Outcome(False, retry=True, reason=f"collector answered {status}",
                            wait=retry_after(resp.headers.get("retry-after"), self.clock()))
-        return Outcome(False, reason=f"collector answered {status}")
+        return Outcome(False, reason=f"collector answered {status}",
+                       too_large=status == TOO_LARGE)
 
     # ---- status ------------------------------------------------------------------------
 

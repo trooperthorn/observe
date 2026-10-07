@@ -209,13 +209,44 @@ async def test_a_400_is_not_retried_the_batch_is_dropped_and_the_stream_goes_on(
     assert "dropped" in caplog.text and "400" in caplog.text
 
 
-@pytest.mark.parametrize("status", [401, 403, 404, 413])
+@pytest.mark.parametrize("status", [404, 405, 422])
 async def test_other_client_errors_are_final_too(store, status):
     collector = Collector([status])
     exp, _ = await started(store, collector)
     await put(store, [1.0])
     await exp.cycle()
     assert len(collector.requests) == 1 and exp.stats.dropped == 1
+
+
+@pytest.mark.parametrize("status", [401, 403, 408])
+async def test_a_credential_refusal_holds_the_batch_instead_of_dropping_it(store, status):
+    collector = Collector([status])
+    exp, _ = await started(store, collector)
+    await put(store, [1.0, 2.0])
+    assert await exp.cycle() == 1.0
+    assert exp.stats.dropped == 0 and exp.stats.sent == 0 and exp.stats.consecutive_failures == 1
+    await exp.cycle()  # the token was fixed: the same points go out
+    assert [v for _, v in collector.points()] == [1.0, 2.0, 1.0, 2.0]
+    assert exp.stats.sent == 2 and exp.stats.dropped == 0
+
+
+async def test_a_413_halves_the_batch_until_the_collector_accepts_it(store):
+    collector = Collector([413, 413])
+    exp, _ = await started(store, collector, max_batch_points=4)
+    await put(store, [1.0, 2.0, 3.0, 4.0])
+    await exp.cycle()
+    sizes = [len(b["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["gauge"]["dataPoints"])
+             for b in collector.bodies]
+    assert sizes == [4, 2, 1, 1, 1, 1]
+    assert exp.stats.dropped == 0 and exp.stats.sent == 4
+
+
+async def test_a_413_for_a_single_point_is_final(store):
+    collector = Collector([413])
+    exp, _ = await started(store, collector, max_batch_points=1)
+    await put(store, [1.0])
+    await exp.cycle()
+    assert exp.stats.dropped == 1 and len(collector.requests) == 1
 
 
 async def test_partial_success_advances_the_cursor_and_counts_the_rejects(store):
@@ -289,6 +320,24 @@ async def test_a_cursor_behind_raw_retention_resumes_and_records_a_gap_record(st
     assert exp.stats.gaps == 1
     audit = await store.fetch("SELECT kind, actor FROM audit WHERE kind = 'export_gap'")
     assert audit == [("export_gap", "exporter")]
+
+
+async def test_a_gap_notice_survives_a_dropped_logs_batch(store):
+    collector = Collector([200, 400])  # the metrics request, then a final refusal of the logs
+    exp, clock = await started(store, collector)
+    await put(store, [1.0], base=T0 + 100)
+    await store.storage.execute("DELETE FROM samples")
+    await put(store, [9.0], base=T0 + 900)
+    insert = ("INSERT INTO host_events (host, ts, kind, severity, source, title, detail, "
+              "dedup_key) VALUES ('h1', ?, 'journal.match', 'warning', 'journal', 'E', '{}', ?)")
+    await store.storage.write(lambda db: db.execute(insert, (T0 + 5, "k1")))
+    clock.now = T0 + 2000
+    await exp.cycle()
+    assert exp.stats.dropped == 1 and exp.stats.gaps == 1
+    await store.storage.write(lambda db: db.execute(insert, (T0 + 6, "k2")))
+    await exp.cycle()
+    gaps = [r for r in collector.records() if attr(r, "event.name") == "observe.export.gap"]
+    assert len(gaps) == 2  # once in the dropped request and again in the next one
 
 
 async def test_a_quiet_database_is_not_a_gap(store):
