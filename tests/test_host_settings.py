@@ -625,6 +625,38 @@ def test_a_version_11_database_with_enrolments_migrates_to_14(tmp_path):
         db.close()
 
 
+def test_a_version_18_database_keeps_its_ingest_keys_with_an_empty_role(tmp_path):
+    import sqlite3
+    from observe.storage.schema import MIGRATIONS, SCHEMA_VERSION, migrate
+    from observe.store import Store
+    path = str(tmp_path / "w.db")
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+    db.commit()
+    newer = {v: m for v, m in MIGRATIONS.items() if v > 18}
+    assert newer and SCHEMA_VERSION == 19
+    for v in newer:
+        del MIGRATIONS[v]
+    try:
+        migrate(db)
+    finally:
+        MIGRATIONS.update(newer)
+    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 18
+    assert "role" not in [r[1] for r in db.execute("PRAGMA table_info(ingest_keys)")]
+    db.execute("INSERT INTO ingest_keys (prefix, hash, host, created, scope) "
+               "VALUES ('wpr_old', 'h', 'nas01', 1.0, 'wpr')")
+    db.commit()
+    db.close()
+    Store(path).close()
+    db = sqlite3.connect(path)
+    try:
+        assert db.execute("SELECT prefix, host, scope, role FROM ingest_keys").fetchall() == [
+            ("wpr_old", "nas01", "wpr", "")]
+        assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == SCHEMA_VERSION
+    finally:
+        db.close()
+
+
 def test_reissue_refuses_a_bad_pool_and_changes_nothing(env):
     hdr = admin(env)
     old = enrol_host(env, hdr)
