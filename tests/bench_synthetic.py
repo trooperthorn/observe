@@ -83,7 +83,8 @@ def main() -> None:
     args = ap.parse_args()
     monitors = [{"name": h, "type": "pushed_host", "host": h, "group": "storage",
                  "stale_after": 3600} for h in HOSTS]
-    monitors += [{"name": f"mon{i:02d}", "type": "ping", "host": f"10.1.0.{i + 1}",
+    # Loopback only: an unexpected recheck of one of these must never reach another host.
+    monitors += [{"name": f"mon{i:02d}", "type": "tcp", "host": "127.0.0.1", "port": 9,
                   "group": "net"} for i in range(36)]
     env = ApiEnv(Path(args.dir), monitors=monitors, api_rate_per_second=1_000_000,
                  api_burst=1_000_000)
@@ -108,7 +109,7 @@ def main() -> None:
         out["history_batches"] = steps * len(HOSTS)
         async def poll_rows() -> None:
             for m in monitors:
-                if m["type"] != "ping":
+                if m["type"] != "tcp":
                     continue
                 for k in range(0, 24 * 120, 6):  # a day of poll rows every 12 minutes
                     await env.store.record(m["name"], base - k * 60,

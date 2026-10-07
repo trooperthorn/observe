@@ -1091,6 +1091,13 @@ rerun here: the benchmark does not drive the plugins, and the Pi was not availab
 numbers are for one machine and one run of 30 repetitions each (5 for the pushed-host poll), so
 treat differences of a millisecond or two as noise.
 
+The two columns are not a like-for-like comparison: the review could not be rebuilt here, so its
+numbers are quoted, and they used 30 days of history where this run used 7. A rerun of the same
+script with `--days 30` was tried for this record and did not finish loading the history within 15
+minutes, so no 30 day figure is recorded. The 36 pull monitors of the script are TCP monitors aimed
+at the loopback interface (every pull check is a stub in the timed paths), so a stray recheck
+cannot reach another host.
+
 ## Plugin host
 
 `observe/plugins.py` loads plugins (design in `docs/FIELD-DATA.md`). A plugin

@@ -41,6 +41,7 @@ import httpx
 
 from .. import __version__
 from ..config import OtlpExportConfig
+from ..httpclient import http_client
 from . import encode
 
 log = logging.getLogger("observe.export")
@@ -153,8 +154,7 @@ class Exporter:
         """The one long-lived client, so the exporter keeps its TLS session. Redirects are not
         followed: a redirect would carry the headers to another host."""
         if self.client is None:
-            self.client = httpx.AsyncClient(verify=self._tls(), follow_redirects=False,
-                                            timeout=self.cfg.timeout_s)
+            self.client = http_client(self._tls(), self.cfg.timeout_s)
             self._own_client = True
         return self.client
 

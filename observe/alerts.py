@@ -16,10 +16,10 @@ from email.message import EmailMessage
 from typing import Any
 
 import aiomqtt
-import httpx
 
 from .checks.mqtt import mqtt_client_kwargs
 from .config import Config, MqttAlert, NtfyAlert, SmtpAlert, WebhookAlert
+from .httpclient import http_client
 from .state import State, Transition
 
 log = logging.getLogger("observe.alerts")
@@ -76,7 +76,7 @@ class Alerter:
     async def _send(self, target: Any, body: dict[str, Any], tr: Transition) -> None:
         title = f"[{body['state'].upper()}] {body['monitor']}"
         if isinstance(target, WebhookAlert):
-            async with httpx.AsyncClient(timeout=10) as c:
+            async with http_client(True, 10) as c:
                 r = await c.post(target.url, json=body, headers=target.headers)
                 r.raise_for_status()
         elif isinstance(target, NtfyAlert):
@@ -84,7 +84,7 @@ class Alerter:
                        "Tags": _TAGS[tr.current]}
             if target.token:
                 headers["Authorization"] = f"Bearer {target.token}"
-            async with httpx.AsyncClient(timeout=10) as c:
+            async with http_client(True, 10) as c:
                 r = await c.post(target.url, content=body["message"].encode(), headers=headers)
                 r.raise_for_status()
         elif isinstance(target, SmtpAlert):

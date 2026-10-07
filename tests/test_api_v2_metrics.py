@@ -29,8 +29,7 @@ def get(env, path):
 def seed_latency(env, minutes=60, every=30, slug="core"):
     """One latency value per `every` seconds for the last `minutes`, equal to its index."""
     n = minutes * 60 // every
-    for i in range(n):
-        env.poll(slug, ts=START - (n - i) * every, latency=float(i))
+    env.poll_many(slug, [(START - (n - i) * every, float(i)) for i in range(n)])
     return n
 
 
@@ -300,9 +299,11 @@ def test_the_reads_send_postgresql_text_and_answer_the_same(env):
     pg = PgFakeStorage()
     try:
         st = _store_on(pg)
-        for i in range(120):
-            asyncio.run(st.record("core", START - (120 - i) * 30,
-                                  CheckResult(Result.OK, "x", value=float(i), latency_ms=float(i))))
+        async def seed() -> None:
+            for i in range(120):
+                await st.record("core", START - (120 - i) * 30,
+                                CheckResult(Result.OK, "x", value=float(i), latency_ms=float(i)))
+        asyncio.run(seed())
         asyncio.run(st.record_event("core", Transition(State.UP, State.DOWN, START - 5, "down")))
         seed_latency(env, minutes=60, every=30)
         env.poll("core", value=1.0)  # the same series set as the fake: value, result, up, latency

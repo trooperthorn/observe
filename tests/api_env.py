@@ -80,6 +80,15 @@ class ApiEnv:
         asyncio.run(self.store.record(slug, self.wall.now if ts is None else ts,
                                       CheckResult(result, "x", value=value, latency_ms=latency)))
 
+    def poll_many(self, slug: str, points: list[tuple[float, float]]) -> None:
+        """Record many (timestamp, latency) results in one event loop. A loop per result opens a
+        socket pair each time, and thousands of them exhaust loopback ports on Windows and hang."""
+        async def go() -> None:
+            for ts, latency in points:
+                await self.store.record(slug, ts,
+                                        CheckResult(Result.OK, "x", value=None, latency_ms=latency))
+        asyncio.run(go())
+
     def push(self, batch: Batch, now: float | None = None) -> None:
         asyncio.run(self.store.ingest_batch(batch, classify_events(batch.events),
                                             now=self.wall.now if now is None else now))
