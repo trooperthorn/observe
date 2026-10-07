@@ -193,8 +193,10 @@ class Scheduler:
             if not self._rules_loaded:
                 await self.load_rules()
             if not pushed:
-                value = None if res.result is Result.FAIL else res.value
-                for metric, val in (("monitor.value", value), ("monitor.latency", res.latency_ms)):
+                failed = res.result is Result.FAIL
+                value = None if failed else res.value
+                latency = None if failed else res.latency_ms  # only an answer has a latency
+                for metric, val in (("monitor.value", value), ("monitor.latency", latency)):
                     await self._feed_rules(host, f"monitor:{monitor.slug}:{metric}", metric,
                                            ("monitor", monitor.slug, MONITOR_SCOPE, metric, "{}"),
                                            val, ts)

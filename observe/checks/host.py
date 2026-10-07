@@ -20,6 +20,8 @@ when a recent batch arrived (an outbox replay or a lagging agent clock).
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import socket
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -51,9 +53,39 @@ def grade(value: float, th: Thresholds) -> str:
 LATEST_WINDOW_S = 900.0
 
 
+# Resolved host names of the re-check, so that a 10 second re-check does not do a DNS lookup
+# every time. An address that is already an IP literal is never looked up.
+RESOLVE_TTL_S = 600.0
+_resolved: dict[str, tuple[str, float]] = {}
+
+
+async def _target(address: str) -> str:
+    """The IP address to ping or connect to. A literal address is used as it is; a name is
+    resolved once and the answer is kept for RESOLVE_TTL_S seconds. A name that does not
+    resolve is returned unchanged, so the probe fails the same way it always did."""
+    try:
+        ipaddress.ip_address(address)
+        return address
+    except ValueError:
+        pass
+    now = time.monotonic()
+    hit = _resolved.get(address)
+    if hit is not None and hit[1] > now:
+        return hit[0]
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(address, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return address
+    ip = str(infos[0][4][0])
+    _resolved[address] = (ip, now + RESOLVE_TTL_S)
+    return ip
+
+
 async def reachable(address: str, port: int | None, timeout: float) -> bool:
     """Whether the host answers: one ICMP echo, or a TCP connect when a port is given. Used for
-    the fast re-check of a pushed host, which does not answer polls (section 10.3)."""
+    the fast re-check of a pushed host, which does not answer polls (section 10.3). The answer
+    says only that the host is on the network, never that its agent is running."""
+    address = await _target(address)
     if port is not None:
         try:
             _, writer = await asyncio.wait_for(asyncio.open_connection(address, port), timeout)
@@ -82,33 +114,31 @@ class PushedHostCheck(Check):
         self.reach = reach
         interval = config.effective(monitor, "interval")
         self.stale_after: float = monitor.stale_after or 3 * interval
-        # The batch time that a ping or TCP answer already carried through a re-check. A host
-        # that answers while its agent stays silent is not healthy, so the same stale batch is a
-        # plain failure the next time and the ordinary counts take it to Down.
-        self._answered_for: float | None = None
 
     def thresholds(self) -> Thresholds | None:
         return None  # the component thresholds are applied here, not to one value
 
-    async def _missed(self, age: float, last_seen: float) -> CheckResult:
+    async def _missed(self, age: float) -> CheckResult:
         """No batch within the stale window. The first miss is a failure that starts the fast
         re-check. While the monitor is being re-checked, the host's own address is pinged (or its
-        port connected to): an answer is a good reply, because a batch may simply be late."""
+        port connected to). An answer shows that the host is reachable but does not make the
+        agent a responder: the result stays an unanswered failure, marked reachable-but-silent
+        in its detail and message, so the window runs out and the host goes Down with a reason
+        that says the agent is silent. Only a new batch is a good reply."""
         m = self.monitor
-        detail = {"age_seconds": age, "components": {}}
+        detail: dict[str, Any] = {"age_seconds": age, "components": {}}
         text = f"no batch from {m.host} for {age:.0f}s (limit {self.stale_after:.0f}s)"
         if self.rechecking:
             address = m.address or m.host
             port = m.recheck_port
             how = f"TCP port {port}" if port is not None else "ping"
             if await self.reach(address, port, self.timeout):
-                self._answered_for = last_seen
-                return CheckResult.ok(f"{text}, but {address} answers {how}", value=age, unit="s",
-                                      detail=detail)
-            text += f", and {address} does not answer {how}"
-        if not self.rechecking and self._answered_for == last_seen:
-            text += "; the host answered a re-check but the agent is still silent"
-            return CheckResult.fail(text, value=age, unit="s", detail=detail)
+                detail["reachable"] = True
+                detail["reachable_but_silent"] = True
+                text += f"; {address} answers {how} but the agent is silent"
+            else:
+                detail["reachable"] = False
+                text += f", and {address} does not answer {how}"
         return CheckResult.fail(text, value=age, unit="s", detail=detail, unreachable=True)
 
     async def probe(self) -> CheckResult:
@@ -122,8 +152,7 @@ class PushedHostCheck(Check):
                                     detail={"components": {}})
         age = now - data["last_seen"]
         if age > self.stale_after:
-            return await self._missed(age, data["last_seen"])
-        self._answered_for = None
+            return await self._missed(age)
 
         components: dict[str, str] = {}
         reasons: dict[str, str] = {}

@@ -1010,3 +1010,29 @@ def test_hostile_attribute_and_value_shapes_are_data_not_failures(env):
 def test_attrs_helper_round_trips_every_scalar_kind():
     got = attrs(a="x", b=1, c=2.5, d=True)
     assert got == [kv("a", "x"), kv("b", 1), kv("c", 2.5), kv("d", True)]
+
+
+# ---- a request that names no platform or version keeps what the host has --------------------
+
+def test_a_logs_request_without_os_type_leaves_the_platform_linux(env):
+    key = env.key("nas01")
+    first = simple(os__type="linux", service__version="0.9.0", observe__agent__sent_at=1.0)
+    assert env.push(first, key).status_code == 200
+    recs = [log_record("service.restart", T0, "nginx restarted", "info")]
+    assert env.push(logs_request("nas01", recs), key, "/v1/logs").status_code == 200
+    assert env.push(simple(value=3.0, ts=T0 + 1), key).status_code == 200
+    assert env.rows("SELECT platform, agent_version FROM hosts") == [("linux", "0.9.0")]
+
+
+def test_a_request_that_names_a_platform_still_replaces_it(env):
+    key = env.key("nas01")
+    assert env.push(simple(os__type="linux", service__version="0.9.0",
+                           observe__agent__sent_at=1.0), key).status_code == 200
+    assert env.push(simple(os__type="windows", service__version="1.0.0",
+                           observe__agent__sent_at=2.0), key).status_code == 200
+    assert env.rows("SELECT platform, agent_version FROM hosts") == [("windows", "1.0.0")]
+
+
+def test_a_first_request_without_os_type_stores_the_placeholder(env):
+    assert env.push(simple(), env.key("nas01")).status_code == 200
+    assert env.rows("SELECT platform, agent_version FROM hosts") == [("unknown", "otlp")]

@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import Query
 
 from .. import __version__
+from ..checks.base import Result
 from .cursor import PageParams, encode
 from .models import (GroupOut, GroupPage, MonitorCheckDetail, MonitorDetail, MonitorOut,
                      MonitorPage, StatusOut)
@@ -55,7 +56,7 @@ def monitor_view(mon: Any, st: Any, sched: Any) -> dict[str, Any]:
         "message": last.message if last else "waiting for first poll",
         "value": last.value if last else None,
         "unit": last.unit if last else "",
-        "latency_ms": last.latency_ms if last else None,
+        "latency_ms": last.latency_ms if last and last.result is not Result.FAIL else None,
         "detail": last.detail if last else {},
     }
 

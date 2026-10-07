@@ -558,9 +558,19 @@ Transitions of an episode carry `Transition.degraded`. The scheduler hands them 
 which sends them only to targets with `notify_degraded` and ignores `notify_on` for them; the Down
 that ends an episode is an ordinary alert. For a pushed host, `PushedHostCheck` fails the first
 miss, and while `Check.rechecking` is set (the scheduler sets it from the state before each
-run) a stale batch is answered by `reachable()`: a ping of `address` or `host`, or a TCP
-connect to `recheck_port`. An answer is an OK result. The probe is injectable, so tests use a
-fake.
+run) a stale batch is probed by `reachable()`: a ping of `address` or `host`, or a TCP
+connect to `recheck_port`. An answer is not a reply from the agent: the result stays an unreachable
+failure with `detail.reachable_but_silent`, the message names the agent as silent, and the window
+ends in Down with that reason. Only a new batch is a good reply. `reachable()` uses an IP literal
+as it is and resolves a name once per 600 seconds (`RESOLVE_TTL_S`), so a 10 second re-check does
+no DNS lookup each time. The probe is injectable, so tests use a fake.
+
+`MonitorState.observe` starts the re-check of a monitor that is already WARN without a transition
+(WARN to WARN is not logged or alerted). `Store.record` writes `monitor.latency` and the
+`results.latency_ms` column only for a result that is not FAIL, and the rule engine is fed the same
+way. The `hosts` upsert in `Store.ingest_batch` never replaces a known platform or agent version with
+the placeholders `unknown` and `otlp` that `normalize_logs` and `normalize_metrics` give a request
+without `os.type` or `service.version`.
 
 Dependencies: `MonitorState.observe(allow_recheck=False)` is used while `Rollup.blocking_parent`
 names a Down ancestor, so the child shows Unreachable and starts no re-check. While an ancestor

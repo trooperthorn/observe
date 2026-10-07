@@ -61,6 +61,11 @@ def content_key(batch: Batch) -> str:
 # rank the newest heartbeat wins. This keeps the host page stable however the writers interleave.
 PULL_PRODUCER_RANK = {"observe-snmp-host": 0, "observe-ha-host": 1}
 PUSHED_PRODUCER_RANK = 2
+# What a request that names no os.type or service.version is given (observe/otlp/normalize.py).
+# Such a request carries no claim about the platform or agent version, so it never replaces the
+# value the host already has; only a first insert stores the placeholder.
+UNNAMED_PLATFORM = "unknown"
+UNNAMED_VERSION = "otlp"
 
 
 def _rank_sql(column: str) -> str:
@@ -127,7 +132,10 @@ class Store:
         return await self.storage.execute(sql, args)
 
     async def record(self, monitor: str, ts: float, res: CheckResult) -> None:
-        row = (monitor, ts, res.result.value, res.value, res.latency_ms, res.message)
+        # Only a check that was answered has a latency: the time a failed check took is its
+        # timeout or a refusal, not how fast the monitor responds.
+        latency = None if res.result is Result.FAIL else res.latency_ms
+        row = (monitor, ts, res.result.value, res.value, latency, res.message)
         ms = series.to_ms(ts)
 
         def point(metric: str, unit: str, value: float) -> series.Point:
@@ -137,8 +145,8 @@ class Store:
                   point("monitor.result", "1", RESULT_CODE[res.result])]
         if res.value is not None and res.result is not Result.FAIL:
             points.append(point("monitor.value", res.unit.strip(), res.value))
-        if res.latency_ms is not None:
-            points.append(point("monitor.latency", "ms", res.latency_ms))
+        if latency is not None:
+            points.append(point("monitor.latency", "ms", latency))
 
         def unit(db: Conn) -> None:
             db.execute("INSERT INTO results VALUES (?,?,?,?,?,?)", row)
@@ -204,7 +212,7 @@ class Store:
             points.append(point("monitor.result", "1", RESULT_CODE[res]))
             if value is not None and res is not Result.FAIL:
                 points.append(point("monitor.value", "", value))
-            if latency is not None:
+            if latency is not None and res is not Result.FAIL:
                 points.append(point("monitor.latency", "ms", latency))
         series.record_points(db, kind="monitor", name=monitor, points=points, now=newest,
                              rollups=self.storage.incremental_rollups)
@@ -313,10 +321,11 @@ class Store:
             "INSERT INTO hosts (host, platform, agent_version, first_seen, last_seen, heartbeat_ts) "
             "VALUES (?,?,?,?,?,?) ON CONFLICT(host) DO UPDATE SET "
             "last_seen=MAX(hosts.last_seen, excluded.last_seen), "
-            f"platform=CASE WHEN {_TAKES_OVER} THEN excluded.platform "
-            "ELSE hosts.platform END, "
-            f"agent_version=CASE WHEN {_TAKES_OVER} THEN excluded.agent_version "
-            "ELSE hosts.agent_version END, "
+            f"platform=CASE WHEN {_TAKES_OVER} AND excluded.platform <> '{UNNAMED_PLATFORM}' "
+            "THEN excluded.platform ELSE hosts.platform END, "
+            f"agent_version=CASE WHEN {_TAKES_OVER} "
+            f"AND excluded.agent_version <> '{UNNAMED_VERSION}' "
+            "THEN excluded.agent_version ELSE hosts.agent_version END, "
             "heartbeat_ts=MAX(COALESCE(hosts.heartbeat_ts, 0), excluded.heartbeat_ts)",
             (batch.host, batch.platform, batch.agent_version, now, now, sent))
         # A pushed host is a resource of kind host; each source is the scope its points came

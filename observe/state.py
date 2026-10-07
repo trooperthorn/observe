@@ -8,7 +8,8 @@ consecutive OK results.
 
 A missed reply is handled differently (docs/DATA-API-DESIGN.md section 10.3). The first failed
 check that means "nothing answered" moves the monitor to WARN at once, marked degraded with the
-message "Degraded: not responding", and the scheduler re-checks it every `recheck_interval`
+message "Degraded: not responding" (a monitor that is already Warning starts the same re-check
+without a second WARN transition), and the scheduler re-checks it every `recheck_interval`
 seconds. `recheck_good` good replies in a row return it to UP. After a recovery, a new episode
 cannot start for `degraded_cooldown` seconds; a miss inside the cooldown is judged by the
 ordinary counts, so a host that flaps does not produce a Degraded and Up pair every cycle. If the window of `recheck_window`
@@ -130,6 +131,10 @@ class MonitorState:
             self.degraded, self.degraded_since, self.replies = True, now, 0
             self.bad = self.warnish = 1
             self.good = 0
+            if self.state is State.WARN:
+                # Already warning: the fast re-check starts, but WARN to WARN is no transition,
+                # so the event log and the alerts carry no second Degraded notice.
+                return None
             return self._enter(State.WARN, now, f"Degraded: not responding ({res.message})",
                                degraded=True)
         if res.result is Result.FAIL:

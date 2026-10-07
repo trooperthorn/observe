@@ -285,18 +285,20 @@ async def test_a_missed_batch_starts_the_recheck_without_pinging_first(storage):
     assert p.env.st("nas").degraded and p.calls == []
 
 
-async def test_the_recheck_pings_the_host_and_two_answers_recover_it(storage):
+async def test_the_recheck_pings_the_host_but_an_answer_is_not_a_reply(storage):
     p = Pushed(storage)
     await p.push()
     await p.poll()
     await p.poll(121)
     p.alive = True
-    await p.poll(10)
-    assert p.env.st("nas").degraded
-    res = await p.poll(10)
-    assert res.result is Result.OK and "answers ping" in res.message
-    assert p.env.st("nas").state is State.UP
-    assert p.calls == [("nas", None), ("nas", None)]
+    for _ in range(3):
+        res = await p.poll(10)
+        assert res.result is Result.FAIL and res.unreachable
+        assert res.detail["reachable_but_silent"] is True
+        assert "answers ping but the agent is silent" in res.message
+    st = p.env.st("nas")
+    assert st.state is State.WARN and st.degraded and st.replies == 0
+    assert p.calls == [("nas", None)] * 3
 
 
 async def test_the_recheck_uses_tcp_and_the_address_when_configured(storage):
@@ -308,23 +310,24 @@ async def test_the_recheck_uses_tcp_and_the_address_when_configured(storage):
     assert p.calls == [("192.0.2.9", 22)]
 
 
-async def test_a_host_that_answers_ping_but_has_a_dead_agent_still_goes_down(storage):
+async def test_a_host_that_answers_ping_but_sends_nothing_goes_down_on_schedule(storage):
     p = Pushed(storage)
     p.alive = True
     await p.push()
     await p.poll()
     await p.poll(121)
-    await p.poll(10)
-    await p.poll(10)
-    assert p.env.st("nas").state is State.UP  # the answers carried it through the re-check
-    for _ in range(10):  # the same stale batch is now a plain failure, not another re-check
-        await p.poll(30)
+    for _ in range(18):  # the 180 s window of 10 s re-checks, exactly as for a dead host
+        await p.poll(10)
     st = p.env.st("nas")
     assert st.state is State.DOWN and not st.degraded
-    assert "agent is still silent" in st.last.message
+    events = await p.env.store.events(monitor="nas")
+    assert events[0]["current"] == "down"
+    assert "the agent is silent" in events[0]["message"]
+    assert "does not answer" not in events[0]["message"]
+    assert len(p.calls) == 18
 
 
-async def test_a_fresh_batch_clears_the_answered_but_silent_memory(storage):
+async def test_a_fresh_batch_after_silent_rechecks_recovers_the_host(storage):
     p = Pushed(storage)
     p.alive = True
     await p.push()
@@ -536,3 +539,56 @@ async def test_a_finished_backfill_is_not_repeated_after_raw_samples_are_pruned(
     await st.execute("DELETE FROM samples")
     await settle(storage)
     assert await st.backfill_monitor_series() == 0
+
+
+# ---- host identity, latency and warning noise ------------------------------------------------
+
+async def test_a_resolved_name_is_looked_up_once_and_a_literal_never(monkeypatch):
+    from observe.checks import host as hostmod
+    hostmod._resolved.clear()
+    looked_up: list[str] = []
+
+    class Loop:
+        async def getaddrinfo(self, name, port, **kw):
+            looked_up.append(name)
+            return [(2, 1, 6, "", ("192.0.2.77", 0))]
+
+    monkeypatch.setattr(hostmod.asyncio, "get_running_loop", lambda: Loop())
+    assert await hostmod._target("192.0.2.5") == "192.0.2.5"
+    assert [await hostmod._target("nas.lan") for _ in range(5)] == ["192.0.2.77"] * 5
+    assert looked_up == ["nas.lan"]
+    hostmod._resolved.clear()
+
+
+async def test_a_failed_check_adds_no_latency_point(storage):
+    env = Env(storage, [mon("a")])
+    env.probes["a"].result = CheckResult.ok("up", latency_ms=10.0)
+    await env.poll("a")
+    env.probes["a"].result = CheckResult.fail("refused", latency_ms=1500.0)
+    await env.poll("a", 60)
+    env.probes["a"].result = CheckResult.ok("up", latency_ms=12.0)
+    await env.poll("a", 60)
+    rows = await env.store.fetch(
+        "SELECT s.metric, COUNT(*) FROM samples sm JOIN series s ON s.id = sm.series_id "
+        "JOIN resources r ON r.id = s.resource_id WHERE r.name = 'a' AND r.kind = 'monitor' "
+        "GROUP BY s.metric")
+    counts = dict(rows)
+    assert counts["monitor.up"] == 3 and counts["monitor.latency"] == 2
+    latest = await env.store.fetch("SELECT latency_ms FROM results WHERE monitor = 'a' "
+                                   "ORDER BY ts")
+    assert [r[0] for r in latest][1] is None
+
+
+async def test_repeated_unreachable_while_warning_logs_one_transition(storage):
+    env = Env(storage, [mon("a")], recheck_window=600, failures_to_down=3)
+    await env.poll("a")
+    env.probes["a"].result = CheckResult(Result.WARN, "slow")
+    for _ in range(3):
+        await env.poll("a", 60)
+    assert env.st("a").state is State.WARN and not env.st("a").degraded
+    env.probes["a"].silent()
+    for _ in range(4):
+        await env.poll("a", 10)
+    warns = [e for e in await env.store.events(monitor="a") if e["current"] == "warn"]
+    assert len(warns) == 1 and not warns[0]["message"].startswith("Degraded")
+    assert env.st("a").degraded  # the fast re-check still runs, with no second transition

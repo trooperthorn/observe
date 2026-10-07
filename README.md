@@ -69,9 +69,16 @@ note that its alert is held.
 A pushed host does not answer polls. When no batch arrives within
 `stale_after`, the host is Degraded, and each re-check pings the host (or opens
 a TCP connection to `recheck_port`). Set `address` when the name the agent sends
-does not resolve. An answer, or a batch arriving in the window, is a good
-reply. A host whose agent stays silent while the host itself answers will cycle
-between Degraded and UP, which is the signal to fix the agent.
+does not resolve. Only a batch arriving in the window is a good reply. An
+answer to the ping or TCP connect shows that the host is reachable but is not a
+reply from the agent: the result is recorded as reachable but silent, the window
+runs on, and the host goes DOWN on schedule with a reason that says the agent is
+silent. A host name is resolved once and kept for ten minutes, and an IP address
+is never looked up, so the re-check does no DNS lookup every 10 seconds.
+
+A monitor that is already WARN when a missed reply arrives starts the same
+re-check but logs no second WARN transition. A failed check records no latency
+point, so latency charts show only checks that were answered.
 
 A child of a Down parent shows Unreachable and starts no re-check of its own.
 While a parent is in its re-check window, the child's alert is held; if the
