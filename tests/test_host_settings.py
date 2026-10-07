@@ -600,7 +600,7 @@ def test_a_version_11_database_with_enrolments_migrates_to_14(tmp_path):
     db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
     db.commit()
     newer = {v: m for v, m in MIGRATIONS.items() if v > 11}
-    assert newer and SCHEMA_VERSION == 18
+    assert newer and SCHEMA_VERSION == 19
     for v in newer:
         del MIGRATIONS[v]
     try:

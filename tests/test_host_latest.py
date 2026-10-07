@@ -121,7 +121,9 @@ def test_page_refresh_never_overlaps():
         text = (STATIC / name).read_text(encoding="utf-8")
         body = re.search(r"async function refresh\(\) \{(.*?)\n\}\n", text, re.S).group(1)
         assert "if (refreshing) return;" in body
-        assert body.index("refreshing = true") < body.index("fetch(")
+        first_read = min(body.index(call) for call in ("fetch(", "getAll(", "getJson(")
+                         if call in body)
+        assert body.index("refreshing = true") < first_read
         assert "finally" in body and "refreshing = false" in body
 
 

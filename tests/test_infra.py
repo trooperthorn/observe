@@ -308,7 +308,7 @@ def test_phase5_database_migrates_keeping_rows(tmp_path):
     assert counts == {"results": 1, "hosts": 1, "audit": 1, "plugin_schema": 1,
                       **{t: 0 for t in INFRA}}
     assert INFRA <= tables(path)
-    assert SCHEMA_VERSION == 18  # 15 is the change sequences, 16 the series tables, 17 the summary levels, 18 the map tables
+    assert SCHEMA_VERSION == 19  # 15 change sequences, 16 series, 17 summary levels, 18 map tables, 19 key roles
     assert "infra_dependencies" in tables(path)
 
 

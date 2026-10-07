@@ -94,9 +94,9 @@ async function refresh() {
   try {
     const [unlinked, deps, mons] = await Promise.all([
       api("GET", "/api/admin/infra/unlinked"), api("GET", "/api/infra/dependencies"),
-      api("GET", "/api/monitors"),
+      api("GET", "/api/v2/monitors?limit=500"),
     ]);
-    candidates = mons.monitors.filter((m) => SWITCH_TYPES.includes(m.type));
+    candidates = mons.items.filter((m) => SWITCH_TYPES.includes(m.type));
     if (!tables) tables = build();
     tables.unlinked.setRows(unlinked);
     tables.pending.setRows(deps.pending);

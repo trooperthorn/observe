@@ -20,7 +20,7 @@ unknown user), infra_switch_linked, infra_switch_link_failed, infra_depends_acce
 infra_depends_rejected, infra_depends_failed, ingest_denied,
 ingest_failed, enrol_created, enrol_create_failed, enrol_fetched, enrol_fetch_failed,
 enrol_expired, enrol_reissued, host_allowlist_saved, host_task_created, host_task_fetched,
-host_keys_revoked, host_removed (each with a matching _failed kind where it can be refused), plugin_request, plugin_denied, plugin_failed, and the control plugin's
+host_keys_revoked, host_removed (each with a matching _failed kind where it can be refused), api_denied (a refused /api/v2 request), plugin_request, plugin_denied, plugin_failed, and the control plugin's
 control_requested, control_request_refused, control_pull and control_expired. A kind ending in _failed or _error is an action that stopped
 partway or was refused after it started.
 """
@@ -40,10 +40,10 @@ _SECRET_WORDS = ("password", "passwd", "secret", "token", "csrf", "cookie", "aut
                  "bearer", "api_key", "apikey", "ingest_key", "hash")
 
 
-# An ingest key ("wpi_<prefix>_<secret>", even a truncated one), a control key (wpc_), an
+# An ingest key ("wpi_<prefix>_<secret>", even a truncated one), a read token (wpr_), a field key (wpf_), a control key (wpc_), an
 # enrolment token (wpe_), an install step key (wps_), or any long run of URL-safe characters, which is what a session
 # token or a key secret looks like.
-_SECRET_SHAPES = re.compile(r"wp[icset]_[A-Za-z0-9_-]*|[A-Za-z0-9_-]{40,}")
+_SECRET_SHAPES = re.compile(r"wp[icsetfr]_[A-Za-z0-9_-]*|[A-Za-z0-9_-]{40,}")
 
 
 def redact_secrets(text: str) -> str:

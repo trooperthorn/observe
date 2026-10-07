@@ -393,7 +393,9 @@ def test_the_wizard_and_settings_page_show_expired_and_used_with_regenerate():
 
 
 def hosts(env):
-    return env.client.get("/api/hosts").json()
+    listed = env.client.get("/api/v2/hosts").json()["items"]
+    waiting = env.client.get("/api/v2/waiting-hosts").json()["items"]
+    return {"hosts": listed, "waiting": waiting}
 
 
 def test_an_enrolled_host_that_has_not_reported_is_listed_as_waiting_with_a_link(env):
@@ -433,13 +435,14 @@ def test_the_hosts_list_is_session_only(env):
     hdr = admin(env)
     create(env, hdr)
     env.client.post("/api/logout", headers=hdr)
-    assert env.client.get("/api/hosts").status_code in (401, 403)
+    assert env.client.get("/api/v2/hosts").status_code in (401, 403)
+    assert env.client.get("/api/v2/waiting-hosts").status_code in (401, 403)
 
 
 def test_the_dashboard_has_a_waiting_panel_written_with_text_only():
     html, js = read("index.html"), read("app.js")
     assert 'id="waiting-panel"' in html and 'id="waiting"' in html
     assert "Waiting for first data" in html and "Waiting for first data" in js
-    assert 'fetch("/api/hosts")' in js and "renderWaiting()" in js
+    assert "/api/v2/waiting-hosts" in js and "renderWaiting()" in js
     assert "encodeURIComponent(w.host)" in js and "/settings" in js
     assert not re.search(r"\.innerHTML\s*=|insertAdjacentHTML", js)

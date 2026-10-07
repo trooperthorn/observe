@@ -265,7 +265,7 @@ def test_ingest_is_not_behind_basic_auth_but_dashboard_still_is(tmp_path):
         r = client.post("/api/ingest", json=fixture("batch_minimal"),
                         headers={"Authorization": f"Bearer {key}"})
         assert r.status_code == 200
-        assert client.get("/api/monitors").status_code == 401
+        assert client.get("/metrics").status_code == 401
         client.close()
     finally:
         e.client.close()
@@ -274,14 +274,14 @@ def test_ingest_is_not_behind_basic_auth_but_dashboard_still_is(tmp_path):
 
 def test_ingest_key_does_not_open_other_endpoints(env):
     key = env.key("nas01")
-    r = env.client.get("/api/events", headers={"Authorization": f"Bearer {key}"})
-    assert r.status_code == 200  # no basic auth configured in this env; endpoint is the same as before
+    r = env.client.get("/api/v2/events", headers={"Authorization": f"Bearer {key}"})
+    assert r.status_code == 401  # an ingest key is not a read token
     cfg = make_config([{"name": "p", "type": "ping", "host": "127.0.0.1"}],
                       server={"basic_auth_user": "ops", "basic_auth_password": "s3cret",
                               "db_path": env.path})
     alerter = Alerter(cfg)
     client = TestClient(create_app(cfg, env.store, Scheduler(cfg, env.store, alerter), alerter))
-    assert client.get("/api/events", headers={"Authorization": f"Bearer {key}"}).status_code == 401
+    assert client.get("/metrics", headers={"Authorization": f"Bearer {key}"}).status_code == 401
     client.close()
 
 

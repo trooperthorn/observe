@@ -18,6 +18,11 @@ therefore refused by every surface of another scope, whatever its host or
 device label says. The host column holds the host name for wpi keys and the
 device label for any other scope.
 
+Read tokens are the scope wpr (docs/DATA-API-DESIGN.md section 4.7). They open only /api/v2
+reads, carry a role (viewer or operator, never admin) and are never accepted for ingest, and an
+ingest or field key is never accepted for reads, because every check names the scope it needs.
+The host column of a read token holds its label.
+
 Modeled on hostwatch's key handling (hostwatch, same owner), with the host
 binding and revocation record added.
 """
@@ -36,6 +41,9 @@ from ..store import Store
 from .schema import MAX_NAME
 
 MARKER = "wpi"
+READ_MARKER = "wpr"
+READ_ROLES = ("viewer", "operator")
+LAST_USED_EVERY_S = 60.0  # a read token's last use is recorded at most this often
 _SCOPE = re.compile(r"^[a-z]{3,8}$")
 PREFIX_BYTES = 6
 SECRET_BYTES = 32
@@ -55,6 +63,7 @@ class KeyInfo:
     revoked_at: float | None
     last_used: float | None
     scope: str = MARKER
+    role: str = ""
 
     @property
     def active(self) -> bool:
@@ -79,28 +88,34 @@ def _check_host(host: str) -> str:
 
 
 async def create_key(store: Store, host: str, created_by: str = "",
-                     scope: str = MARKER) -> tuple[str, KeyInfo]:
+                     scope: str = MARKER, role: str = "") -> tuple[str, KeyInfo]:
     """Create a key bound to host. Returns (plaintext, info); the plaintext is not recoverable.
 
     For a scope other than wpi, host is the device label. Whether the scope belongs to a
-    loaded plugin is checked by the caller; here it only has to be well formed.
+    loaded plugin is checked by the caller; here it only has to be well formed. A read token
+    (wpr) needs a role of viewer or operator, and every other scope takes none.
     """
     host = _check_host(host)
     if not isinstance(scope, str) or not _SCOPE.match(scope):
         raise IngestKeyError("scope must be 3 to 8 lower-case letters")
+    if scope == READ_MARKER:
+        if role not in READ_ROLES:
+            raise IngestKeyError("a read token needs a role of viewer or operator")
+    elif role:
+        raise IngestKeyError("only a read token has a role")
     now = time.time()
     for _ in range(5):
         prefix = secrets.token_hex(PREFIX_BYTES)
         secret = secrets.token_urlsafe(SECRET_BYTES)
         try:
             await store.execute(
-                "INSERT INTO ingest_keys (prefix, hash, host, created, created_by, scope) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (prefix, _digest(secret), host, now, created_by, scope))
+                "INSERT INTO ingest_keys (prefix, hash, host, created, created_by, scope, role) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (prefix, _digest(secret), host, now, created_by, scope, role))
         except IntegrityConflict:
             continue  # prefix collision, vanishingly rare; draw again
         return (f"{scope}_{prefix}_{secret}",
-                KeyInfo(prefix, host, now, created_by, None, None, scope))
+                KeyInfo(prefix, host, now, created_by, None, None, scope, role))
     raise RuntimeError("could not allocate a unique key prefix")
 
 
@@ -115,7 +130,7 @@ async def revoke_key(store: Store, prefix: str, now: float | None = None) -> boo
 
 async def list_keys(store: Store) -> list[KeyInfo]:
     rows = await store.fetch(
-        "SELECT prefix, host, created, created_by, revoked_at, last_used, scope "
+        "SELECT prefix, host, created, created_by, revoked_at, last_used, scope, role "
         "FROM ingest_keys ORDER BY id")
     return [KeyInfo(*r) for r in rows]
 
@@ -160,3 +175,32 @@ async def key_host(store: Store, key: str, scope: str = MARKER) -> tuple[str, st
             and revoked is None and row_scope == scope):
         return prefix, bound
     return None
+
+
+@dataclass(frozen=True)
+class ReadToken:
+    prefix: str
+    label: str
+    role: str
+
+
+async def verify_read_token(store: Store, key: str, now: float | None = None) -> ReadToken | None:
+    """The read token a bearer value names, or None for anything else: a wrong secret, a revoked
+    token, a key of another scope, or a malformed value. Last use is recorded at most once a
+    minute, so a polling script does not write on every request."""
+    parts = _split(key, READ_MARKER) if isinstance(key, str) else None
+    if parts is None:
+        return None
+    prefix, secret = parts
+    rows = await store.fetch(
+        "SELECT hash, host, revoked_at, scope, role, last_used FROM ingest_keys WHERE prefix = ?",
+        (prefix,))
+    stored, label, revoked, row_scope, role, last_used = (
+        rows[0] if rows else (_DUMMY_DIGEST, "", 1.0, "", "", None))
+    if not (hmac.compare_digest(stored, _digest(secret)) and revoked is None
+            and row_scope == READ_MARKER and role in READ_ROLES):
+        return None
+    at = time.time() if now is None else now
+    if last_used is None or at - last_used >= LAST_USED_EVERY_S:
+        await store.execute("UPDATE ingest_keys SET last_used = ? WHERE prefix = ?", (at, prefix))
+    return ReadToken(prefix, label, role)

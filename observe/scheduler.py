@@ -67,6 +67,7 @@ class Scheduler:
         self._recheck_overrides: dict[str, dict[str, Any]] = {}
         self._recheck_loaded = False
         self.forecasts: dict[str, Forecast] = {}
+        self.forecast_rev = 0  # counts forecast refreshes, so the API can tell they changed
         self._locks = {m.slug: asyncio.Lock() for m in self.monitors}
         self._sem = asyncio.Semaphore(config.server.max_concurrency)
         self._tasks: list[asyncio.Task[None]] = []
@@ -75,6 +76,14 @@ class Scheduler:
         # dependency refresh, so that ageing and new links reach the rollup without a request.
         self.hooks: list[Callable[[], Awaitable[Any]]] = []
         self._collectors: list[tuple[str, Any]] = []
+
+    def fingerprint(self) -> int:
+        """A cheap value that changes whenever anything a monitor view shows changes. The state
+        lives in memory and changes after its poll was stored, so the change counters alone
+        cannot tell the API that a cached page is stale; this can."""
+        return hash((self.forecast_rev, tuple(
+            (slug, st.state.value, st.degraded, st.since, st.last_at, st.bad, st.good, st.replies)
+            for slug, st in self.states.items())))
 
     # ---------------------------------------------------------------- polling
 
@@ -248,6 +257,7 @@ class Scheduler:
                 continue
             series = await self.store.hourly_series(m.slug, fc.lookback_days)
             self.forecasts[m.slug] = project(series, th, fc)
+        self.forecast_rev += 1
 
     # ------------------------------------------------------------------ loops
 

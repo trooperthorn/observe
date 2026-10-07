@@ -1,4 +1,4 @@
-"""GET /api/hosts and /api/hosts/{host}: shape per component, status labels, missing
+"""GET /api/v2/hosts and /api/v2/hosts/{host}: shape per component, status labels, missing
 and stale sources, and the login requirement."""
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from observe import auth
+from observe.api.models import rfc3339
 from observe.alerts import Alerter
 from observe.ingest.boot import classify_events
 from observe.ingest.schema import Batch
@@ -113,7 +114,7 @@ def env(tmp_path):
 
 
 def detail(env: Env, host: str = "nas01") -> dict[str, Any]:
-    r = env.client.get(f"/api/hosts/{host}")
+    r = env.client.get(f"/api/v2/hosts/{host}")
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -125,13 +126,13 @@ def reading(d: dict[str, Any], section: str, metric: str, **labels: str) -> dict
 
 def test_login_is_required_for_every_host_route(env):
     env.push(batch(samples=FULL, sources=FULL_SOURCES))
-    for path in ("/api/hosts", "/api/hosts/nas01"):
+    for path in ("/api/v2/hosts", "/api/v2/hosts/nas01"):
         r = env.client.get(path)
         assert r.status_code == 401
-        assert "www-authenticate" not in r.headers
+        assert "basic" not in r.headers.get("www-authenticate", "").lower()
     env.login()
-    assert env.client.get("/api/hosts").status_code == 200
-    assert env.client.get("/api/hosts/nas01").status_code == 200
+    assert env.client.get("/api/v2/hosts").status_code == 200
+    assert env.client.get("/api/v2/hosts/nas01").status_code == 200
 
 
 def test_basic_auth_does_not_open_host_routes(tmp_path):
@@ -139,8 +140,8 @@ def test_basic_auth_does_not_open_host_routes(tmp_path):
     try:
         e.cfg.server.basic_auth_user = "ui"
         e.cfg.server.basic_auth_password = "uipass"
-        assert e.client.get("/api/hosts", auth=("ui", "uipass")).status_code == 401
-        assert e.client.get("/api/hosts/nas01", auth=("ui", "uipass")).status_code == 401
+        assert e.client.get("/api/v2/hosts", auth=("ui", "uipass")).status_code == 401
+        assert e.client.get("/api/v2/hosts/nas01", auth=("ui", "uipass")).status_code == 401
     finally:
         e.close()
 
@@ -171,7 +172,7 @@ def test_json_shape_per_component(env):
     assert len(d["zfs"]["items"]) == 2
     assert {i["metric"] for i in d["disks"]["items"]} == {"device_status", "temp"}
     assert {i["metric"] for i in d["ups"]["items"]} == {"battery_charge_pct", "ups_status_flag"}
-    assert d["boot"] == {"boot_id": "b", "boot_ts": NOW - 100, "clean_shutdown": False}
+    assert d["boot"] == {"boot_id": "b", "boot_ts": rfc3339(NOW - 100), "clean_shutdown": False}
     assert [e["kind"] for e in d["events"]] == ["boot.unclean_shutdown", "md.degraded"]
     assert d["events"][0]["detail"]["classification"] == "crash"
     assert [e["kind"] for e in d["alerts"]["items"]] == ["boot.unclean_shutdown"]
@@ -251,15 +252,15 @@ def test_listing_unknown_host_and_monitor_state(tmp_path):
                      sources=[{"source": "hwmon", "available": True}]))
         e.push(batch("other", samples=[s("cpu", "load", 1.0)]))
         e.login()
-        assert e.client.get("/api/hosts/nope").status_code == 404
-        rows = {r["host"]: r for r in e.client.get("/api/hosts").json()["hosts"]}
+        assert e.client.get("/api/v2/hosts/nope").status_code == 404
+        rows = {r["host"]: r for r in e.client.get("/api/v2/hosts").json()["items"]}
         assert set(rows) == {"nas01", "other", "ghost"}
         assert rows["nas01"]["monitored"] and rows["nas01"]["monitor"]["name"] == "NAS"
         assert rows["other"]["monitored"] is False and rows["other"]["monitor"] is None
         assert rows["ghost"]["heard"] is False and rows["ghost"]["status"] == "critical"
         assert rows["nas01"]["sections"]["temperatures"] == "warning"  # YAML limit beats default
         assert rows["nas01"]["states"]["ups"] == "not_reported"
-        ghost = e.client.get("/api/hosts/ghost").json()
+        ghost = e.client.get("/api/v2/hosts/ghost").json()
         assert ghost["heard"] is False and ghost["last_seen"] is None
         assert "no batch received yet" in ghost["status_reason"]
     finally:
@@ -269,18 +270,18 @@ def test_listing_unknown_host_and_monitor_state(tmp_path):
 def test_host_page_is_static_and_dashboard_links_to_it(env):
     r = env.client.get("/host")
     assert r.status_code == 200 and "host.js" in r.text
-    assert "/api/hosts" in env.client.get("/static/host.js").text
+    assert "/api/v2/hosts/" in env.client.get("/static/host.js").text
     assert "hostlink" in env.client.get("/static/app.js").text
 
 
 def test_host_name_with_slash_opens_in_api_and_page_link(env):
     env.push(batch(host="rack/nas 01?#%", samples=FULL, sources=FULL_SOURCES))
     env.login()
-    assert [h["host"] for h in env.client.get("/api/hosts").json()["hosts"]] == ["rack/nas 01?#%"]
+    assert [h["host"] for h in env.client.get("/api/v2/hosts").json()["items"]] == ["rack/nas 01?#%"]
     from urllib.parse import quote
-    r = env.client.get(f"/api/hosts/{quote('rack/nas 01?#%', safe='')}")
+    r = env.client.get(f"/api/v2/hosts/{quote('rack/nas 01?#%', safe='')}")
     assert r.status_code == 200 and r.json()["host"] == "rack/nas 01?#%"
-    assert env.client.get("/api/hosts/rack/nas 01?#%".replace("?#%", "%3F%23%25")).status_code == 200
+    assert env.client.get("/api/v2/hosts/rack/nas 01?#%".replace("?#%", "%3F%23%25")).status_code == 200
     assert env.client.get("/host?name=rack%2Fnas%2001").status_code == 200
 
 

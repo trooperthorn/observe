@@ -154,7 +154,7 @@ def test_host_page_shows_cpu_memory_disks_and_interface(tmp_path):
         assert reading(d, "network", "if_up", interface="2")["value"] == 1.0
         assert reading(d, "network", "if_speed_mbps", interface="2")["value"] == 1000.0
         assert d["disks"]["status"] == "warning" and d["status"] == "warning"
-        listed = {h["host"]: h for h in env.client.get("/api/hosts").json()["hosts"]}
+        listed = {h["host"]: h for h in env.client.get("/api/v2/hosts").json()["items"]}
         assert listed["homeassistant"]["sections"]["disks"] == "warning"
     finally:
         env.close()
@@ -164,7 +164,7 @@ def test_snmp_host_is_listed_before_any_poll_and_a_failed_poll_stores_nothing(tm
     env = Env(tmp_path, snmp_monitors("ha-probe"))
     try:
         env.login()
-        listed = {h["host"]: h for h in env.client.get("/api/hosts").json()["hosts"]}
+        listed = {h["host"]: h for h in env.client.get("/api/v2/hosts").json()["items"]}
         assert listed["ha-probe"]["heard"] is False
         chk = wire(poll_cfg("ha-probe"), 0, env.store, fixture={})
         assert asyncio.run(chk.run()).result is Result.FAIL

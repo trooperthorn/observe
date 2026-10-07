@@ -79,7 +79,7 @@ def test_good_login_sets_session_and_reads(env):
     assert r.status_code == 200
     assert r.json()["username"] == "alice" and r.json()["is_admin"] is False
     # A session alone opens the read API even though basic auth is configured.
-    assert env.client.get("/api/monitors").status_code == 200
+    assert env.client.get("/api/v2/monitors").status_code == 200
     assert env.client.get("/api/session").json()["username"] == "alice"
     assert env.rows("SELECT kind, actor FROM audit WHERE kind='login_ok'") == [("login_ok", "alice")]
 
@@ -213,9 +213,11 @@ def test_logout_clears_cookie_with_same_flags(env):
 
 def test_basic_auth_reads_but_never_reaches_admin_routes(env):
     env.user("root", admin=True)
-    assert env.client.get("/api/monitors", headers=BASIC).status_code == 200
+    # Basic auth opens /metrics only. The v2 read API takes a session or a read token.
     assert env.client.get("/metrics", headers=BASIC).status_code == 200
-    assert env.client.get("/api/monitors").status_code == 401
+    assert env.client.get("/metrics").status_code == 401
+    assert env.client.get("/api/v2/monitors", headers=BASIC).status_code == 401
+    assert env.client.get("/api/v2/monitors").status_code == 401
     for method, path in ADMIN_ROUTES:
         for headers in (BASIC, {**BASIC, "X-CSRF-Token": "0" * 64}):
             r = env.client.request(method, path, headers=headers,
@@ -236,7 +238,8 @@ def test_admin_user_with_basic_credentials_header_still_needs_session(env):
 
 def test_without_basic_auth_configured_reads_stay_open(tmp_path):
     e = Env(tmp_path, basic=False)
-    assert e.client.get("/api/monitors").status_code == 200
+    assert e.client.get("/metrics").status_code == 200
+    assert e.client.get("/api/v2/monitors").status_code == 401  # v2 is closed unless anonymous_read
     assert e.client.get("/api/admin/users").status_code == 401
     e.client.close()
     e.store.close()

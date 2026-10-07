@@ -27,7 +27,7 @@ def _client(tmp_path: Path) -> TestClient:
     path = str(tmp_path / "d.db")
     store = Store(path)
     cfg = make_config([{"name": HOSTILE, "type": "ping", "host": "10.0.0.2",
-                        "group": "<b>core</b>"}], server={"db_path": path})
+                        "group": "<b>core</b>"}], server={"db_path": path, "anonymous_read": True})
     app = create_app_for(cfg, store)
     return TestClient(app, base_url="https://testserver")
 
@@ -52,7 +52,7 @@ def test_dashboard_page_has_every_id_and_loads_the_modules_in_order(tmp_path: Pa
 
 def test_hostile_monitor_name_travels_api_to_page_as_text(tmp_path: Path):
     client = _client(tmp_path)
-    mons = client.get("/api/monitors").json()["monitors"]
+    mons = client.get("/api/v2/monitors").json()["items"]
     assert mons[0]["name"] == HOSTILE and mons[0]["group"] == "<b>core</b>"
     # The page is static, so the name never appears in markup; the script only writes text.
     assert HOSTILE not in client.get("/").text
@@ -79,26 +79,26 @@ def test_dashboard_css_uses_tokens_only():
     assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(", css)
 
 
-def test_api_monitors_reports_degraded_and_held_child(tmp_path: Path):
+def test_v2_monitors_reports_degraded_and_held_child(tmp_path: Path):
     from observe.state import State
     path = str(tmp_path / "d.db")
     store = Store(path)
     cfg = make_config([{"name": "core", "type": "ping", "host": "10.0.0.1"},
                        {"name": "edge", "type": "ping", "host": "10.0.0.2",
-                        "depends_on": ["core"]}], server={"db_path": path})
+                        "depends_on": ["core"]}], server={"db_path": path, "anonymous_read": True})
     sched = Scheduler(cfg, store, Alerter(cfg))
     from observe.web import create_app
     client = TestClient(create_app(cfg, store, sched, Alerter(cfg)),
                         base_url="https://testserver")
     core = sched.states["core"]
     core.state, core.degraded = State.WARN, True
-    by = {m["slug"]: m for m in client.get("/api/monitors").json()["monitors"]}
+    by = {m["slug"]: m for m in client.get("/api/v2/monitors").json()["items"]}
     assert by["core"]["degraded"] is True and by["core"]["held_by"] is None
     assert by["edge"]["degraded"] is False and by["edge"]["held_by"] == "core"
     core.state, core.degraded = State.DOWN, False
     edge = sched.states["edge"]
     edge.state = State.DOWN
-    by = {m["slug"]: m for m in client.get("/api/monitors").json()["monitors"]}
+    by = {m["slug"]: m for m in client.get("/api/v2/monitors").json()["items"]}
     assert by["edge"]["blocked_by"] == "core" and by["edge"]["held_by"] is None
     assert by["edge"]["effective_state"] == "unreachable"
 

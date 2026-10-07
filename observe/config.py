@@ -745,6 +745,16 @@ class ServerConfig(Strict):
     # The address install commands tell hosts to call (docs/GUI-DESIGN.md section 3.10). When it
     # is unset, an admin confirms one in the Add host wizard. The request's Host header is never used.
     public_url: str | None = None
+    # The /api/v2 read API (docs/DATA-API-DESIGN.md section 4). Reads need a session or a read
+    # token unless anonymous_read is on, and even then the audit, admin and Home Assistant
+    # detail routes still need a session. Requests per second per principal (a session user,
+    # a token, or the peer for an anonymous reader), with a burst allowance.
+    anonymous_read: bool = False
+    api_rate_per_second: float = Field(default=20.0, gt=0)
+    api_burst: int = Field(default=40, ge=1)
+    # How long a session or token lookup is remembered, so an unchanged page can be answered
+    # with a 304 without a database read. A revoked session or token stops working within this.
+    api_auth_cache_s: float = Field(default=5.0, ge=0, le=60)
 
     @field_validator("public_url")
     @classmethod

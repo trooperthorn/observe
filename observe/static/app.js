@@ -7,6 +7,7 @@ import { statusChip, statusIcon } from "/static/js/chips.js";
 import { stateInfo } from "/static/js/chip-states.js";
 import { applyLayout, initTiles, setDeclared } from "/static/js/tiles.js";
 import { groupTile } from "/static/js/tiles-logic.js";
+import { getAll, getJson, seconds } from "/static/js/v2.js";
 
 const ORDER = { down: 0, unreachable: 1, warn: 2, pending: 3, up: 4 };
 const expanded = new Set();
@@ -36,7 +37,7 @@ function setKpi(id, value, sub, alert) {
 
 function ago(ts) {
   if (!ts) return "never";
-  const s = Math.max(0, Date.now() / 1000 - ts);
+  const s = Math.max(0, Date.now() / 1000 - seconds(ts));
   if (s < 90) return `${Math.round(s)}s ago`;
   if (s < 5400) return `${Math.round(s / 60)}m ago`;
   if (s < 129600) return `${Math.round(s / 3600)}h ago`;
@@ -44,7 +45,7 @@ function ago(ts) {
 }
 
 function fmtTime(ts) {
-  return new Date(ts * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
+  return new Date(seconds(ts) * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
 }
 
 function fmtVal(m) {
@@ -142,19 +143,37 @@ function drawSpark(svg, points) {
   svg.appendChild(title);
 }
 
+// The points of the last day for the sparkline: the value (or the latency) per bucket, and a bucket
+// that held a failed or warning poll is marked, from the monitor.result series.
+function sparkPoints(body) {
+  const by = (name) => body.series.find((s) => s.metric === name);
+  const main = by("monitor.value") || by("monitor.latency");
+  const result = new Map(((by("monitor.result") || {}).points || []).map((p) => [p[0], p[2]]));
+  const base = main ? main.points : ((by("monitor.result") || {}).points || []);
+  return base.map((p) => {
+    const worst = result.get(p[0]);
+    return { ts: p[0], value: main ? p[1] : null, result: worst >= 2 ? "fail" : worst >= 1 ? "warn" : "ok" };
+  });
+}
+
 async function loadHistory(slug, node) {
   try {
-    const r = await fetch(`/api/monitors/${encodeURIComponent(slug)}/history?hours=24`);
-    if (!r.ok) return;
-    const h = await r.json();
-    drawSpark(node.querySelector(".spark"), h.points);
-    node.querySelector(".avail").textContent = h.availability == null
+    const id = encodeURIComponent(slug);
+    const [mon, body, events] = await Promise.all([
+      getJson(`/api/v2/monitors/${id}`),
+      getJson(`/api/v2/metrics/query?metric=monitor.*&resource=${id}&kind=monitor&from=-24h&agg=avg,max`),
+      getJson(`/api/v2/events?resource=${id}&kind=monitor&limit=8`),
+    ]);
+    drawSpark(node.querySelector(".spark"), sparkPoints(body));
+    node.querySelector(".avail").textContent = mon.availability_24h == null
       ? "no polls in the last 24h"
-      : `24h availability ${h.availability}% over ${h.points.length} polls`;
+      : `24h availability ${mon.availability_24h}%`;
     const list = node.querySelector(".mon-events");
-    list.replaceChildren(...h.events.slice(0, 8).map((e) => {
+    list.replaceChildren(...events.items.map((e) => {
       const li = el("li");
-      li.append(el("span", "when", fmtTime(e.ts)), `${e.previous} → ${e.current}: ${e.message}`);
+      const a = e.attributes;
+      li.append(el("span", "when", fmtTime(e.ts)),
+        `${a["observe.monitor.state.previous"]} → ${a["observe.monitor.state"]}: ${e.body}`);
       return li;
     }));
   } catch (_) { /* transient; next refresh retries */ }
@@ -260,13 +279,19 @@ function drawDashboard(data) {
     (bad.length ? ` · alert delivery failing: ${bad.map(([n, a]) => `${n} (${a.last_error})`).join("; ")}` : "");
 }
 
+function eventText(e) {
+  const a = e.attributes;
+  if (e.event_name === "observe.monitor.transition") {
+    return `${e.resource.name}: ${a["observe.monitor.state.previous"]} → ${a["observe.monitor.state"]} (${e.body})`;
+  }
+  return `${e.resource.name}: ${e.event_name} (${e.body})`;
+}
+
 async function renderEvents() {
-  const r = await fetch("/api/events?limit=25");
-  if (!r.ok) return;
-  const evs = await r.json();
-  document.getElementById("events").replaceChildren(...evs.map((e) => {
+  const page = await getJson("/api/v2/events?limit=25");
+  document.getElementById("events").replaceChildren(...page.items.map((e) => {
     const li = el("li");
-    li.append(el("span", "when", fmtTime(e.ts)), `${e.monitor}: ${e.previous} → ${e.current} (${e.message})`);
+    li.append(el("span", "when", fmtTime(e.ts)), eventText(e));
     return li;
   }));
 }
@@ -286,14 +311,13 @@ async function renderFindings() {
   }));
 }
 
-// Hosts enrolled in the console that have not sent a batch yet. The list needs a session, so a
-// viewer on basic auth or an open dashboard simply sees no panel.
+// Hosts enrolled in the console that have not sent a batch yet. The list needs a session or a
+// read token, so an anonymous reader simply sees no panel.
 async function renderWaiting() {
   const panel = document.getElementById("waiting-panel");
   let list = [];
   try {
-    const r = await fetch("/api/hosts");
-    if (r.ok) list = (await r.json()).waiting || [];
+    list = (await getJson("/api/v2/waiting-hosts")).items;
   } catch (_) { list = []; }
   panel.hidden = list.length === 0;
   document.getElementById("waiting").replaceChildren(...list.map((w) => {
@@ -314,12 +338,20 @@ async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
-    const r = await fetch("/api/monitors");
-    if (r.ok) { lastData = await r.json(); render(lastData); }
+    const [monitors, groups, status] = await Promise.all([
+      getAll("/api/v2/monitors"), getAll("/api/v2/groups"), getJson("/api/v2/status"),
+    ]);
+    lastData = {
+      version: status.version, monitors,
+      groups: Object.fromEntries(groups.map((g) => [g.name, g])),
+      alerts: Object.fromEntries(status.alerts.map((a) => [a.name, a])),
+    };
+    render(lastData);
     await renderEvents();
     await renderFindings();
     await renderWaiting();
-  } catch (_) {
+  } catch (e) {
+    if (e.status === 401) { window.location.assign("/login"); return; }
     document.getElementById("footer").textContent = "observe unreachable, retrying";
   } finally {
     refreshing = false;

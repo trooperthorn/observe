@@ -301,6 +301,16 @@ MAP_TABLES = (
 ) WITHOUT ROWID""",
 )
 
+# Read tokens (docs/DATA-API-DESIGN.md section 4.7): a key of scope wpr carries the role it reads
+# with, viewer or operator. The column is empty for every other scope.
+def _add_key_role(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(ingest_keys)")}
+    if "role" not in columns:
+        db.execute("ALTER TABLE ingest_keys ADD COLUMN role TEXT NOT NULL DEFAULT ''")
+
+
+KEY_ROLE_TABLES = (_add_key_role,)
+
 # The step that creates the summary levels. TimescaleDB runs its own version of it.
 ROLLUP_STEP = 17
 
@@ -325,6 +335,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     # TimescaleDB runs its own version of this step.
     17: ROLLUP_TABLES + METRIC_VIEWS,
     18: MAP_TABLES,
+    19: KEY_ROLE_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

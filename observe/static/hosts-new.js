@@ -318,8 +318,8 @@ $("again").addEventListener("click", () => {
   if (!me.is_admin) { notAdmin($("page"), "Adding a host"); return; }
   csrf = me.csrf;
   try {
-    const list = await api("GET", "/api/hosts");
-    known = new Set(list.hosts.map((h) => h.host || h.name));
+    const list = await api("GET", "/api/v2/hosts?limit=500");
+    known = new Set(list.items.map((h) => h.host || h.name));
   } catch (e) {
     if (e.message !== "not signed in") showError(msg, e.message);
   }

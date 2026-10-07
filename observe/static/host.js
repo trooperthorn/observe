@@ -35,7 +35,7 @@ function ago(s) {
 }
 
 function fmtTime(ts) {
-  return new Date(ts * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
+  return new Date((typeof ts === "number" ? ts : Date.parse(ts) / 1000) * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
 }
 
 function fmtValue(i) {
@@ -204,7 +204,7 @@ async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
-    const r = await fetch(`/api/hosts/${encodeURIComponent(name)}`);
+    const r = await fetch(`/api/v2/hosts/${encodeURIComponent(name)}`);
     if (r.status === 401) { location.assign("/login"); return; }
     if (r.status === 404) { page.replaceChildren(el("p", null, "Unknown host.")); return; }
     if (r.ok) render(await r.json());

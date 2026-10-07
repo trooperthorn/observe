@@ -481,6 +481,8 @@ Each report creates one log record and gauges on the port resource. Gauges carry
 | `/api/v2/resources/{id}` | GET | one resource with attributes and series summary | `resources`, `series` |
 | `/api/v2/hosts` | GET | host summaries: grade, last_seen, sources, key latest values | `host_state`, `latest` |
 | `/api/v2/hosts/{name}` | GET | one host view (replaces `/api/hosts/{host}`) | `host_state`, `latest`, `logs` (last 50) |
+| `/api/v2/waiting-hosts` | GET | enrolled hosts that have not sent a batch (added in slice r5-api-v2-core) | `enrolments`, `hosts` |
+| `/api/v2/status` | GET | the Observe version and the delivery state of each alert target (added in slice r5-api-v2-core) | scheduler and alerter memory |
 | `/api/v2/hosts/{name}/settings` | GET, PATCH | host settings (admin) | existing host settings |
 | `/api/v2/metrics` | GET | catalogue: metric names, units, types, series counts, `attr` keys | `series` |
 | `/api/v2/metrics/query` | GET, POST | time series query (below) | `samples`, `rollup_5m`, `rollup_1h` |
@@ -552,7 +554,7 @@ Types: `validation` 400, `unauthenticated` 401, `forbidden` 403, `not-found` 404
 * **Read tokens** for scripts: a new key scope `read` with prefix `wpr_` in `ingest_keys`, created by an admin, optionally restricted to a list of resource kinds and to read-only roles. `Authorization: Bearer wpr_...`. Stored as SHA-256 digest like the other keys. `last_used` updated at most once per 60 s.
 * **Roles**: `viewer` (all GETs except audit and admin), `operator` (plus monitor pause and finding ack), `admin` (everything). Read tokens are `viewer` or `operator`; never `admin`.
 * **Open dashboard mode**: today read routes are open when basic auth is unset (review section 3). v2 keeps this only behind an explicit `server.anonymous_read: true` (default false), and even then `audit`, `admin` and `ha` detail require a session. The legacy routes keep their current behaviour until removed.
-* Ingest keys (`wpi_`), control keys (`wpc_`) and field keys (`wpf_`) are not accepted on `/api/v2` reads.
+* Ingest keys (`wpi_`), control keys (`wpc_`) and field keys (`wpf_`) are not accepted on `/api/v2` reads, and neither is HTTP basic auth, which now opens only `/metrics` and the page shells. A read token is never accepted by ingest.
 
 ### 4.8 Rate limits
 
@@ -561,7 +563,7 @@ Token bucket per principal (session user or token) and per peer for anonymous: 2
 ### 4.9 Versioning and deprecation of /api
 
 * `/api/v2` is stable: additive changes only (new fields, new resources, new optional parameters). A breaking change means `/api/v3`.
-* Legacy `/api/*` read routes get `Deprecation: true`, `Sunset: <date>` and `Link: </api/v2/...>; rel="successor-version"` headers in the release that ships the v2 UI, and are removed two releases or 90 days later, whichever is later. Their handlers are reimplemented as thin adapters over the v2 services in the meantime so they also stop scanning raw samples.
+* *Superseded by section 11 and built in slice r5-api-v2-core:* the legacy `/api/*` read routes for monitors, groups, forecasts, events, monitor history and hosts were removed outright, with no adapter, no `Deprecation` or `Sunset` headers and no window. The remaining reads (map, ports, findings, audit, plugin list, session) keep their routes until slices O-7 and O-9 move them.
 * Ingest routes (`/internal/v1/ingest`, `/api/ingest`, `/api/v1/field-reports`) and the control API (`/api/v1/control/*`) are not part of v2 and follow the producer window in section 7.
 
 ### 4.10 Plugin API resources
@@ -581,6 +583,54 @@ def register_api(api: ApiRegistry) -> None:
 * A plugin declares its change domains at load time; writes it submits bump those domains.
 * The plugin's models appear in the OpenAPI schema under its tag; the committed schema check covers them.
 * `GET /api/v2/plugins` lists each plugin's resources and UI page manifest so the UI shell builds navigation from data.
+
+### 4.11 Built in slice r5-api-v2-core (O-6)
+
+`observe/api` implements this section for the monitors, groups, hosts, events and metrics
+resources and the change cursor. The design and its reasons are in `docs/ARCHITECTURE.md`, "The
+v2 read API"; the committed schema is `docs/openapi-v2.json` (`python -m observe.api.schema`
+writes it, a test compares it).
+
+What differs from the text above, and what is left:
+
+* **Mounting.** The API is a sub-application mounted at `/api/v2`, so the problem-details handlers
+  and the schema are its own. `ApiRegistry.resource` takes `domains`, `roles`, `tags`,
+  `paginate`, `filters`, `sparse`, `anonymous`, `cost`, `memory` (a fingerprint of in-memory
+  state for the ETag) and `etag`; a handler may ask for `ctx`, `db` (a read-only connection),
+  `page` and `filters`. A query model in `filters` is expanded into one query parameter per field,
+  because FastAPI flattens a query model only when it is the only query parameter.
+* **ETag.** It carries the full path and the query (not only the route), the role, the counters of
+  the declared domains and the memory fingerprint. A resource whose body depends on the clock adds
+  a time bucket: hosts 10 seconds, events and the metrics query 60 seconds. The monitors and
+  groups ETag uses `Scheduler.fingerprint`, because state changes in memory after its poll was
+  stored. The waiting-hosts resource sends no ETag, because enrolment writes bump no change
+  domain.
+* **Credentials.** Sessions and read tokens as in 4.7, with the role of a non-admin user fixed at
+  `viewer`. A lookup is remembered for `server.api_auth_cache_s` (5 seconds), which is what lets a
+  304 skip the database, and `last_seen` and a token's `last_used` are written at most once a
+  minute. Read tokens are rows of `ingest_keys` with a new `role` column (schema version 19),
+  created with `POST /api/admin/keys` and `{"scope": "wpr", "role": "viewer"}`.
+* **Rate limits.** A token bucket per principal (`server.api_rate_per_second`, `api_burst`; a
+  metrics query costs 5) and a separate small allowance of failed credentials per peer.
+* **Events.** Until the `logs` table exists the feed merges `events` (monitor transitions) and
+  `host_events`. The cursor holds the time, the source and the sort key; two transitions of one
+  monitor at the same instant share a key, so a page boundary can fall between them.
+* **Metrics.** The catalogue groups by scope and metric, because a metric name is only unique
+  inside its scope until the normalizer exists. The query follows section 10.2: raw below a
+  300 second step, then the 5 minute, hourly and daily levels, moving to a coarser level when the
+  finer one no longer holds the start of the range, always with min, max and avg and never more
+  than 1,000 points per series or 50 series. `match[key]=value`, `match[key]!=value` and
+  `match[key]=~regex` select by point attribute (a regular expression is limited to 64 characters
+  with no repeated groups, back references or look around, instead of a timeout).
+* **Not done.** A query uses one level for the whole range instead of the finest level that covers
+  each bucket; `agg=rate` is refused because no sum series are stored yet, and `agg=last` works
+  only on the raw level, because the summary levels keep no last value; a read token cannot be
+  limited to resource kinds; `PATCH` on monitors and the operator-only resources, `/session`,
+  `/resources`, `/plugins`, the map, ports, findings, audit and admin resources and the plugin
+  resources of UniFi, Home Assistant, Pockethernet and control belong to slices O-7 and O-9; the
+  JavaScript client of section 5 (`api.js` with ETag caching, the poller and `/changes`) is O-9, and
+  the pages meanwhile use `static/js/v2.js`, which only fetches and follows cursors; plugin
+  resources are not part of the committed schema, because it is built from the core alone.
 
 ---
 
@@ -615,7 +665,7 @@ def register_api(api: ApiRegistry) -> None:
 
 ### 5.3 What stays
 
-HTML page shells, CSS, the existing page layout and widgets, the `vlist-core.js` virtual list from staged/unifi-ha, server-side login and CSRF, and the control plugin's signed command flow. Pages are migrated one at a time; until a page is migrated it keeps calling its legacy route, which by then is a thin adapter over the same services.
+HTML page shells, CSS, the existing page layout and widgets, the `vlist-core.js` virtual list from staged/unifi-ha, server-side login and CSRF, and the control plugin's signed command flow. Pages are migrated one at a time. The dashboard, the host page and the Add host and infrastructure admin pages already read from v2 (slice r5-api-v2-core); a page whose resource is not in v2 yet (map, port, audit and the findings panel) keeps its own route until slice O-7, because the legacy read routes have no adapters (section 11).
 
 ---
 
@@ -750,7 +800,7 @@ The SNMP, UniFi, HA and pull-check code produce normalized OTEL batches directly
 | Mapping disagreement between hostwatch and Observe | Medium | Split series | One shared mapping fixture tested in both repos; `legacy_key` makes both paths the same series |
 | Cardinality explosion from a misbehaving producer | Low | DB growth | Per-resource and global caps, metrics counted, partial success |
 | Read pool snapshot pins WAL growth | Low | WAL file grows | 2 s read deadline, `journal_size_limit`, checkpoint after prune |
-| UI migration stalls halfway with two APIs to maintain | Medium | Duplicate code | Legacy routes become adapters over v2 services early (slice O-6), so there is one implementation |
+| UI migration stalls halfway with two APIs to maintain | Medium | Duplicate code | Superseded by section 11: the legacy read routes were deleted in slice O-6, so there is one implementation; the pages that still call a legacy route (map, port, findings, audit) are listed in section 4.11 |
 | Anonymous read change surprises the owner | Low | Lockout of kiosk screens | `anonymous_read` setting, read tokens for kiosks, called out in release notes |
 | OTLP unit conversion mistakes (percent to ratio) | Medium | Wrong charts and thresholds | Golden tests, threshold config migration converts percent thresholds |
 | Exporter leaks sensitive data | Low | Data exposure | Audit excluded by default, attribute deny-list, secrets never in attributes |
@@ -772,7 +822,7 @@ Each slice is one agent session where possible, ends with green tests and a shor
 | O-3 (done in slice r3-state-and-rules.1: state from summaries, the section 10.3 re-check, dependency suppression) | `host_state`, `monitor_state`, pushed-host check and host views read summaries; results into series | Pushed-host poll under 1 ms on the 30-day DB; host grade equality old vs new view on fixtures |
 | O-4 (dropped by section 11) | Backfill job, verification, cut-over, legacy rename; size measurement | Resumable after kill at random chunk; verification catches a deliberately corrupted bucket; measured size before and after on the review's 30-day DB recorded |
 | O-5 (done in slice r4-one-transaction-feeds) | One-transaction feeds (UniFi classic and integration, Pockethernet derive) with SAVEPOINT per item; `map_nodes`, `map_edges`, `port_current` | 1 commit per cycle; failed device skipped and others kept; map statements per GET at most 5 |
-| O-6 | `/api/v2` core: ApiRegistry, auth (session, `wpr_` tokens, roles), problem details, ETag, `/changes`, rate limits, pagination; resources hosts, monitors, groups, events, metrics catalogue, latest, query; committed OpenAPI and CI diff check; legacy read routes become adapters with Deprecation headers | Schema snapshot test; 304 path opens no read connection; cursor pagination stable under inserts; query tier selection and 1,000 point cap; role matrix tests; 429 and 503 paths |
+| O-6 (done in slice r5-api-v2-core, without adapters) | `/api/v2` core: ApiRegistry, auth (session, `wpr_` tokens, roles), problem details, ETag, `/changes`, rate limits, pagination; resources hosts, monitors, groups, events, metrics catalogue, latest, query; committed OpenAPI and CI diff check; legacy read routes become adapters with Deprecation headers | Schema snapshot test; 304 path opens no read connection; cursor pagination stable under inserts; query tier selection and 1,000 point cap; role matrix tests; 429 and 503 paths |
 | O-7 | v2 map, ports, findings, audit, admin, plugins; plugin resources for UniFi, HA, Pockethernet, control | Per-resource contract tests generated from the schema; plugin cannot mount outside its prefix |
 | O-8 | OTLP ingest: minimal decoder, JSON path, gzip, auth mapping, limits, partial success, Idempotency-Key, clock skew | Conformance against `opentelemetry-proto` (dev dependency) fixtures for every message used; fuzzing; host binding rejects mismatched `host.name`; same data via legacy and OTLP yields identical series |
 | O-9 | UI client module and page migrations (dashboard, host, map, port, UniFi, HA, audit, admin), one page per sub-slice | JS unit tests for `api.js` (in-flight guard, 304 cache, backoff, hidden tab pause); Playwright or the existing `tests/js` harness per page against a fixture server |

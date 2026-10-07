@@ -61,7 +61,7 @@ class Env:
         assert r.status_code == 200
 
     def view(self, host: str = "homeassistant") -> dict:
-        r = self.client.get(f"/api/hosts/{host}")
+        r = self.client.get(f"/api/v2/hosts/{host}")
         assert r.status_code == 200, r.text
         return r.json()
 

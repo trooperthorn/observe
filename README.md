@@ -133,10 +133,9 @@ host" below.
 Dashboard: `http://<host>:8080/`. The Customize button lets each signed-in user reorder and hide
 the group cards and the capacity, findings and events cards with Up, Down and Hide controls; the
 layout is saved per user on the server (`GET`, `PUT` and `DELETE /api/ui/layout/dashboard`), so it
-follows the user between devices, and hiding a card never deletes data. Also `/api/monitors`,
-`/api/monitors/<slug>/history?hours=24`, `/api/groups`, `/api/forecasts`,
-`/api/events`, `/metrics`
-(Prometheus text format), and `/healthz`.
+follows the user between devices, and hiding a card never deletes data. Also the read API at
+`/api/v2` (see "The read API" below), `/metrics` (Prometheus text format, HTTP basic auth when
+configured), and `/healthz`.
 
 ## Target preparation
 
@@ -410,17 +409,17 @@ own are alerted then. An UP alert is sent only if its problem alert was.
 
 **Groups.** Each `group` shows the worst effective state of its members.
 `critical: false` lets a member degrade its group to WARN but not DOWN.
-Group state is on the dashboard, in `/api/groups`, and in `/metrics` as
+Group state is on the dashboard, in `GET /api/v2/groups`, and in `/metrics` as
 `observe_group_state`.
 
 ## Capacity forecasting
 
 Set `forecast: true` on any monitor that has numeric values and thresholds
 (disk, memory, interface utilization, UPS charge). Once an hour, and on
-demand at `/api/forecasts?refresh=true`, Observe averages the last
+demand when an admin refreshes them, Observe averages the last
 `lookback_days` of values into hourly buckets, fits a least-squares line, and
-projects when it crosses the warn and crit thresholds. Results appear on
-each monitor card, in a "Capacity outlook" list sorted by soonest crossing,
+projects when it crosses the warn and crit thresholds. Results appear in the `forecast` field of
+each monitor in `GET /api/v2/monitors`, on each monitor card, in a "Capacity outlook" list sorted by soonest crossing,
 and in `/metrics` as `observe_forecast_seconds{level="warn|crit"}`.
 
 Every projection carries its r-squared. Below `min_r2` it is labelled low
@@ -479,8 +478,8 @@ button, which calls `POST /api/hosts/{name}/enrolment/regenerate` (admin session
 and replaces the token, so the old command stops working. Once the token has been redeemed
 the wizard and the host settings page show "Command already used" with the same button,
 which then calls reissue (it asks first, because it revokes the keys the old command made).
-A host that has been enrolled but has not reported yet is listed under `waiting` in
-`GET /api/hosts` and in a "Waiting for first data" card on the dashboard, with a link to its
+A host that has been enrolled but has not reported yet is listed by
+`GET /api/v2/waiting-hosts` and in a "Waiting for first data" card on the dashboard, with a link to its
 enrolment page. See `docs/ARCHITECTURE.md`, "Host enrolment".
 
 ## Host settings
@@ -601,8 +600,8 @@ warning, 2 critical) for pushed hosts, alongside the usual state, effective
 state and group lines.
 
 Each pushed host also has a hardware page at `/host?name=HOST`, linked from its
-row on the dashboard (a card in its group, with a status chip). `GET /api/hosts` lists every host that has pushed (and
-every listed `pushed_host` monitor that never has), and `GET /api/hosts/HOST` (a host name may contain slashes; the route takes the rest of the path)
+row on the dashboard (a card in its group, with a status chip). `GET /api/v2/hosts` lists every host that has pushed (and
+every listed `pushed_host` monitor that never has), and `GET /api/v2/hosts/HOST` (a host name may contain slashes; the route takes the rest of the path)
 returns its CPU, memory, power, temperatures, fans with the fan controller
 state, RAID, ZFS pools, disks, UPS, recent alerts and events, boot state and
 sources. Every section and every reading is Good, Warning or Critical. The
@@ -612,8 +611,8 @@ so when data is missing: a reading with no value is a Warning and is never
 shown as zero, a reading or source older than the stale window is marked stale,
 a source that failed shows its reason, a source the agent says the host does not
 have is shown as not present without making the host look worse, and a host that
-has stopped pushing is Critical. These routes need a login session; basic auth
-does not open them. They only read; no action that changes a host exists.
+has stopped pushing is Critical. These routes need a login session or a read token;
+basic auth does not open them. They only read; no action that changes a host exists.
 
 Hosts set up through `/hosts/new` get their keys automatically. Ingest keys are also managed on the
 admin screen (below) or from the command line, which is the manual route for a host that cannot use
@@ -663,9 +662,9 @@ network. An account locks for 15 minutes after 5 failures, and logins are
 limited per peer address. Routes that change state need the session's CSRF
 token in an `X-CSRF-Token` header (`GET /api/session` returns it), and admin
 routes (everything under `/api/admin/` and `GET /api/audit`) also need an admin
-user. The optional basic auth is kept for the read-only API and `/metrics` and
-is never accepted for admin routes. A session also opens the read-only API. No
-action that changes a host exists yet.
+user. The optional basic auth is kept for `/metrics` and the page shells and is never
+accepted for admin routes or for the `/api/v2` read API. A session or a read token opens the
+read API. No action that changes a host exists yet.
 
 The admin screen is at `/admin`. It lists ingest keys and users, creates a key
 bound to one host name, revokes a key, creates a user, disables or enables a
@@ -877,6 +876,45 @@ and adds `config` links from the uplink port numbers and `lldp` links to neighbo
 already known switches. With that data a Pockethernet VLAN, speed or PoE result on the same port
 is compared with what the switch reports, and without it nothing is compared. The classic field
 names are unverified against a live console.
+
+## The read API
+
+Everything the console shows, and every script that reads Observe, uses `/api/v2`. The legacy read
+routes (`/api/monitors`, `/api/monitors/<slug>/history`, `/api/groups`, `/api/forecasts`,
+`/api/events`, `GET /api/hosts` and `GET /api/hosts/<host>`) were removed with no adapter and no
+deprecation period; use the table below. The schema is `docs/openapi-v2.json`, also served at
+`/api/v2/openapi.json`, and a test fails when the code and the file differ (regenerate with
+`python -m observe.api.schema`).
+
+| Resource | What it returns |
+| --- | --- |
+| `GET /api/v2/monitors`, `/monitors/{slug}`, `/monitors/{slug}/detail` | monitors with state, forecast and availability; `include=detail`, `state`, `group`, `type`, `q`, `sort=name,-since`, `fields=slug,state` |
+| `GET /api/v2/groups`, `/status` | group roll-up; the version and the delivery state of each alert target |
+| `GET /api/v2/hosts`, `/hosts/{name}`, `/waiting-hosts` | the hardware views, and enrolled hosts that have not reported |
+| `GET /api/v2/events` | monitor transitions and host events as log records, `resource`, `kind`, `event_name`, `severity_min`, `since`, `until` |
+| `GET /api/v2/metrics`, `/metrics/latest`, `/metrics/query` (and `POST`) | the catalogue, the newest points, and time series |
+| `GET /api/v2/changes?since=<cursor>&wait=25` | a long poll that says which change domains moved |
+
+Credentials. A console login (cookie) reads as `admin` or `viewer`. A script uses a read token: an
+admin creates one with `POST /api/admin/keys` and `{"host": "<label>", "scope": "wpr", "role":
+"viewer"}` (or `operator`; never `admin`), and the plaintext `wpr_...` appears once. Send it as
+`Authorization: Bearer wpr_...`. Ingest, field and control keys and HTTP basic auth are refused. With
+`server.anonymous_read: true` a caller with no credential reads at the viewer level, except the
+hardware inventory (`/hosts`), which always needs a login or a token.
+
+Behaviour. Lists are `{"items": [...], "next_cursor": "..." | null}`; pass the cursor back as
+`cursor` with the same filters (`limit` is 1 to 500, 100 by default). Times are RFC 3339 in
+responses; a query accepts RFC 3339, unix seconds, `now` or an offset such as `-24h`. Every
+response carries an `ETag`; send it as `If-None-Match` to get a `304` that costs no database read.
+Errors are RFC 9457 `application/problem+json`. A caller is limited to `server.api_rate_per_second`
+(a metrics query counts as five requests); over the limit the answer is `429` with `Retry-After`,
+and `503` with `Retry-After` when the database is busy.
+
+A metrics query picks the data level from its range and step: raw samples for a step under 300
+seconds, the 5 minute level under an hour, the hourly level under a day and the daily level above
+that, moving to a coarser level when the finer one no longer holds the start of the range. It
+returns min, max and average for a summarised level, at most 1,000 points per series (the step is
+raised to fit) and at most 50 series.
 
 ## Not implemented
 

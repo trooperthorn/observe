@@ -376,7 +376,7 @@ async def test_a_populated_version_17_database_gains_the_map_tables_and_fills_th
     raw = sqlite3.connect(path)
     for table in ("map_nodes", "map_edges", "port_current"):
         raw.execute(f"DROP TABLE {table}")
-    raw.execute("DELETE FROM schema_version WHERE version=18")
+    raw.execute("DELETE FROM schema_version WHERE version>=18")
     raw.commit()
     raw.close()
     s = open_storage(path, PLUGINS)

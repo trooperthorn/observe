@@ -26,6 +26,13 @@ server:
   # localhost. When unset, an admin confirms one in the Add host wizard. The request's Host
   # header is never used.
   # public_url: https://observe.lab.example:8443
+  # The /api/v2 read API. It takes a console login or a read token (wpr_, made by an admin in
+  # the key screen), never basic auth. Anonymous reads are off; turn them on only for a kiosk on
+  # a trusted network. The audit, admin and hardware inventory routes still need a login.
+  # anonymous_read: false
+  # api_rate_per_second: 20   # requests per second per login, token or (anonymous) peer
+  # api_burst: 40
+  # api_auth_cache_s: 5       # a revoked login or token stops working within this many seconds
   # Logins (create the first admin with --create-admin). Defaults shown.
   # session_idle_s: 1800
   # session_absolute_s: 43200

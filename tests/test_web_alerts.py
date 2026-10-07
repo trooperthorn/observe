@@ -27,11 +27,13 @@ def test_basic_auth_and_headers():
                               "db_path": ":memory:"})
     app, _ = app_for(cfg)
     c = TestClient(app)
-    assert c.get("/api/monitors").status_code == 401
+    assert c.get("/metrics").status_code == 401
     assert c.get("/healthz").status_code == 200
     tok = base64.b64encode(b"ops:s3cret").decode()
-    r = c.get("/api/monitors", headers={"Authorization": f"Basic {tok}"})
-    assert r.status_code == 200 and r.json()["monitors"][0]["state"] == "pending"
+    r = c.get("/metrics", headers={"Authorization": f"Basic {tok}"})
+    assert r.status_code == 200 and "observe_state" in r.text
+    # The v2 read API does not take basic auth: it needs a session or a read token.
+    assert c.get("/api/v2/monitors", headers={"Authorization": f"Basic {tok}"}).status_code == 401
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
     bad = base64.b64encode(b"ops:wrong").decode()
     assert c.get("/metrics", headers={"Authorization": f"Basic {bad}"}).status_code == 401
@@ -39,17 +41,20 @@ def test_basic_auth_and_headers():
 
 async def test_poll_records_history_and_metrics():
     cfg = make_config([{"name": "Loop Back", "type": "tcp", "host": "127.0.0.1", "port": 1,
-                        "group": 'lab"core', "recheck_window": 0}])
+                        "group": 'lab"core', "recheck_window": 0}],
+                      server={"anonymous_read": True, "db_path": ":memory:"})
     app, sched = app_for(cfg)
     res = await sched.poll_once(sched.monitors[0])
     assert res.result is Result.FAIL
     assert sched.states["loop-back"].state is State.DOWN
     c = TestClient(app)
-    hist = c.get("/api/monitors/loop-back/history").json()
-    assert hist["availability"] == 0 and hist["events"][0]["current"] == "down"
+    one = c.get("/api/v2/monitors/loop-back").json()
+    assert one["availability_24h"] == 0
+    events = c.get("/api/v2/events?resource=loop-back").json()["items"]
+    assert events[0]["attributes"]["observe.monitor.state"] == "down"
     metrics = c.get("/metrics").text
     assert 'observe_state{monitor="loop-back",group="lab\\"core",type="tcp"} 2' in metrics
-    assert c.get("/api/monitors/nope/history").status_code == 404
+    assert c.get("/api/v2/monitors/nope").status_code == 404
 
 
 @needs_mqtt
@@ -92,7 +97,7 @@ async def test_rollup_and_forecast_exposed_in_api_and_metrics():
          "depends_on": ["sw"], "recheck_window": 0},
         {"name": "disk", "type": "tcp", "host": "127.0.0.1", "port": 1, "forecast": True,
          "thresholds": {"direction": "above", "warn": 80, "crit": 90}},
-    ])
+    ], server={"anonymous_read": True, "db_path": ":memory:"})
     app, sched = app_for(cfg)
     await sched.poll_once(sched.by_slug["sw"])
     await sched.poll_once(sched.by_slug["srv"])
@@ -101,11 +106,13 @@ async def test_rollup_and_forecast_exposed_in_api_and_metrics():
         await sched.store.record("disk", now - (72 - h) * 3600,
                                  CheckResult(Result.OK, "", value=60 + 2 * h / 24))
     c = TestClient(app)
-    data = c.get("/api/monitors").json()
-    srv = next(m for m in data["monitors"] if m["slug"] == "srv")
+    data = c.get("/api/v2/monitors").json()
+    srv = next(m for m in data["items"] if m["slug"] == "srv")
     assert srv["effective_state"] == "unreachable" and srv["blocked_by"] == "sw"
-    assert data["groups"]["net"]["state"] == "down"
-    fc = c.get("/api/forecasts?refresh=true").json()["disk"]
+    groups = {g["name"]: g for g in c.get("/api/v2/groups").json()["items"]}
+    assert groups["net"]["state"] == "down" and groups["net"]["worst"] == ["sw"]
+    await sched.refresh_forecasts()
+    fc = next(m for m in c.get("/api/v2/monitors").json()["items"] if m["slug"] == "disk")["forecast"]
     # Hourly bucket midpoints shift the fit by up to half an hour, depending on
     # the minute the test runs, so allow for that around the true 7.0 days.
     assert fc["status"] == "projected" and 6.9 < (fc["warn_at"] - now) / 86400 < 7.6

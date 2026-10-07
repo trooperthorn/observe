@@ -228,6 +228,29 @@ async def load_session(store: Store, cfg: Config, token: str | None,
     return Session(uid, username, bool(is_admin), csrf_for(token))
 
 
+async def peek_session(store: Store, cfg: Config, token: str | None,
+                       now: float | None = None) -> tuple[Session, float, float] | None:
+    """Like load_session, but it writes nothing: (session, absolute expiry, last_seen) or None.
+    The /api/v2 reads use it so that a read never writes; they record last_seen themselves, at
+    most once a minute (observe/api/auth.py)."""
+    if not token or len(token) > 128:
+        return None
+    now = time.time() if now is None else now
+    rows = await store.fetch(
+        "SELECT s.expires, s.last_seen, s.revoked, u.id, u.username, u.is_admin, u.disabled "
+        "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash=?", (_digest(token),))
+    if not rows:
+        return None
+    expires, last_seen, revoked, uid, username, is_admin, disabled = rows[0]
+    if revoked or disabled or expires <= now or now - last_seen > cfg.server.session_idle_s:
+        return None
+    return Session(uid, username, bool(is_admin), csrf_for(token)), float(expires), float(last_seen)
+
+
+async def touch_session(store: Store, token: str, now: float) -> None:
+    await store.execute("UPDATE sessions SET last_seen=? WHERE id_hash=?", (now, _digest(token)))
+
+
 async def revoke_session(store: Store, token: str) -> None:
     await store.execute("UPDATE sessions SET revoked=1 WHERE id_hash=?", (_digest(token),))
 

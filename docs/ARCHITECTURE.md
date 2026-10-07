@@ -412,7 +412,7 @@ is itself in a re-check (`Rollup.degraded_parent`), the child's alert is held wi
 event; when the ancestor recovers, `_release_children` polls the child again and alerts if it
 still fails.
 
-The dashboard shows this. `/api/monitors` returns `degraded` for a monitor in its re-check and
+The dashboard shows this. `GET /api/v2/monitors` returns `degraded` for a monitor in its re-check and
 `held_by` (the name of the re-checking ancestor, null when none or when an ancestor is Down and
 `blocked_by` applies). `app.js` draws a Degraded chip, its own `degraded` role and colour tokens
 in the light and both dark blocks, instead of the plain Warning chip, and a "Alert held" note on
@@ -427,7 +427,7 @@ for the admin screen's confirm action in a later slice. The check
 rather than from a poll. It reads the newest sample per source, metric and
 label set through `Store.latest_host`, reading only samples from the last
 `max(stale_after, 900)` seconds (the `window` argument, served by the `(host, ts)` index, so the cost does not grow with
-retention; `GET /api/hosts` and `GET /api/hosts/{host}` use the same bound; a series silent for longer than the window is no longer listed, and when nothing is inside the window the single newest sample is returned so a quiet host still reads stale), grades each configured component Good,
+retention; `GET /api/v2/hosts` and `GET /api/v2/hosts/{host}` use the same bound; a series silent for longer than the window is no longer listed, and when nothing is inside the window the single newest sample is returned so a quiet host still reads stale), grades each configured component Good,
 Warning or Critical, and returns OK, WARN or FAIL for the worst one. Those go
 through `MonitorState.observe` like any other result, so `failures_to_down`
 confirmation applies before a host is DOWN or pages. No batch within
@@ -439,12 +439,12 @@ summary adapted from hostwatch's `integrations/summary.py` is the host views sec
 
 ## Host views
 
-The host page at `/host` is a static page too: `host.js` and `host-control.js` are ES modules, the Control section is a card inside `<main>`, and both use the shared chip, dialog and toast modules. The dashboard at `/` is a static page whose module script (`app.js`) builds the KPI row, availability tiles and group cards in the browser from `/api/monitors`, `/api/events` and `/api/infra/findings`, using the shared chip and DOM modules.
+The host page at `/host` is a static page too: `host.js` and `host-control.js` are ES modules, the Control section is a card inside `<main>`, and both use the shared chip, dialog and toast modules. The dashboard at `/` is a static page whose module script (`app.js`) builds the KPI row, availability tiles and group cards in the browser from `/api/v2/monitors`, `/api/v2/groups`, `/api/v2/status`, `/api/v2/events` and `/api/infra/findings`, using the shared chip and DOM modules. `static/js/v2.js` is the small reader the pages share (problem details as an Error with a status, `getAll` to follow `next_cursor`, and `seconds` to read an RFC 3339 time).
 
 Each pushed host has a page at `/host?name=HOST`, linked from the dashboard
-row of its `pushed_host` monitor. It is served by two routes, `GET /api/hosts`
-(one summary row per host) and `GET /api/hosts/{host:path}` (host names may contain slashes; the full document), both
-built by `observe/hostview.py` from the newest sample per series in the store.
+row of its `pushed_host` monitor. It is served by two v2 routes, `GET /api/v2/hosts`
+(one summary row per host, paged by name) and `GET /api/v2/hosts/{name:path}` (host names may contain slashes; the full document), both
+built by `observe/hostview.py` (through `observe/api/hosts.py`, which finds the monitor behind the host and writes the timestamps as RFC 3339) from the newest sample per series in the store.
 The sections are CPU, memory, power, temperatures, fans with the fan controller
 state, RAID, ZFS pools, disks, UPS, Home Assistant, containers, alerts and events, plus the boot state and
 the list of sources. Each section and each reading carries Good, Warning or
@@ -563,9 +563,10 @@ rate limited per account and per source address and are recorded.
 
 Two roles exist. A **viewer** can read dashboards and host views. An
 **admin** can also manage users and ingest keys and confirm pushed hosts.
-The existing optional basic auth is kept, by owner decision, for the read-only
-API and `/metrics` only. It can never reach admin, ingest-key, user or future
-action routes, which require a session login with CSRF.
+The existing optional basic auth is kept, by owner decision, for `/metrics` and the
+static page shells only. It can never reach admin, ingest-key, user or future
+action routes, which require a session login with CSRF, and it does not open the
+`/api/v2` read API (see "The v2 read API" below).
 
 Implemented in `observe/auth.py` and the routes in `observe/web.py`. The
 session identifier and CSRF token are never stored as plaintext: the table
@@ -573,8 +574,8 @@ holds a SHA-256 digest of the identifier, and the CSRF token is an HMAC of the
 identifier, recomputed on each request. Four FastAPI dependencies enforce the
 boundary: `session` (any user), `mutating` (session plus CSRF), `admin`, and
 `admin_mutating`. None of them looks at the Authorization header, so basic
-auth credentials get 401 there. Read routes accept a session or, when
-configured, basic auth. Login is `POST /api/login` (JSON), logout is
+auth credentials get 401 there. `/metrics` accepts a session or, when
+configured, basic auth; the v2 read routes accept a session or a read token. Login is `POST /api/login` (JSON), logout is
 `POST /api/logout`, and `GET /api/session` returns the current user and token.
 The first admin is created from the command line (`--create-admin`). Failed
 logins lock the account (`login_max_failures`, `login_lock_s`) and are limited
@@ -676,8 +677,8 @@ name. With no address, create, regenerate, reissue and the task commands answer 
 A guard that refuses reports to `POST /api/enrol/guard` (token, guard step, the name the machine
 gave itself, cut to host name characters). `enrol.record_guard_failure` keeps a fixed-text reason
 such as `ran on ai-pi, expected MediaIn-SVR` on the enrolment row without spending the token;
-progress returns it as `guard`, with `token_state` (`valid`, `used` or `expired`). `GET /api/hosts`
-also returns `waiting`: enrolled hosts with the agent chosen that have no `hosts` row yet
+progress returns it as `guard`, with `token_state` (`valid`, `used` or `expired`). `GET /api/v2/waiting-hosts`
+returns the enrolled hosts with the agent chosen that have no `hosts` row yet
 (`enrol.waiting_hosts`), which the dashboard lists as "waiting for first data" with a link to
 the host's enrolment page.
 
@@ -706,8 +707,7 @@ steps `script` (fetched), `data` (first batch, which is the `hosts` row),
 and `ready`, each `done`, `waiting`, `skipped` or `expired`, with the time.
 `state` is `waiting`, `script_fetched`, `first_data`, `control_pulled`, `ready`
 or `expired`. A token that was never fetched reads as expired from 30 minutes
-after creation. The route is registered before `/api/hosts/{host:path}`, which
-would otherwise answer it.
+after creation.
 
 `POST /api/hosts/{name}/enrolment/regenerate` (admin session and CSRF, body
 `{"pool": ...}` for TrueNAS) is how the wizard recovers from an expired command.
@@ -809,6 +809,54 @@ navigation for admins. It uses the same `GET /api/audit` route, loads the newest
 filters them in the browser by actor, kind, status group and time range. The page serves no data,
 and a viewer who opens it sees an "admin account needed" notice while the API answers 403.
 
+## The v2 read API
+
+`observe/api` is the one read surface of the console and of scripts (`docs/DATA-API-DESIGN.md`
+section 4). `observe/web.py` builds `ApiRuntime` (store, scheduler, clocks, token buckets, the
+response cache and the credential lookup) and mounts the sub-application that `observe.api.build`
+returns at `/api/v2`. The sub-application has its own exception handlers, so problem details
+(`observe/api/problems.py`, RFC 9457, with a `request_id` and no stack trace) change no other
+route, and its own OpenAPI schema, committed as `docs/openapi-v2.json` and checked by
+`tests/test_api_v2_core.py` (`python -m observe.api.schema` regenerates it).
+
+A resource joins through `ApiRegistry.resource` (`observe/api/registry.py`): a path, a handler, a
+pydantic response model, the change domains it depends on, its roles and tags. The registry mounts
+the route with one gate that no handler repeats, in this order: the failed-credential limit of the
+peer; the credential (`observe/api/principals.py`: a session cookie, or a bearer `wpr_` read token;
+basic auth and the other key scopes are refused); the role (`viewer`, `operator`, `admin`, and
+`anonymous` only when `server.anonymous_read` is on and the resource allows it); the CSRF header
+for a session on an unsafe method; the token bucket of the principal (`observe/api/ratelimit.py`,
+a query costs five); then the ETag. The ETag is built from the route, the full path and query, the
+role, the committed counters of the resource's change domains (`Storage.change_seqs`, read from
+memory) and an optional fingerprint of in-memory state: monitors and groups read the scheduler's
+memory, so their fingerprint is `Scheduler.fingerprint`, and a host view shows ages, so its ETag
+also changes every 10 seconds. A matching `If-None-Match` is a 304, and an unchanged page is
+served from a bounded response cache (4 MiB), both before any read connection is borrowed. A
+handler that names a `db` parameter runs on the read pool and receives a read-only connection;
+`StorageBusy` and `StorageTimeout` become a 503 with `Retry-After`, and any other error a 500
+without detail. Lists use opaque cursors (`observe/api/cursor.py`) that carry the sort key of the
+last item, so an insert does not move a page.
+
+The credential lookup is remembered for `server.api_auth_cache_s` (5 seconds), so a 304 needs no
+database read; logout forgets a session at once, and a revoked session or token stops working
+within that time. A session's `last_seen` is written at most once a minute and never by a 304.
+A read token is a row in `ingest_keys` with scope `wpr` and a `role` column (schema version 19);
+its last use is also written at most once a minute.
+
+The resources are `monitors`, `groups`, `status` (`observe/api/monitors.py`), `hosts` and
+`waiting-hosts` (`hosts.py`), `events` (`events.py`, which merges the monitor transitions and the
+host events until the `logs` table exists), `metrics`, `metrics/latest` and `metrics/query`
+(`metrics.py`) and `changes` (`changes.py`, a long poll on the in-memory counters). The query
+chooses raw samples, the 5 minute, the hourly or the daily level from the step and the admin's
+retention settings, caps a response at 1,000 points per series and 50 series, and uses only
+portable SQL (aggregates cast to plain types, `GROUP BY` by position), which
+`tests/test_api_v2_metrics.py` runs through the PostgreSQL dialect fake. A plugin adds resources
+with an optional `register_api(api)` hook; its registry mounts only under `/<plugin name>`, never
+allows anonymous reads, and lets `api.submit_write` bump only the change domains its resources
+declared. The legacy read routes were removed with no adapter (no migration path, section 11 of the
+design); the map, port, finding, audit, admin, plugin-list and session reads still use their own
+routes until slices O-7 and O-9 move them.
+
 ## Plugin host
 
 `observe/plugins.py` loads plugins (design in `docs/FIELD-DATA.md`). A plugin
@@ -822,7 +870,8 @@ returns something malformed. `--validate` runs the same checks.
 
 The hooks are `routers`, `key_scopes`, `config_model` (settings come from
 `plugin_settings.<name>`), `migrations`, `pages`, `static_dir`, `nav_entries`,
-`monitor_types` and `map_contribution`. `PluginBase` gives each an empty
+`monitor_types` and `map_contribution`, and the optional `register_api(api)` hook that adds
+`/api/v2` resources (see "The v2 read API"). `PluginBase` gives each of the others an empty
 default. Routers, the config section, migrations, pages, static files and the
 navigation list are used now. Key scopes, monitor types and map contributions
 are validated at load and applied by the later slices that build those features.

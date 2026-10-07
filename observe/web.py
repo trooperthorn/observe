@@ -1,15 +1,16 @@
 """HTTP surface: dashboard, JSON API, Prometheus metrics, and host ingest.
 
-The dashboard and monitor endpoints do not change state. Adding, removing, or
+The dashboard and the /api/v2 read API do not change state. Adding, removing, or
 editing a monitor means editing the YAML and restarting the container, so a
 stolen session can read your inventory but can not change what is watched or
 silence an alert. The write paths are POST /api/ingest (observe/ingest/api.py,
 host-bound ingest key, does not touch monitors) and the login surface below.
 
 Two credentials exist and they do not mix. The optional basic auth, and a
-login session, both open the read-only API and /metrics. The host views
-(/host, /api/hosts) hold hardware inventory and need a login session; basic
-auth does not open them. Only a session with a
+login session, both open /metrics and the page shells. The /api/v2 read API
+(observe/api) takes a login session or a read token and never basic auth, and its
+host views hold hardware inventory, so they need a login or a token even when
+server.anonymous_read is on. Only a session with a
 CSRF token reaches /api/logout and /api/admin/*, and an admin session is needed
 for the admin routes; basic auth is never accepted there (observe/auth.py).
 """
@@ -31,13 +32,12 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from . import api as apimod
 from . import audit
 from . import auth as authmod
 from . import (enrol, hosttasks, layout, recheck_page, recheck_settings, retention,
                retention_page, scripts, taskscripts, tiers)
-from . import hostview
 from .alerts import Alerter
-from .checks.host import LATEST_WINDOW_S
 from .config import Config
 from .storage import rollups
 from .infra import InfraError, InfraService
@@ -45,10 +45,10 @@ from .infra_map import MapService
 from .infra_match import LivePort, Matcher, PortMatch
 from .infra_port import PortPages
 from .ingest.api import DenialAggregator, RateLimiter, build_router
-from .ingest.keys import (MARKER, IngestKeyError, create_key, key_host, list_keys, revoke_key,
-                          verify_key)
+from .ingest.keys import (MARKER, READ_MARKER, IngestKeyError, create_key, key_host, list_keys,
+                          revoke_key, verify_key)
 from .ingest.schema import MAX_NAME
-from .plugins import PAGE_PREFIX, ROUTE_PREFIX, LoadedPlugins
+from .plugins import PAGE_PREFIX, ROUTE_PREFIX, LoadedPlugins, PluginError
 from .scheduler import Scheduler
 from .store import Store
 
@@ -60,40 +60,6 @@ _EFF_NUM ={**_STATE_NUM, "unreachable": 3}
 
 def _label(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-
-
-def _monitor_view(mon: Any, st: Any, sched: Any) -> dict[str, Any]:
-    last = st.last
-    effective, blocker = sched.rollup.effective(mon.slug)
-    fc = sched.forecasts.get(mon.slug)
-    target = getattr(mon, "url", None) or getattr(mon, "host", None) or getattr(mon, "query", "")
-    port = getattr(mon, "port", None)
-    if port and not getattr(mon, "url", None):
-        target = f"{target}:{port}"
-    return {
-        "slug": mon.slug,
-        "name": mon.name,
-        "group": mon.group,
-        "type": mon.type,
-        "mode": getattr(mon, "mode", None),
-        "target": target,
-        "state": st.state.value,
-        "degraded": st.degraded,
-        "effective_state": effective,
-        "blocked_by": blocker,
-        "held_by": None if blocker else sched.rollup.degraded_parent(mon.slug),
-        "depends_on": [p.name for p in sched.config.parents(mon)],
-        "critical": mon.critical,
-        "forecast": fc.as_dict() if fc else None,
-        "since": st.since,
-        "last_at": st.last_at,
-        "result": last.result.value if last else None,
-        "message": last.message if last else "waiting for first poll",
-        "value": last.value if last else None,
-        "unit": last.unit if last else "",
-        "latency_ms": last.latency_ms if last else None,
-        "detail": last.detail if last else {},
-    }
 
 
 def _page_handler(file: Path) -> Callable[[], Awaitable[FileResponse]]:
@@ -186,6 +152,21 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         return JSONResponse({"detail": msg}, status_code=status, headers=headers)
 
     plugins = plugins or LoadedPlugins()
+
+    # The v2 read API (observe/api): its own sub-application, mounted at /api/v2. It takes a
+    # session or a read token, never basic auth, and answers with problem details. A plugin
+    # adds resources through its optional register_api(api) hook, only under /<plugin name>.
+    runtime = apimod.ApiRuntime(config, store, scheduler=scheduler, alerter=alerter,
+                                plugins=plugins, auth_clock=auth_clock, clock=ingest_clock)
+    v2, v2_registry = apimod.build(runtime)
+    for loaded in plugins.plugins:
+        register_api = getattr(loaded.plugin, "register_api", None)
+        if callable(register_api):
+            try:
+                register_api(v2_registry.for_plugin(loaded.name))
+            except (ValueError, TypeError) as err:
+                raise PluginError(f"plugin {loaded.name!r}: register_api failed: {err}") from err
+    app.mount(apimod.PREFIX, v2, name="api_v2")
     plugin_limiter = RateLimiter(config.server.plugin_rate_per_minute, ingest_clock)
     # Key-authenticated plugin routes count three ways, so bad-key traffic never uses up a
     # valid key's allowance: per valid key, per peer for valid keys, and per peer for failures.
@@ -312,7 +293,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             app.mount(f"{PAGE_PREFIX}/{loaded.name}/static",
                       StaticFiles(directory=loaded.static_dir), name=f"plugin_{loaded.name}")
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
-    by_slug = {m.slug: m for m in scheduler.monitors}
 
     @app.get("/healthz", include_in_schema=False)
     async def healthz() -> dict[str, str]:
@@ -367,6 +347,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                      sess: authmod.Session = Depends(guards.mutating)) -> Response:
         token = request.cookies.get(authmod.COOKIE)
         if token:
+            runtime.auth.forget_session(token)
             await authmod.revoke_session(store, token)
         await audit.record(store, "logout", actor=sess.username, method="POST",
                            path="/api/logout", status=200,
@@ -515,7 +496,8 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         """Key ids, hosts and state. The secret part is never stored, so never listed."""
         return [{"id": k.prefix, "host": k.host, "created": k.created,
                  "created_by": k.created_by, "revoked_at": k.revoked_at,
-                 "last_used": k.last_used, "active": k.active, "scope": k.scope}
+                 "last_used": k.last_used, "active": k.active, "scope": k.scope,
+                 "role": k.role}
                 for k in await list_keys(store)]
 
     @app.post("/api/admin/keys", include_in_schema=False)
@@ -530,8 +512,11 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             return JSONResponse({"detail": "host is required"}, status_code=422)
         scope = body.get("scope", MARKER) if isinstance(body, dict) else MARKER
         remote = request.client.host if request.client else ""
-        shown = {"host": host[:MAX_NAME], "scope": str(scope)[:8]}
-        if scope not in (MARKER, *plugins.scopes):
+        role = body.get("role", "") if isinstance(body, dict) else ""
+        if not isinstance(role, str):
+            return JSONResponse({"detail": "role must be text"}, status_code=422)
+        shown = {"host": host[:MAX_NAME], "scope": str(scope)[:8], "role": role[:16]}
+        if scope not in (MARKER, READ_MARKER, *plugins.scopes):
             # Only wpi and the scopes of listed plugins can be issued; a disabled plugin's cannot.
             await audit.record(store, "key_create_failed", actor=sess.username, method="POST",
                                path="/api/admin/keys", status=422, remote=remote,
@@ -539,7 +524,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             return JSONResponse({"detail": "unknown key scope"}, status_code=422)
         try:
             plaintext, info = await create_key(store, host, created_by=sess.username,
-                                               scope=scope)
+                                               scope=scope, role=role)
         except IngestKeyError as err:
             await audit.record(store, "key_create_failed", actor=sess.username, method="POST",
                                path="/api/admin/keys", status=422, remote=remote,
@@ -553,10 +538,10 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         await audit.record(store, "key_created", actor=sess.username, method="POST",
                            path="/api/admin/keys", status=200, remote=remote,
                            detail={"host": info.host, "key_id": info.prefix,
-                                   "scope": info.scope})
+                                   "scope": info.scope, "role": info.role})
         # The plaintext appears in this one response, which is sent with Cache-Control: no-store.
         return JSONResponse({"id": info.prefix, "host": info.host, "scope": info.scope,
-                             "key": plaintext})
+                             "role": info.role, "key": plaintext})
 
     @app.post("/api/admin/keys/{key_id}/revoke", include_in_schema=False)
     async def admin_revoke_key(
@@ -757,72 +742,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         """Admin only, session only: basic auth never reaches this route."""
         return await audit.list_rows(store, limit, kind, before)
 
-    @app.get("/api/monitors", dependencies=guarded)
-    async def monitors() -> dict[str, Any]:
-        rows = [_monitor_view(m, scheduler.states[m.slug], scheduler)
-                for m in scheduler.monitors]
-        return {"version": __version__, "monitors": rows,
-                "groups": scheduler.rollup.group_states(), "alerts": alerter.status}
-
     pushed = {m.host: m for m in scheduler.monitors if m.type == "pushed_host"}
-    # A Home Assistant monitor in host mode ingests its own batches, so its host page uses that
-    # monitor's polling interval for the stale window.
-    ha_hosts = {m.host_name: m for m in scheduler.monitors
-                if m.type == "homeassistant" and m.mode == "host" and m.enabled}
-
-    # An SNMP monitor with host_name stores its readings under that host, so the host page shows
-    # CPU, memory, disks and interfaces from SNMP. The shortest interval sets the stale window.
-    snmp_hosts: dict[str, Any] = {}
-    for m in scheduler.monitors:
-        if m.type == "snmp" and m.host_name and m.enabled:
-            cur = snmp_hosts.get(m.host_name)
-            if cur is None or config.effective(m, "interval") < config.effective(cur, "interval"):
-                snmp_hosts[m.host_name] = m
-
-    async def host_view(host: str, row: dict[str, Any] | None) -> dict[str, Any] | None:
-        mon = pushed.get(host)
-        seen = row is not None
-        ha_mon = (ha_hosts.get(host) or snmp_hosts.get(host)) if mon is None else None
-        if row is None:
-            if mon is None and ha_mon is None:
-                return None
-            # Listed in the YAML but no batch has ever arrived.
-            row = {"host": host, "platform": "", "agent_version": "", "last_seen": 0.0,
-                   "confirmed": 1}
-            data = None
-        now = auth_clock()
-        stale_after = (mon.stale_after or 3 * config.effective(mon, "interval")) if mon             else 3 * config.effective(ha_mon, "interval") if ha_mon             else 3 * config.defaults.interval
-        if seen:
-            data = await store.latest_host(
-                host, window=max(stale_after, LATEST_WINDOW_S), now=now,
-                series=tuple((c.source, c.metric) for c in mon.components) if mon else ())
-        state = None
-        if mon is not None:
-            st = scheduler.states[mon.slug]
-            effective, blocker = scheduler.rollup.effective(mon.slug)
-            state = {"slug": mon.slug, "name": mon.name, "state": st.state.value,
-                     "effective_state": effective, "blocked_by": blocker}
-        overrides = {(c.source, c.metric): c for c in mon.components} if mon else {}
-        return hostview.build_host_view(
-            row, data, await store.host_sources(host),
-            await store.host_events(host, limit=50), now, stale_after, mon, overrides, state)
-
-    @app.get("/api/hosts", include_in_schema=False)
-    async def hosts(_: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
-        """Every pushed host, with the status of each hardware section, and under `waiting` the
-        hosts that were enrolled in the console but have not sent a batch yet, each with a link
-        to its enrolment page. Session only."""
-        rows = {r["host"]: r for r in await store.host_rows()}
-        out = []
-        for name in sorted({*rows, *pushed, *ha_hosts, *snmp_hosts}):
-            view = await host_view(name, rows.get(name))
-            if view is not None:
-                out.append(hostview.summarize(view))
-        listed = {h["host"] for h in out}
-        waiting = [w for w in await enrol.waiting_hosts(store, auth_clock())
-                   if w["host"] not in listed]
-        return {"hosts": out, "waiting": waiting}
-
     # The address install commands carry. Never the request's Host header, which the sender
     # controls: `server.public_url`, or the address an admin confirmed and saved.
     async def public_url() -> str:
@@ -1551,46 +1471,10 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             return PlainTextResponse(scripts.error_body(platform_of), status_code=500)
         return PlainTextResponse(body, media_type=scripts.media_type(task.platform))
 
-    @app.get("/api/hosts/{host:path}", include_in_schema=False)
-    async def host_detail(host: str,
-                          _: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
-        rows = {r["host"]: r for r in await store.host_rows()}
-        view = await host_view(host, rows.get(host))
-        if view is None:
-            raise HTTPException(404, "unknown host")
-        return view
-
     @app.get("/host", include_in_schema=False)
     async def host_page() -> FileResponse:
         # Like /login, the page holds no data; host.js sends a visitor without a session to /login.
         return FileResponse(STATIC / "host.html")
-
-    @app.get("/api/groups", dependencies=guarded)
-    async def groups() -> dict[str, Any]:
-        return scheduler.rollup.group_states()
-
-    @app.get("/api/forecasts", dependencies=guarded)
-    async def forecasts(refresh: bool = False) -> dict[str, Any]:
-        """Current projections. refresh=true recomputes now instead of waiting
-        for the hourly maintenance pass."""
-        if refresh:
-            await scheduler.refresh_forecasts()
-        return {slug: f.as_dict() for slug, f in scheduler.forecasts.items()}
-
-    @app.get("/api/monitors/{slug}/history", dependencies=guarded)
-    async def history(slug: str, hours: float = 24) -> dict[str, Any]:
-        if slug not in by_slug:
-            raise HTTPException(404)
-        hours = min(max(hours, 0.1), 24 * config.server.retention_days)
-        return {
-            "points": await store.history(slug, hours),
-            "availability": await store.availability(slug, hours),
-            "events": await store.events(50, slug),
-        }
-
-    @app.get("/api/events", dependencies=guarded)
-    async def events(limit: int = 100) -> list[dict[str, Any]]:
-        return await store.events(min(limit, 1000))
 
     @app.get("/metrics", dependencies=guarded, response_class=PlainTextResponse)
     async def metrics() -> str:
