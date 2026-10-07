@@ -27,6 +27,9 @@ What a host producer sends:
   `hostwatch.` prefix on event.name is dropped, `observe.severity` (the severity the agent kept,
   because a critical boot is sent as WARN) replaces the severity of the record, and the
   `observe.detail.` prefix is removed from detail keys.
+- A log record with event.name `observe.source.change` (`observe.source`, `observe.source.reason`,
+  and a body `<source> available` or `<source> unavailable: <reason>`) is also the source's status,
+  so the reason reaches the host page when the agent sent it as a log and not as a gauge.
 """
 
 from __future__ import annotations
@@ -53,6 +56,7 @@ MAX_NS = (1 << 63) - 1
 _METRIC = re.compile(r"^[a-z][a-z0-9_.]{0,127}$")
 _UNIT = re.compile(r"^[A-Za-z0-9%/.{}_\[\]^*()' -]{0,32}$")
 EVENT_PREFIX = "hostwatch."
+SOURCE_CHANGE = "observe.source.change"
 DETAIL_PREFIX = "observe.detail."
 SOURCE_AVAILABLE = "observe.source.available"
 SOURCE_PRESENT = "observe.source.present"
@@ -515,6 +519,7 @@ def normalize_logs(req: Any, bound_host: str, now: float) -> Normalized:
         return ""
 
     events: list[Event] = []
+    changes: dict[str, SourceStatus] = {}
     platform, version, sent = "", "", None
     for res, scope, rec in _walk_logs(req, rejects, want):
         if not platform and isinstance(res.get("os.type"), str):
@@ -542,6 +547,8 @@ def normalize_logs(req: Any, bound_host: str, now: float) -> Normalized:
         source = attrs.pop("observe.source", None)
         dedup = attrs.pop("observe.dedup_key", None)
         boot = attrs.pop("observe.boot_id", None)
+        change = kind == SOURCE_CHANGE
+        reason = attrs.pop("observe.source.reason", None) if change else None
         kind = _event_kind(kind, attrs.pop("observe.event.kind", None))
         sent_severity = attrs.pop("observe.severity", None)
         attrs.pop("observe.host.clean_shutdown", None)  # the classification is read from the kind
@@ -555,6 +562,10 @@ def normalize_logs(req: Any, bound_host: str, now: float) -> Normalized:
                 [ts, kind, body, sorted((k, repr(v)) for k, v in detail.items())],
                 sort_keys=True).encode("utf-8")).hexdigest()
             dedup = f"otlp:{digest}"
+        if change and isinstance(source, str) and source and len(source) <= MAX_NAME:
+            changes[source] = SourceStatus(
+                source=source, available=body == f"{source} available",
+                reason=reason[:MAX_TEXT] if isinstance(reason, str) else "")
         try:
             events.append(Event(
                 kind=kind, severity=_event_severity(sent_severity, rec.get("severityNumber"),
@@ -568,7 +579,8 @@ def normalize_logs(req: Any, bound_host: str, now: float) -> Normalized:
     if not events:
         return Normalized(None, 0, rejects)
     batch = Batch(agent_version=version or "otlp", host=bound_host, platform=platform or "unknown",
-                  sent_at=now if sent is None else sent, sources=[], samples=[], events=events)
+                  sent_at=now if sent is None else sent, sources=list(changes.values()),
+                  samples=[], events=events)
     return Normalized(batch, len(events), rejects)
 
 

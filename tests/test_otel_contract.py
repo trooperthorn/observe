@@ -420,3 +420,58 @@ async def test_threshold_rules_name_the_opentelemetry_metric(tmp_path):
         assert rule_metric("snmp", "cpu_pct") == "snmp.cpu_pct"
     finally:
         store.close()
+
+
+def _source_change(source: str, available: bool, reason: str, ts: float) -> dict[str, Any]:
+    """The log record the agent builds in hostwatch/otel_map.py map_source_change."""
+    body = f"{source} available" if available else \
+        f"{source} unavailable" + (f": {reason}" if reason else "")
+    attrs: dict[str, Any] = {"observe__source": source}
+    if reason:
+        attrs["observe__source__reason"] = reason
+    return log_record("observe.source.change", ts, body, "WARN", 13, **attrs)
+
+
+async def test_a_source_change_log_sets_the_reason_shown_on_the_host_page(tmp_path):
+    store = Store(str(tmp_path / "w.db"))
+    try:
+        await push(store, metrics_from_points(_fixture("zfs")["points"]))
+        down = logs_request(HOST, [_source_change("zfs", False, "permission denied", T0 + 20)],
+                            scope="hostwatch.agent", os__type="linux")
+        await push(store, logs=down)
+        page = await view(store)
+        zfs = next(s for s in page["sources"] if s["source"] == "zfs")
+        assert (zfs["available"], zfs["reason"], zfs["status"]) == (False, "permission denied", WARN)
+        assert page["zfs"]["state"] == "unavailable"
+        assert "zfs: permission denied" in page["zfs"]["note"]
+        assert [e["kind"] for e in page["events"]] == ["observe.source.change"]
+        assert "observe.source.reason" not in page["events"][0]["detail"]
+        up = logs_request(HOST, [_source_change("zfs", True, "", T0 + 40)],
+                          scope="hostwatch.agent", os__type="linux")
+        await push(store, logs=up)
+        zfs = next(s for s in (await view(store))["sources"] if s["source"] == "zfs")
+        assert (zfs["available"], zfs["reason"]) == (True, "")
+    finally:
+        store.close()
+
+
+async def test_every_boot_kind_is_classified_from_the_attribute_and_keeps_its_severity(tmp_path):
+    store = Store(str(tmp_path / "w.db"))
+    try:
+        expected = {"boot.clean_shutdown": ("clean", 1), "boot.kernel_panic": ("crash", 0),
+                    "boot.watchdog_reset": ("crash", 0), "boot.power_loss": ("crash", 0),
+                    "boot.agent_stopped": ("unknown", None), "boot.novel_kind": ("unknown", None)}
+        for i, (kind, (cls, flag)) in enumerate(expected.items()):
+            rec = log_record("observe.host.boot", T0 + i, "booted", "WARN", 13,
+                             observe__event__kind=kind, observe__boot_id=f"b{i}",
+                             observe__dedup_key=f"boot:b{i}", observe__severity="critical"
+                             if cls == "crash" else "info",
+                             observe__host__clean_shutdown=cls == "clean")
+            await push(store, logs=logs_request(HOST, [rec], scope="hostwatch.agent"))
+            row = next(r for r in await store.host_rows() if r["host"] == HOST)
+            assert (row["boot_id"], row["clean_shutdown"]) == (f"b{i}", flag), kind
+            ev = next(e for e in await store.host_events(HOST) if e["boot_id"] == f"b{i}")
+            assert (ev["kind"], ev["detail"]["classification"]) == (kind, cls)
+            assert ev["severity"] == ("critical" if cls == "crash" else "info"), kind
+    finally:
+        store.close()

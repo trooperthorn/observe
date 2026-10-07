@@ -496,7 +496,7 @@ non-finite numbers.
 The agent gathers the evidence (heartbeat, pstore, watchdog status, previous
 boot journal) and sends one `boot.<kind>` event per detected reboot (as an OTLP log with `event.name`
 `observe.host.boot`, the kind in `observe.event.kind` and the agent's severity in `observe.severity`,
-which the normalizer reads back as the event kind and severity). The
+which the normalizer reads back as the event kind and severity). A log `observe.source.change` (event.name) also updates the source status of `observe.source` with its `observe.source.reason`, so the reason shows on the host page. The
 classifier in `observe/ingest/boot.py`, adapted from hostwatch, reduces the
 kind to clean (`clean_shutdown`), crash (`kernel_panic`, `watchdog_reset`,
 `power_loss`, `unknown_unclean`, `unclean_shutdown`) or unknown (anything else,
