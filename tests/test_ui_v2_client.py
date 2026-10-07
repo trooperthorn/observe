@@ -60,7 +60,9 @@ def _rule(**over):
 
 @pytest.mark.skipif(NODE is None, reason="node is not installed")
 def test_the_javascript_unit_tests_pass():
-    out = subprocess.run([NODE, "--test", "tests/js"], cwd=ROOT, capture_output=True, text=True,
+    # Node on Linux treats a directory argument as a module to load, so pass the files.
+    files = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "tests" / "js").glob("*.test.mjs"))
+    out = subprocess.run([NODE, "--test", *files], cwd=ROOT, capture_output=True, text=True,
                          timeout=120)
     assert out.returncode == 0, out.stdout[-3000:] + out.stderr[-1000:]
     assert "fail 0" in out.stdout

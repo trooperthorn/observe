@@ -155,6 +155,9 @@ def test_missing_garbage_and_wrong_type_keys_are_refused(tmp_path):
         load_private_key(tmp_path / "absent.key")
     junk = tmp_path / "junk.key"
     junk.write_text("not a key", encoding="utf-8")
+    # On Linux a key file readable by group or others is refused before it is parsed,
+    # so the file must be private for the parse error to be the one reached.
+    junk.chmod(0o600)
     with pytest.raises(SigningError, match="not an unencrypted PEM"):
         load_private_key(junk)
     from cryptography.hazmat.primitives import serialization
@@ -163,6 +166,7 @@ def test_missing_garbage_and_wrong_type_keys_are_refused(tmp_path):
     rsa.write_bytes(generate_private_key(65537, 2048).private_bytes(
         serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
         serialization.NoEncryption()))
+    rsa.chmod(0o600)
     with pytest.raises(SigningError, match="not an Ed25519"):
         load_private_key(rsa)
 

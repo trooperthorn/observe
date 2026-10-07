@@ -80,7 +80,8 @@ def _kinit(principal: str, keytab_path: str) -> str:
     """
     key = (principal, keytab_path)
     ccache = _krb_ccache_path(principal, keytab_path)
-    if time.monotonic() - _krb_last_kinit.get(key, 0.0) < _KRB_TICKET_TTL:
+    last = _krb_last_kinit.get(key)
+    if last is not None and time.monotonic() - last < _KRB_TICKET_TTL:
         return ccache
     if not Path(keytab_path).is_file():
         raise KerberosError(f"keytab not found: {keytab_path}")

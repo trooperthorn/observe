@@ -88,7 +88,13 @@ class _H(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def https_server(tmp_path):
+def https_server(tmp_path, monkeypatch):
+    # On Linux the resolver answers a PTR query for 127.0.0.1 from /etc/hosts with
+    # "localhost", which then validates against the test certificate. Windows has no
+    # such answer. The tests are about a bare IP with no name, so remove the lookup.
+    async def no_ptr(self, f):
+        return None
+    monkeypatch.setattr(Discoverer, "_ptr", no_ptr)
     cp, kp = _self_signed(tmp_path, 120)
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _H)
     ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)

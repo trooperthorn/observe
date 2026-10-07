@@ -150,6 +150,9 @@ async def test_kerberos_kinit_failure_is_reported_not_raised(fake, monkeypatch):
 
 
 class TestKinit:
+    # time.monotonic() counts from boot on Linux, so a freshly started machine has a
+    # small value. The cache must key on "never obtained" rather than on a default
+    # time of zero, or a ticket looks fresh and kinit is skipped.
     def setup_method(self):
         from observe.checks import windows
         windows._krb_last_kinit.clear()
