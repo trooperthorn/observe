@@ -293,15 +293,19 @@ def record_points(db: Conn, *, kind: str, name: str, points: Iterable[Point], no
     rid = resource_id(db, kind, name, now, attrs)
     ids = _series_ids(db, rid, pts, now, max_per_resource, max_total)
     new = replaced = duplicate = dropped = 0
+    seq = int(db.execute("SELECT seq FROM ingest_seq WHERE name = 'samples'").fetchone()[0])
+    first_seq = seq
     for p in pts:
         sid = ids[(p.scope, p.metric, p.attrs)]
         if sid is None:
             dropped += 1
             continue
-        cur = db.execute("INSERT INTO samples (series_id, ts, value) VALUES (?,?,?) "
-                         "ON CONFLICT (series_id, ts) DO NOTHING", (sid, p.ts_ms, p.value))
+        # The next insertion number is used only if the point is new, so numbers have no holes.
+        cur = db.execute("INSERT INTO samples (series_id, ts, value, seq) VALUES (?,?,?,?) "
+                         "ON CONFLICT (series_id, ts) DO NOTHING", (sid, p.ts_ms, p.value, seq + 1))
         if cur.rowcount == 1:
             new += 1
+            seq += 1
             _latest(db, sid, p.ts_ms, p.value)
             if rollups and p.value is not None:
                 _bump(db, sid, p.ts_ms, p.value)
@@ -314,6 +318,8 @@ def record_points(db: Conn, *, kind: str, name: str, points: Iterable[Point], no
         else:
             replaced += 1
             _replace(db, sid, p.ts_ms, old, p.value, rollups)
+    if seq != first_seq:
+        db.execute("UPDATE ingest_seq SET seq = ? WHERE name = 'samples'", (seq,))
     return Recorded(new, replaced, duplicate, dropped, late)
 
 

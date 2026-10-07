@@ -154,17 +154,23 @@ for a repeat (the repeat gets an empty 200).
 Observe can also push to an external collector (docs/DATA-API-DESIGN.md section 6.6). It is off
 until `export.otlp.endpoint` is set. `observe/otlp/export.py` runs as one task beside the
 scheduler, started in `observe/__main__.py` and reachable as `store.exporter`. It reads committed
-rows after a cursor kept in `export_cursor` (raw samples in `(ts, series_id)` order, `host_events`
+rows after a cursor kept in `export_cursor` (raw samples in insertion order, by the number each new point takes from the `ingest_seq` counter, `host_events`
 and optionally `audit` by id), builds an OTLP request grouped by resource and scope, encodes it
 with `observe/otlp/encode.py` (protobuf or JSON, always gzip) and posts it with one long-lived
 `httpx.AsyncClient` that never follows redirects. The cursor moves only after the collector
-answers, so a crash or an outage repeats at most one batch. Network errors and 429, 502, 503 and
-504 back off exponentially with full jitter and honour `Retry-After`; any other answer drops the
-batch and counts it. Samples are read `settle_s` behind the clock, and a cursor that falls behind
-raw retention resumes from the oldest retained sample and reports an `observe.export.gap` log
-record and audit row. Counters are in `/metrics` and `GET /api/v2/admin/exporter`.
+answers, so a crash or an outage repeats at most one batch. A point that arrives late is stored
+with a new number and is exported like any other. Network errors and every answer that is not
+final (500, 502, 503, 504, 429, 401, 403 and so on) back off exponentially with full jitter and
+honour `Retry-After`. A 400 or 413 is retried in halves, and only a single refused point is
+dropped; 404, a redirect, 405, 410, 415, 422 and 501 are final, and a 404 or a redirect also
+raises an alert in the status. Every drop, and a cursor that falls behind raw retention, is
+reported as an `observe.export.gap` log record and an `export_gap` audit row. Counters are in `/metrics` and `GET /api/v2/admin/exporter`.
 
 ## Storage
+
+Compaction also removes dead series: after the levels are trimmed, a series with no raw sample and
+no summary row is deleted with its `latest` row, and a resource with no series is deleted, so
+churned labels stop counting against the cardinality caps.
 
 ### Storage interface
 

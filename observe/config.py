@@ -820,7 +820,7 @@ class OtlpExportConfig(Strict):
     signals: list[Literal["metrics", "logs"]] = Field(default_factory=lambda: ["metrics", "logs"])
     interval: float = Field(default=60.0, ge=1.0, le=3600.0)
     max_batch_points: int = Field(default=2000, ge=1, le=20000)
-    settle_s: float = Field(default=30.0, ge=0.0, le=3600.0)
+    settle_s: float = Field(default=30.0, ge=0.0, le=3600.0)  # kept for old files; the exporter follows insertion order and no longer waits
     timeout_s: float = Field(default=15.0, ge=1.0, le=120.0)
     include_audit: bool = False
     resource_filter: list[str] = Field(default_factory=list)

@@ -13,6 +13,12 @@ A compaction pass removes, level by level, the rows past each level's retention:
 * Cuts are aligned. A level is trimmed only at a multiple of the width of the level that covers
   it, so a bucket is never split between a trimmed and a kept half.
 
+* Dead series are collected. After the levels are trimmed, a series that has no raw sample and no
+  summary row at any level is removed with its latest row, and a resource with no series left is
+  removed too. Without this, series from churned labels would count against the cardinality caps
+  for ever. The delete is chunked like the others, and a series that still holds any row is never
+  touched.
+
 A per-metric override gives that metric's series their own cuts. On TimescaleDB the summary levels
 are continuous aggregates, trimmed by their retention policies, and raw chunks are dropped only
 after the same coverage check (see PgStorage).
@@ -165,6 +171,40 @@ def _compact_unit(db: Conn, level: str, items: list[tuple[int, Cuts]], pos: int)
     return pos, deleted, failed
 
 
+def _collect_unit(db: Conn) -> tuple[int, int]:
+    """Remove up to CHUNK_ROWS series that hold no samples and no summary rows, with their latest
+    rows, and then the resources left with no series. Returns (series, resources) removed."""
+    absent = " AND ".join(f"NOT EXISTS (SELECT 1 FROM {table} t WHERE t.series_id = s.id)"
+                          for table, _ in (TABLES[level] for level in ORDER))
+    dead = [int(r[0]) for r in db.execute(
+        f"SELECT s.id FROM series s WHERE {absent} ORDER BY s.id LIMIT ?", (CHUNK_ROWS,))
+        .fetchall()]
+    for i in range(0, len(dead), MAX_SERIES_PER_UNIT):
+        chunk = dead[i:i + MAX_SERIES_PER_UNIT]
+        marks = ",".join("?" * len(chunk))
+        db.execute(f"DELETE FROM latest WHERE series_id IN ({marks})", tuple(chunk))
+        db.execute(f"DELETE FROM series WHERE id IN ({marks})", tuple(chunk))
+    gone = db.execute(
+        "DELETE FROM resources WHERE NOT EXISTS (SELECT 1 FROM series s WHERE s.resource_id = "
+        "resources.id)").rowcount
+    return len(dead), max(gone, 0)
+
+
+async def collect_dead_series(storage: Storage) -> tuple[int, int]:
+    """Collect dead series and empty resources in chunks. Returns the totals removed."""
+    series = resources = 0
+    while True:
+        n, r = await storage.write(_collect_unit)
+        series += n
+        resources += r
+        if n < CHUNK_ROWS:
+            break
+    if series or resources:
+        log.info("compaction removed %d series and %d resources that held no data", series,
+                 resources)
+    return series, resources
+
+
 def note_level(db: Conn, level: str, upto_s: int, now: float, rows: int, error: str) -> None:
     db.execute(
         "INSERT INTO rollup_state (level, upto, last_run, last_rows, last_error) "
@@ -234,9 +274,10 @@ async def run(storage: Storage, now: float, retention_days: int, audit_retention
     if not summaries_by_policy:
         for level in ("5m", "1h", "1d"):
             await compact_level(storage, level, now, levels)
+    await collect_dead_series(storage)
     for sql, args in statements[2:]:
         await storage.write(lambda db, sql=sql, args=args: db.execute(sql, args))
     return max(removed, 0)
 
 
-__all__ = ["CHUNK_ROWS", "Cuts", "compact_level", "coverage_ok", "cuts_for", "run"]
+__all__ = ["CHUNK_ROWS", "Cuts", "collect_dead_series", "compact_level", "coverage_ok", "cuts_for", "run"]

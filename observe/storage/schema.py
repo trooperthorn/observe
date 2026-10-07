@@ -331,6 +331,22 @@ def _add_body_hash(db: sqlite3.Connection) -> None:
 
 BATCH_BODY_HASH = (_add_body_hash,)
 
+# The insertion order of raw points, for the OTLP exporter (docs/DATA-API-DESIGN.md section 6.6).
+# Every point stored for the first time takes the next number of the `ingest_seq` counter in its
+# own transaction, so the exporter can follow insertion order instead of point timestamps and a
+# point that arrives late is still exported. Rows stored before this step have no number.
+def _add_sample_seq(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(samples)")}
+    if "seq" not in columns:
+        db.execute("ALTER TABLE samples ADD COLUMN seq INTEGER")
+
+
+SAMPLE_SEQ_TABLES = (
+    _add_sample_seq,
+    "CREATE TABLE IF NOT EXISTS ingest_seq (name TEXT PRIMARY KEY, seq INTEGER NOT NULL DEFAULT 0)",
+    "INSERT OR IGNORE INTO ingest_seq (name, seq) VALUES ('samples', 0)",
+)
+
 # The step that creates the summary levels. TimescaleDB runs its own version of it.
 ROLLUP_STEP = 17
 
@@ -358,6 +374,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     19: KEY_ROLE_TABLES,
     20: EXPORT_TABLES,
     21: BATCH_BODY_HASH,
+    22: SAMPLE_SEQ_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

@@ -44,6 +44,9 @@ class Collector:
         self.requests: list[httpx.Request] = []
         self.bodies: list[dict] = []
 
+    def sent_to(self, kind: str) -> list[httpx.Request]:
+        return [r for r in self.requests if r.url.path.endswith("/v1/" + kind)]
+
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         raw = gzip.decompress(request.content)
@@ -197,16 +200,18 @@ async def test_network_errors_and_the_retryable_statuses_are_retried(store, answ
     assert exp.stats.sent == 1
 
 
-async def test_a_400_is_not_retried_the_batch_is_dropped_and_the_stream_goes_on(store, caplog):
-    collector = Collector([400])
+async def test_a_400_is_split_to_one_point_and_only_the_refused_point_is_dropped(store, caplog):
+    collector = Collector([400, 400])  # the pair, then the first point alone
     exp, _ = await started(store, collector, max_batch_points=2)
     await put(store, [1.0, 2.0, 3.0])
     with caplog.at_level(logging.ERROR, logger="observe.export"):
         assert await exp.cycle() == exp.cfg.interval
-    assert [v for _, v in collector.points()] == [1.0, 2.0, 3.0]  # sent once each, no resend
-    assert exp.stats.dropped == 2 and exp.stats.sent == 1 and exp.stats.failed == 1
+    assert [v for _, v in collector.points()] == [1.0, 2.0, 1.0, 2.0, 3.0]
+    assert exp.stats.dropped == 1 and exp.stats.sent == 2 and exp.stats.failed == 2
     assert exp.stats.consecutive_failures == 0
     assert "dropped" in caplog.text and "400" in caplog.text
+    audit = await store.fetch("SELECT detail FROM audit WHERE kind = 'export_gap'")
+    assert len(audit) == 1 and json.loads(audit[0][0])["count"] == 1  # every drop is recorded
 
 
 @pytest.mark.parametrize("status", [404, 405, 422])
@@ -215,7 +220,9 @@ async def test_other_client_errors_are_final_too(store, status):
     exp, _ = await started(store, collector)
     await put(store, [1.0])
     await exp.cycle()
-    assert len(collector.requests) == 1 and exp.stats.dropped == 1
+    assert len(collector.sent_to('metrics')) == 1 and exp.stats.dropped == 1
+    assert exp.stats.gaps == 1  # the drop is recorded as a gap
+    assert (exp.status()["alert"] != "") == (status == 404)
 
 
 @pytest.mark.parametrize("status", [401, 403, 408])
@@ -246,7 +253,7 @@ async def test_a_413_for_a_single_point_is_final(store):
     exp, _ = await started(store, collector, max_batch_points=1)
     await put(store, [1.0])
     await exp.cycle()
-    assert exp.stats.dropped == 1 and len(collector.requests) == 1
+    assert exp.stats.dropped == 1 and len(collector.sent_to('metrics')) == 1
 
 
 async def test_partial_success_advances_the_cursor_and_counts_the_rejects(store):
@@ -333,11 +340,11 @@ async def test_a_gap_notice_survives_a_dropped_logs_batch(store):
     await store.storage.write(lambda db: db.execute(insert, (T0 + 5, "k1")))
     clock.now = T0 + 2000
     await exp.cycle()
-    assert exp.stats.dropped == 1 and exp.stats.gaps == 1
+    assert exp.stats.dropped == 1 and exp.stats.gaps == 2  # the retention gap and the drop
     await store.storage.write(lambda db: db.execute(insert, (T0 + 6, "k2")))
     await exp.cycle()
     gaps = [r for r in collector.records() if attr(r, "event.name") == "observe.export.gap"]
-    assert len(gaps) == 2  # once in the dropped request and again in the next one
+    assert len(gaps) == 3  # the first in the dropped request and again, then the drop's own
 
 
 async def test_a_quiet_database_is_not_a_gap(store):
@@ -351,30 +358,63 @@ async def test_a_quiet_database_is_not_a_gap(store):
     assert exp.stats.gaps == 0 and collector.points() == [("cpu.temp", 4.0)]
 
 
-async def test_a_point_inside_the_settle_window_waits_for_the_next_pass(store):
+async def test_a_point_that_arrives_late_is_exported(store):
+    """A host replays buffered points stamped minutes before the cursor's last point."""
     collector = Collector()
-    clock = Clock()
-    exp = make(store, collector, clock, settle_s=30)
+    exp, clock = await started(store, collector)
+    await put(store, [10.0, 11.0], base=T0 + 900)
     await exp.cycle()
-    await put(store, [1.0], base=T0 + 50)
-    clock.now = T0 + 60  # the point is 10 s old, newer than the settle window
+    assert [v for _, v in collector.points()] == [10.0, 11.0]
+    await put(store, [1.0, 2.0], base=T0 + 100, host="h2")  # stored later, stamped earlier
+    clock.now += 600
     await exp.cycle()
-    assert collector.points() == []
-    clock.now = T0 + 90
+    assert sorted(v for _, v in collector.points()) == [1.0, 2.0, 10.0, 11.0]
+    assert exp.stats.gaps == 0
     await exp.cycle()
-    assert collector.points() == [("cpu.temp", 1.0)]
+    assert len(collector.points()) == 4  # nothing is sent twice
 
 
-async def test_a_late_point_inside_the_window_is_not_missed(store):
+async def test_a_late_point_is_exported_even_in_the_same_pass_as_newer_ones(store):
     collector = Collector()
-    clock = Clock()
-    exp = make(store, collector, clock, settle_s=30)
-    await exp.cycle()
+    exp, _ = await started(store, collector)
     await put(store, [2.0], base=T0 + 50)
-    await put(store, [1.0], base=T0 + 40, host="h2")  # arrives after, stamped earlier
-    clock.now = T0 + 100
+    await put(store, [1.0], base=T0 + 40, host="h2")
     await exp.cycle()
     assert sorted(v for _, v in collector.points()) == [1.0, 2.0]
+
+
+async def test_a_500_then_a_200_delivers_the_points_once(store):
+    collector = Collector([500])
+    exp, _ = await started(store, collector)
+    await put(store, [1.0, 2.0])
+    assert await exp.cycle() == 1.0  # backoff, not the interval
+    assert exp.stats.dropped == 0 and exp.stats.sent == 0 and exp.stats.consecutive_failures == 1
+    await exp.cycle()
+    assert [v for _, v in collector.points()] == [1.0, 2.0, 1.0, 2.0]  # sent twice, accepted once
+    assert exp.stats.sent == 2 and exp.stats.dropped == 0
+    await exp.cycle()
+    assert len(collector.requests) == 2
+
+
+async def test_every_server_error_and_429_is_held_with_retry_after(store):
+    collector = Collector([(500, {"Retry-After": "7"}), (429, {"Retry-After": "9"}), 501])
+    exp, _ = await started(store, collector)
+    await put(store, [1.0])
+    assert await exp.cycle() == 7.0
+    assert await exp.cycle() == 9.0
+    await exp.cycle()  # 501 is permanent
+    assert exp.stats.dropped == 1 and exp.stats.gaps == 1
+
+
+async def test_a_404_raises_an_alert_that_clears_on_success(store):
+    collector = Collector([404])
+    exp, _ = await started(store, collector)
+    await put(store, [1.0])
+    await exp.cycle()
+    assert "check the export endpoint" in exp.status()["alert"] and exp.stats.dropped == 1
+    await put(store, [2.0], base=T0 + 20)
+    await exp.cycle()
+    assert exp.status()["alert"] == ""
 
 
 async def test_the_resource_filter_keeps_only_the_named_kinds(store):
@@ -443,7 +483,7 @@ async def test_the_signals_setting_limits_what_is_sent(store):
     await put(store, [1.0])
     await exp.cycle()
     assert collector.requests == []
-    assert (await store.fetch("SELECT 1 FROM sqlite_master WHERE name = 'samples_ts'")) == []
+    assert (await store.fetch("SELECT 1 FROM sqlite_master WHERE name = 'samples_seq'")) == []
 
 
 async def test_status_has_the_counters_and_never_a_header_value(store):
@@ -500,7 +540,7 @@ async def test_a_redirect_is_not_followed(store):
     exp, _ = await started(store, collector)
     await put(store, [1.0])
     await exp.cycle()
-    assert len(collector.requests) == 1 and exp.stats.dropped == 1
+    assert len(collector.sent_to('metrics')) == 1 and exp.stats.dropped == 1
     assert exp.open_client().follow_redirects is False
 
 
@@ -613,7 +653,7 @@ def test_the_status_route_and_metrics_show_the_exporter(tmp_path):
             "enabled": False, "endpoint": None, "protocol": None, "signals": [],
             "interval": None, "max_batch_points": None, "sent": 0, "failed": 0, "dropped": 0,
             "rejected": 0, "lag_seconds": 0.0, "last_success": None, "last_error": "",
-            "consecutive_failures": 0, "gaps": 0}
+            "consecutive_failures": 0, "gaps": 0, "alert": ""}
         exp = Exporter(config(), env.store)
         exp.stats.sent, exp.stats.failed, exp.stats.dropped, exp.stats.lag_s = 7, 2, 1, 12.5
         env.store.exporter = exp

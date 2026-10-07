@@ -224,6 +224,43 @@ async def test_removing_a_resource_removes_its_series_samples_latest_and_summari
         db, "host", "gone", rollups=storage.incremental_rollups)) == 0
 
 
+async def test_new_points_take_consecutive_insertion_numbers_and_replays_take_none(storage):
+    await put(storage, [row(BASE + 50, "m", 1.0), row(BASE + 10, "m", 2.0)])
+    await put(storage, [row(BASE + 50, "m", 1.0), row(BASE + 70, "m", 3.0)])  # one replay
+    got = await storage.fetchall("SELECT ts, seq FROM samples ORDER BY seq")
+    assert [seq for _, seq in got] == [1, 2, 3]
+    assert [ts for ts, _ in got] == [(BASE + 50) * 1000, (BASE + 10) * 1000, (BASE + 70) * 1000]
+    assert await storage.fetchall("SELECT seq FROM ingest_seq") == [(3,)]
+
+
+async def test_churned_series_are_collected_after_retention_and_the_cap_frees(storage):
+    now = time.time()
+    old = now - 5000 * DAY  # far past every level's retention
+    recent = now - 3600
+
+    def record(host, metrics, ts, per=3):
+        return storage.write(lambda db: series.record_points(
+            db, kind="host", name=host, now=ts, rollups=storage.incremental_rollups,
+            max_per_resource=per, max_total=100,
+            points=[series.Point("cpu", m, "", "{}", int(ts * 1000), 1.0) for m in metrics]))
+
+    await record("churn", ["a", "b", "c"], old)
+    await record("keep", ["k"], recent)
+    full = await record("churn", ["d"], recent)
+    assert full.dropped == 1  # the dead series still count against the cap
+    await settle(storage)
+    await storage.apply_retention(now=now, retention_days=7, audit_retention_days=365)
+    await settle(storage)
+    assert await storage.fetchall("SELECT metric FROM series ORDER BY metric") == [("k",)]
+    assert await storage.fetchall("SELECT name FROM resources") == [("keep",)]
+    assert await storage.fetchall("SELECT COUNT(*) FROM latest") == [(1,)]
+    assert (await record("churn", ["d", "e"], recent)).dropped == 0  # the cap has freed
+    # A series that still holds data is never collected.
+    await storage.apply_retention(now=now, retention_days=7, audit_retention_days=365)
+    assert await storage.fetchall("SELECT metric FROM series ORDER BY metric") == [
+        ("d",), ("e",), ("k",)]
+
+
 # ---- the summary views ----------------------------------------------------------------------
 
 async def test_the_views_name_the_series_and_compute_the_average_from_sum_and_count(storage):

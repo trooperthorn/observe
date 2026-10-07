@@ -24,6 +24,7 @@ from observe_pockethernet.derive import footprint
 from observe_pockethernet.reports import MIGRATIONS as POCKET_MIGRATIONS
 from observe_pockethernet.reports import NewReport, store_and_derive
 from observe_pockethernet.schema import parse_report
+from observe_unifi.clients import Client, save_clients
 from observe_unifi.feed import feed_classic, feed_integration
 from observe_unifi.records import MIGRATIONS as UNIFI_MIGRATIONS
 from observe_unifi.records import parse_device
@@ -389,3 +390,29 @@ async def test_a_populated_version_17_database_gains_the_map_tables_and_fills_th
         assert await rows(s, "SELECT COUNT(*) FROM map_nodes") != [(0,)]
     finally:
         s.close()
+
+
+# ---- the offline-client upsert, with and without a last seen time ---------------------------
+
+async def test_the_offline_client_upsert_is_valid_with_and_without_last_seen(storage):
+    """A classic console may report an offline client with no last_seen. The statement must not
+    test a bare parameter for NULL, which PostgreSQL cannot type (the dialect fake refuses that
+    form, and the live run proves it on a server)."""
+    def off(cid, last_seen, name=""):
+        return Client("s1", cid, cid, name, connected=False, last_seen=last_seen)
+
+    first = [off("aa:01", 500.0, "Known"), off("aa:02", None, "Ghost")]
+    assert await save_clients(Store_of(storage), "s1", [], first, 1000.0) == 2
+    again = [off("aa:01", 400.0, "Renamed"), off("aa:02", None), off("aa:03", None, "New")]
+    assert await save_clients(Store_of(storage), "s1", [], again, 2000.0) == 3
+    got = await rows(storage, "SELECT client_id, name, connected, first_seen, last_seen "
+                              "FROM unifi_clients ORDER BY client_id")
+    assert got == [("aa:01", "Renamed", 0, 500.0, 500.0),  # an older time never moves it back
+                   ("aa:02", "Ghost", 0, 1000.0, 1000.0),  # no time: stored time not refreshed
+                   ("aa:03", "New", 0, 2000.0, 2000.0)]
+
+
+def Store_of(storage: Any) -> Store:
+    st = Store.__new__(Store)
+    st.storage = storage
+    return st

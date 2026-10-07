@@ -160,7 +160,11 @@ are `${file:...}` secrets, sent only in the request, and the exporter logs the s
 the exception class and never a header, a URL or an exception message. Plain `http` to a
 non-loopback host needs an explicit `allow_plaintext`. Redirects are not followed, so a
 collector cannot bounce the bearer token to another host. Certificate checking cannot be turned
-off. A wrong token drops batches (4xx is final), which the drop counter and the log show. The
+off. A wrong token holds batches and retries them (401 and 403 are not final), and a server error or
+429 is retried with backoff, so an outage does not lose data. The few final answers (400 for a
+single point, 404, a redirect, 405, 410, 415, 422, 501) drop the batch, and every drop leaves a
+log line, an `export_gap` audit row and a gap record to the collector, so loss is never silent;
+a 404 or a redirect also raises an alert in the status. The
 status route is admin only and shows no header.
 
 **Alert payloads leave the lab.** A public ntfy topic or webhook receives

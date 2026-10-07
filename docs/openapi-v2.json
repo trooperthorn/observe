@@ -350,6 +350,11 @@
       },
       "ExporterOut": {
         "properties": {
+          "alert": {
+            "default": "",
+            "title": "Alert",
+            "type": "string"
+          },
           "consecutive_failures": {
             "default": 0,
             "title": "Consecutive Failures",

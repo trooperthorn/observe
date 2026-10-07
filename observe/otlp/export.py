@@ -1,23 +1,25 @@
 """The optional OTLP/HTTP exporter (docs/DATA-API-DESIGN.md section 6.6).
 
 The database is the source of truth, not a memory buffer. For each signal the exporter keeps a
-cursor in `export_cursor` and reads committed rows after it: raw samples in (millisecond, series)
-order, host events and, when asked, audit rows by id. A batch moves the cursor only once the
-collector has answered, so a restart, an outage or a crash repeats at most one batch and loses
-nothing that raw retention still holds.
+cursor in `export_cursor` and reads committed rows after it: raw samples in insertion order (the
+number each new point takes from the `ingest_seq` counter, not its timestamp), host events and,
+when asked, audit rows by id. A point that arrives late, such as a replay after an outage, takes a
+new number and is exported like any other. A batch moves the cursor only once the collector has
+answered, so a restart, an outage or a crash repeats at most one batch and loses nothing that raw
+retention still holds.
 
 A batch is sent as protobuf or JSON, gzip compressed, to {endpoint}/v1/metrics or /v1/logs.
-Network errors and the answers 401, 403, 408, 429, 502, 503 and 504 are retried after an
-exponential backoff with full jitter that honours Retry-After, so a wrong or expired credential
-holds the data instead of losing it. The answer 413 halves the batch size and sends the same
-points again in smaller batches. Any other answer is final: the batch is logged, counted as
-dropped and skipped. A partial success moves the cursor on and counts the rejects.
+Network errors and every answer that is not final are retried after an exponential backoff with
+full jitter that honours Retry-After, so a collector restart (500, 502, 503, 504), throttling
+(429) or a wrong or expired credential (401, 403) holds the data instead of losing it. The
+answers 413 and 400 halve the batch size and send the same points again in smaller batches. Only
+a defined set of answers is final (PERMANENT): 400 for a single point, 404 (a wrong endpoint,
+raised as an alert, as is a redirect, which is never followed), 405, 410, 415, 422 and 501. A
+final answer drops the batch and every drop is recorded: a log line, an audit row `export_gap` and, when logs are exported, the log record
+`observe.export.gap`. A partial success moves the cursor on and counts the rejects.
 
-Samples are read up to `settle_s` seconds behind the clock, so a point that arrives a little late
-is still sent. A point that arrives later than that, with a timestamp the cursor has passed, is
-stored but not exported. If the cursor falls behind raw retention (the collector was away for
-longer than raw samples are kept) the exporter resumes from the oldest retained sample and
-reports the gap as the log record `observe.export.gap` and an audit row.
+If the cursor falls behind raw retention (the collector was away for longer than raw samples are
+kept) the exporter resumes from the oldest retained sample and reports the gap in the same way.
 
 Secrets: header values come from the configuration as secret strings and are placed only in the
 request. They are never logged, never part of an error text and never returned by the status.
@@ -47,10 +49,14 @@ from . import encode
 log = logging.getLogger("observe.export")
 
 BACKOFF_START_S, BACKOFF_MAX_S, RETRY_AFTER_MAX_S = 1.0, 300.0, 3600.0
-RETRYABLE = frozenset({401, 403, 408, 429, 502, 503, 504})
-TOO_LARGE = 413
+# Answers that end a batch. Everything else that is not a success is retried.
+PERMANENT = frozenset({400, 404, 405, 410, 415, 422, 501})
+SPLIT = frozenset({400, 413})  # tried again in smaller batches first
+NOT_FOUND = 404
+ALERT_404 = ("the collector answered 404 or a redirect: check the export endpoint; records are "
+             "being dropped until it is right")
 ID_CHUNK = 500
-SAMPLES_INDEX = "CREATE INDEX IF NOT EXISTS samples_ts ON samples(ts, series_id)"
+SAMPLES_INDEX = "CREATE INDEX IF NOT EXISTS samples_seq ON samples(seq)"
 SEVERITY = {"debug": 5, "info": 9, "notice": 10, "warning": 13, "warn": 13, "error": 17,
             "critical": 21, "fatal": 21}
 
@@ -85,6 +91,12 @@ def kvs(attrs: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"key": str(k), "value": _value(v)} for k, v in sorted(attrs.items())]
 
 
+def _span_s(rows: list[Any], col: int) -> tuple[int, int]:
+    """First and last time of rows whose column `col` is a time in seconds, as milliseconds."""
+    times = [float(r[col]) for r in rows]
+    return (int(min(times) * 1000), int(max(times) * 1000)) if times else (0, 0)
+
+
 def _loads(text: str) -> dict[str, Any]:
     try:
         doc = json.loads(text)
@@ -100,7 +112,8 @@ class Outcome:
     wait: float | None = None  # Retry-After
     rejected: int = 0
     reason: str = ""
-    too_large: bool = False
+    split: bool = False  # a 400 or 413: try again in smaller batches before giving up
+    status: int = 0
 
 
 @dataclass
@@ -115,6 +128,7 @@ class Stats:
     last_success: float | None = None
     last_error: str = ""
     gaps: int = 0
+    alert: str = ""
 
 
 @dataclass
@@ -122,7 +136,8 @@ class _Batch:
     kind: str  # metrics or logs, which decides the path and the message type
     request: dict[str, Any]
     count: int
-    cursor: tuple[int, int]  # the (ts, id) the cursor moves to once the batch is delivered
+    cursor: tuple[int, int]  # the (ts, seq or id) the cursor moves to once the batch is delivered
+    span: tuple[int, int] = (0, 0)  # first and last point time in ms, for a drop record
     gaps: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -138,7 +153,8 @@ class Exporter:
     _gaps: list[dict[str, Any]] = field(default_factory=list)
     _own_client: bool = False
     _ready: bool = False
-    _limit: int = 0  # the batch size after a 413, 0 while the configured size works
+    _fail_kind: str = ""  # the request path (metrics or logs) of the last failure
+    _limit: int = 0  # the batch size after a 413 or 400, 0 while the configured size works
 
     # ---- lifecycle ---------------------------------------------------------------------
 
@@ -212,7 +228,8 @@ class Exporter:
             return int(rows[0][0]), int(rows[0][1])
         # First start: export what arrives from now on, not the whole history.
         if signal == "metrics":
-            start = (int(self.clock() * 1000) - int(self.cfg.settle_s * 1000), 0)
+            top = await self.store.fetch("SELECT seq FROM ingest_seq WHERE name = 'samples'")
+            start = (int(self.clock() * 1000), int(top[0][0]) if top else 0)
         else:
             table = "audit" if signal == "audit" else "host_events"
             top = await self.store.fetch(f"SELECT COALESCE(MAX(id), 0) FROM {table}")
@@ -245,32 +262,39 @@ class Exporter:
                     self.stats.requests += 1
                     self.stats.consecutive_failures = 0
                     self.stats.last_success = self.clock()
-                    self.stats.last_error = ""
+                    if batch.kind == self._fail_kind:  # the path that failed works again
+                        self.stats.last_error = ""
+                        self.stats.alert = ""
                     await self._save(signal, batch.cursor)
                     if outcome.rejected:
                         log.warning("OTLP collector rejected %d of %s", outcome.rejected, signal)
                     continue
                 self.stats.failed += 1
                 self.stats.last_error = outcome.reason
+                self._fail_kind = batch.kind
                 if outcome.retry:
                     self._gaps = batch.gaps + self._gaps  # the notice goes with the next try
                     self.stats.consecutive_failures += 1
                     await self._measure_lag()
                     return self._backoff(outcome.wait)
-                if outcome.too_large and batch.count > 1:
+                if outcome.split and batch.count > 1:
                     self._limit = max(1, batch.count // 2)
                     self.stats.consecutive_failures = 0
-                    log.warning("OTLP collector refused a request as too large; sending %d at "
-                                "a time", self._limit)
-                    if batch.count:
-                        self._gaps = batch.gaps + self._gaps
-                    continue
-                if batch.count:  # a gap notice rides on with the next records, not the drop
+                    log.warning("OTLP collector refused a request of %d (%d); sending %d at a "
+                                "time", batch.count, outcome.status, self._limit)
                     self._gaps = batch.gaps + self._gaps
-                # A final answer: skip the batch so one bad request cannot block the stream.
+                    continue
+                self._gaps = batch.gaps + self._gaps  # a gap notice rides on with the next records
+                # A final answer: skip the batch so one bad request cannot block the stream, and
+                # say so, so the loss is never silent.
                 self.stats.dropped += batch.count
                 self.stats.consecutive_failures = 0
                 log.error("OTLP export of %d %s dropped: %s", batch.count, signal, outcome.reason)
+                if outcome.status == NOT_FOUND or 300 <= outcome.status < 400:
+                    self.stats.alert = ALERT_404
+                    log.error("OTLP export misconfigured: %s", ALERT_404)
+                await self._record_gap(batch.span[0], batch.span[1], signal=signal,
+                                       count=batch.count, reason=outcome.reason)
                 await self._save(signal, batch.cursor)
         await self._measure_lag()
         return self.cfg.interval
@@ -285,7 +309,10 @@ class Exporter:
         lag = 0.0
         if "metrics" in self.cfg.signals:
             cur = await self._cursor("metrics")
-            lag = (self.clock() * 1000 - self.cfg.settle_s * 1000 - cur[0]) / 1000.0
+            row = await self.store.fetch(
+                "SELECT ts FROM samples WHERE seq > ? ORDER BY seq LIMIT 1", (cur[1],))
+            if row:  # the age of the oldest point not yet sent
+                lag = self.clock() - int(row[0][0]) / 1000.0
         for signal in self.signals:
             if signal == "metrics":
                 continue
@@ -308,31 +335,30 @@ class Exporter:
     async def _metrics_batch(self) -> _Batch | None:
         while True:
             ts, last = await self._cursor("metrics")
-            horizon = int(self.clock() * 1000) - int(self.cfg.settle_s * 1000)
-            oldest = await self.store.fetch("SELECT MIN(ts) FROM samples")
-            first = oldest[0][0] if oldest else None
-            if first is not None and ts < int(first):
-                # Samples older than the oldest retained one are gone. It is a gap only if some
-                # existed: the 5 minute level still counts buckets whose raw points were trimmed.
-                lost = await self.store.fetch(
-                    "SELECT 1 FROM rollup_5m WHERE bucket >= ? AND bucket + 300000 <= ? LIMIT 1",
-                    (ts, int(first)))
-                if lost:
-                    await self._record_gap(ts, int(first))
-                    ts, last = int(first) - 1, 0
-                    await self._save("metrics", (ts, last))
             rows = await self.store.fetch(
-                "SELECT series_id, ts, value FROM samples WHERE (ts, series_id) > (?, ?) "
-                "AND ts <= ? ORDER BY ts, series_id LIMIT ?",
-                (ts, last, horizon, self.batch_limit))
+                "SELECT series_id, ts, value, seq FROM samples WHERE seq > ? ORDER BY seq LIMIT ?",
+                (last, self.batch_limit))
             if not rows:
-                if horizon > ts:  # nothing pending: move on, so lag and the gap check stay honest
-                    await self._save("metrics", (horizon, 0))
+                top = await self.store.fetch("SELECT seq FROM ingest_seq WHERE name = 'samples'")
+                if top and int(top[0][0]) > last:
+                    # Numbers were issued past the cursor and no row holds any: raw retention
+                    # removed them all before they were sent.
+                    now_ms = int(self.clock() * 1000)
+                    await self._record_gap(ts, now_ms, signal="metrics",
+                                           count=int(top[0][0]) - last, reason="raw retention")
+                    await self._save("metrics", (now_ms, int(top[0][0])))
                 return None
-            cursor = (int(rows[-1][1]), int(rows[-1][0]))
+            first = int(rows[0][3])
+            if first > last + 1:
+                # The numbers between the cursor and the oldest retained point are gone.
+                await self._record_gap(ts, int(rows[0][1]), signal="metrics",
+                                       count=first - last - 1, reason="raw retention")
+                await self._save("metrics", (int(rows[0][1]), first - 1))
+            cursor = (int(rows[-1][1]), int(rows[-1][3]))
             request, count = await self._metrics_request(rows)
             if count:
-                return _Batch("metrics", request, count, cursor)
+                return _Batch("metrics", request, count, cursor,
+                              (min(int(r[1]) for r in rows), max(int(r[1]) for r in rows)))
             await self._save("metrics", cursor)  # every row was filtered out: no request needed
 
     async def _metrics_request(self, rows: list[Any]) -> tuple[dict[str, Any], int]:
@@ -340,7 +366,7 @@ class Exporter:
         wanted = set(self.cfg.resource_filter)
         grouped: dict[Any, dict[Any, dict[Any, list[dict[str, Any]]]]] = {}
         count = 0
-        for sid, t, v in rows:
+        for sid, t, v, _seq in rows:
             m = meta.get(int(sid))
             if m is None or v is None or (wanted and m["kind"] not in wanted):
                 continue
@@ -415,7 +441,7 @@ class Exporter:
                               "scopeLogs": [{"scope": {"name": "observe.export"},
                                              "logRecords": gaps}]})
         return _Batch("logs", {"resourceLogs": resources}, len(rows),
-                      (0, int(rows[-1][0]) if rows else last), gaps)
+                      (0, int(rows[-1][0]) if rows else last), _span_s(rows, 2), gaps)
 
     async def _audit_batch(self) -> _Batch | None:
         _, last = await self._cursor("audit")
@@ -434,16 +460,21 @@ class Exporter:
         request = {"resourceLogs": [{"resource": {"attributes": kvs({"service.name": "observe"})},
                                      "scopeLogs": [{"scope": {"name": "observe.audit"},
                                                     "logRecords": recs}]}]}
-        return _Batch("logs", request, len(recs), (0, int(rows[-1][0])))
+        return _Batch("logs", request, len(recs), (0, int(rows[-1][0])), _span_s(rows, 1))
 
-    async def _record_gap(self, start_ms: int, end_ms: int) -> None:
+    async def _record_gap(self, start_ms: int, end_ms: int, *, signal: str = "metrics",
+                          count: int = 0, reason: str = "raw retention") -> None:
+        """Say that records could not be exported: a log line, an audit row and, when logs are
+        exported, a log record in the next request. Used for retention loss and for every drop."""
         self.stats.gaps += 1
-        text = (f"Observe could not export samples between {start_ms} and {end_ms} "
-                "(milliseconds since the epoch) because raw retention removed them first.")
+        text = (f"Observe could not export {count} {signal} records between {start_ms} and "
+                f"{end_ms} (milliseconds since the epoch): {reason}.")
         log.warning("OTLP export gap: %s", text)
         try:
             await self.store.write_audit("export_gap", actor="exporter",
-                                         detail={"start_ms": start_ms, "end_ms": end_ms})
+                                         detail={"start_ms": start_ms, "end_ms": end_ms,
+                                                 "signal": signal, "count": count,
+                                                 "reason": reason})
         except Exception as err:  # a failed audit row must not stop the export
             log.error("could not record the export gap in the audit log: %s", type(err).__name__)
         if "logs" not in self.cfg.signals:
@@ -452,7 +483,9 @@ class Exporter:
                            "severityText": "WARN", "body": {"stringValue": text},
                            "attributes": kvs({"event.name": "observe.export.gap",
                                               "observe.export.gap.start_ms": start_ms,
-                                              "observe.export.gap.end_ms": end_ms})})
+                                              "observe.export.gap.end_ms": end_ms,
+                                              "observe.export.gap.signal": signal,
+                                              "observe.export.gap.count": count})})
 
     # ---- sending -----------------------------------------------------------------------
 
@@ -480,11 +513,16 @@ class Exporter:
             rejected, _ = encode.read_response(resp.content,
                                                resp.headers.get("content-type", ""))
             return Outcome(True, rejected=min(rejected, batch.count))
-        if status in RETRYABLE:
-            return Outcome(False, retry=True, reason=f"collector answered {status}",
-                           wait=retry_after(resp.headers.get("retry-after"), self.clock()))
-        return Outcome(False, reason=f"collector answered {status}",
-                       too_large=status == TOO_LARGE)
+        if status in PERMANENT or 300 <= status < 400:  # a redirect is never followed
+            return Outcome(False, reason=f"collector answered {status}", status=status,
+                           split=status in SPLIT)
+        if status == 413:
+            return Outcome(False, reason=f"collector answered {status}", status=status,
+                           split=True)
+        # Any other answer (500, 502, 503, 504, 429, 401, 403, 408, a stray 3xx) is not a verdict
+        # on the data: hold the batch and try again later.
+        return Outcome(False, retry=True, reason=f"collector answered {status}", status=status,
+                       wait=retry_after(resp.headers.get("retry-after"), self.clock()))
 
     # ---- status ------------------------------------------------------------------------
 
@@ -496,4 +534,4 @@ class Exporter:
                 "failed": s.failed, "dropped": s.dropped, "rejected": s.rejected,
                 "lag_seconds": round(s.lag_s, 3), "last_success": s.last_success,
                 "last_error": s.last_error, "consecutive_failures": s.consecutive_failures,
-                "gaps": s.gaps}
+                "gaps": s.gaps, "alert": s.alert}

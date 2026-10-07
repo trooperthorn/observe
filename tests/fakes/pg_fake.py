@@ -66,6 +66,8 @@ class FakePgConn:
         bare = _outside_quotes(pg)
         assert not SQLITE_ONLY.search(bare), f"not PostgreSQL: {pg}"
         assert "?" not in bare, f"unconverted placeholder: {pg}"
+        # PostgreSQL cannot infer the type of a bare parameter tested for NULL.
+        assert not re.search(r"%s\s+IS\s+(?:NOT\s+)?NULL", bare, re.I), f"untyped NULL test: {pg}"
         self.seen.append(pg)
         return back_to_sqlite(pg, has_args)
 

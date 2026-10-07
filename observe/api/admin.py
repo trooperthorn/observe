@@ -333,6 +333,7 @@ class ExporterOut(BaseModel):
     last_error: str = ""
     consecutive_failures: int = 0
     gaps: int = 0
+    alert: str = ""
 
 
 def exporter_status(ctx: ApiContext) -> dict[str, Any]:

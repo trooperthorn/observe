@@ -176,13 +176,18 @@ def _up_sql(keep_classic: bool) -> str:
 
 
 # An offline row keeps what is already known and moves only the name and the last seen time. When
-# the console gave no last seen time (`?` is NULL), the stored time is not refreshed, so the row
-# ages out by retention instead of looking new on every poll.
-_OFF = """INSERT INTO unifi_clients (site_id, client_id, mac, name, connected, first_seen,
+# the console gave no last seen time, the stored time is not refreshed, so the row ages out by
+# retention instead of looking new on every poll. That choice is made in Python, with two
+# statements, because PostgreSQL cannot infer the type of a bare `? IS NULL` parameter.
+def _off_sql(known: bool) -> str:
+    seen = ", last_seen=MAX(last_seen, excluded.last_seen)" if known else ""
+    return f"""INSERT INTO unifi_clients (site_id, client_id, mac, name, connected, first_seen,
   last_seen) VALUES (?,?,?,?,0,?,?)
   ON CONFLICT (site_id, client_id) DO UPDATE SET connected=0,
-  name=CASE WHEN excluded.name != '' THEN excluded.name ELSE name END,
-  last_seen=CASE WHEN ? IS NULL THEN last_seen ELSE MAX(last_seen, excluded.last_seen) END"""
+  name=CASE WHEN excluded.name != '' THEN excluded.name ELSE name END{seen}"""
+
+
+_OFF_KNOWN, _OFF_UNKNOWN = _off_sql(True), _off_sql(False)
 
 
 def _write_clients(db: Conn, site_id: str, live: list[Client], off: list[Client],
@@ -195,10 +200,11 @@ def _write_clients(db: Conn, site_id: str, live: list[Client], off: list[Client]
     # Anything still marked connected that this poll did not write has left.
     db.execute("UPDATE unifi_clients SET connected=0 WHERE site_id=? AND connected=1 "
                "AND last_seen < ?", (site_id, now))
-    db.executemany(_OFF, [
-        (c.site_id, c.client_id, c.mac, c.name,
-         c.last_seen if c.last_seen is not None else now,
-         c.last_seen if c.last_seen is not None else now, c.last_seen) for c in off])
+    for known, sql in ((True, _OFF_KNOWN), (False, _OFF_UNKNOWN)):
+        db.executemany(sql, [
+            (c.site_id, c.client_id, c.mac, c.name, c.last_seen if known else now,
+             c.last_seen if known else now)
+            for c in off if (c.last_seen is not None) == known])
     return len(live) + len(off)
 
 
