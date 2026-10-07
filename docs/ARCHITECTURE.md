@@ -649,13 +649,22 @@ batch wrote last. A pushed agent (including ha_Int_soc) outranks the Home Assist
 higher one and the newest heartbeat wins within a rank (`PULL_PRODUCER_RANK` in `store.py`).
 
 An `snmp` monitor in mode `cpu`, `memory`, `storage` or `interface` with `host_name` set does the
-same for SNMP: after a successful poll `observe/checks/snmp.py` builds a one-source (`snmp`)
-`Batch` for that host and calls `Store.ingest_batch` in process. The host page then shows
-`cpu_pct` and per-core load under CPU, `mem_used_pct` and byte totals under Memory,
-`disk_used_pct` and byte totals per mount under Disks, and `if_up`, rates, speed and utilization
-under a Network interfaces section. Several monitors may share one host name, because each series
-is keyed by source, metric and labels. A failed poll stores nothing, so the host goes stale
-instead of showing zeros, and a watched interface that is down is stored as `if_up` 0, a Warning.
+same for SNMP: after a successful poll `observe/checks/snmp.py` builds a one-source
+(`observe.check.snmp`) `Batch` for that host and calls `Store.ingest_batch` in process. The
+readings carry the OpenTelemetry names of `docs/DATA-API-DESIGN.md` section 3.5, with ratios from
+0 to 1, bytes in `By` and rates in `bit/s`. The host page then shows `system.cpu.utilization`
+(the whole host, and one point per core with `cpu.logical_number`) under CPU,
+`system.memory.utilization`, `system.memory.limit` and `system.memory.usage` under Memory,
+`system.filesystem.utilization` and `system.filesystem.usage` (state used and free) per mount
+under Disks, and `observe.network.interface.up`, `.rate` (with `network.io.direction`), `.speed`
+and `.utilization` under a Network interfaces section. The grading limits are the old percent
+limits as ratios (CPU 0.90 and 0.98, memory 0.90 and 0.97, filesystem 0.85 and 0.95, interface
+0.70 and 0.90), so a host grades the same as before; one core is shown and not graded. The old
+`snmp` source and its keys (`cpu_pct`, `mem_used_pct`, `if_in_bps` and the rest) are gone, and a
+threshold rule for these series names the scope `observe.check.snmp`. Several monitors may share
+one host name, because each series is keyed by scope, metric and attributes. A failed poll stores
+nothing, so the host goes stale instead of showing zeros, and a watched interface that is down is
+stored as `observe.network.interface.up` 0, a Warning.
 The `storage` mode reads `hrStorageTable` fixed disks (`.1.3.6.1.2.1.25.2.1.4`) and computes
 `capacity = hrStorageAllocationUnits * hrStorageSize` and `used = hrStorageAllocationUnits *
 hrStorageUsed`, per RFC 2790 and ha_Int_soc `docs/SNMPV3.md`. The host listing and the stale

@@ -17,7 +17,7 @@ The source lives at https://github.com/trooperthorn/observe.
 | `http` | status code, optional body text, private CA support | response time, ms |
 | `dns` | record resolves, optional expected answers | query time, ms |
 | `tls_cert` | chain and hostname validate, days to expiry | days remaining (default WARN 21, FAIL 7) |
-| `snmp` | `oid`, `uptime`, `interface`, `cpu`, `memory`, `storage` over v2c or v3; with `host_name` the cpu, memory, storage and interface readings also appear on that host's page | OID value, days up, % utilization, % CPU, % RAM, % of the fullest disk |
+| `snmp` | `oid`, `uptime`, `interface`, `cpu`, `memory`, `storage` over v2c or v3; with `host_name` the cpu, memory, storage and interface readings also appear on that host's page under the OpenTelemetry names of the design (scope `observe.check.snmp`, ratios from 0 to 1) | OID value, days up, % utilization, % CPU, % RAM, % of the fullest disk |
 | `winrm` | `service` state, `cpu`, `memory`, `disk`, or a `powershell` script | %, or the script's number |
 | `wmi` | a WQL query over WinRM with `first/sum/avg/max/min/count` | the aggregate |
 | `mqtt` | broker connect/auth, or a topic's payload | payload, if `numeric: true` |

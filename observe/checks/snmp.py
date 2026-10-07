@@ -303,45 +303,71 @@ def storage_bytes(units: str | None, size: str | None, used: str | None) -> tupl
     return u * sz, u * us
 
 
+SCOPE = "observe.check.snmp"  # the instrumentation scope of the readings (design section 3.1)
+
+# Metric names of docs/DATA-API-DESIGN.md section 3.5. The units are UCUM: a ratio is `1` from 0
+# to 1, not percent, and a rate is bit/s.
+CPU_UTILIZATION = "system.cpu.utilization"
+MEMORY_LIMIT = "system.memory.limit"
+MEMORY_USAGE = "system.memory.usage"
+MEMORY_UTILIZATION = "system.memory.utilization"
+FILESYSTEM_USAGE = "system.filesystem.usage"
+FILESYSTEM_UTILIZATION = "system.filesystem.utilization"
+INTERFACE_UP = "observe.network.interface.up"
+INTERFACE_RATE = "observe.network.interface.rate"
+INTERFACE_SPEED = "observe.network.interface.speed"
+INTERFACE_UTILIZATION = "observe.network.interface.utilization"
+
+
+def _ratio(percent: float) -> float:
+    return round(percent / 100, 6)
+
+
 def host_batch(host: str, mode: str, res: CheckResult, now: float) -> Batch | None:
-    """A hostwatch-schema batch from one SNMP result, source "snmp". Shapes follow the detail
-    each mode returns; a result with nothing to show gives None."""
+    """A normalized batch from one SNMP result, in the scope `observe.check.snmp` with the
+    OpenTelemetry names of docs/DATA-API-DESIGN.md section 3.5. Shapes follow the detail each
+    mode returns; a result with nothing to show gives None."""
     samples: list[dict[str, Any]] = []
 
-    def add(metric: str, value: float | None, unit: str = "", **labels: str) -> None:
+    def add(metric: str, value: float | None, unit: str, **labels: str) -> None:
         if value is not None and not (math.isfinite(value) and abs(value) <= MAX_ABS_VALUE):
             return
-        samples.append({"source": "snmp", "metric": metric, "value": value, "unit": unit,
+        samples.append({"source": SCOPE, "metric": metric, "value": value, "unit": unit,
                         "labels": {k: str(v)[:MAX_TEXT] for k, v in labels.items()}, "ts": now})
 
     d = res.detail or {}
     if mode == "cpu" and res.value is not None:
-        add("cpu_pct", res.value, "%")
+        add(CPU_UTILIZATION, _ratio(res.value), "1")
         for n, load in enumerate(d.get("per_core", [])[:256]):
-            add("cpu_core_pct", float(load), "%", core=str(n))
+            add(CPU_UTILIZATION, _ratio(float(load)), "1", **{"cpu.logical_number": str(n)})
     elif mode == "memory" and res.value is not None and "total_bytes" in d:
-        add("mem_used_pct", res.value, "%")
-        add("mem_total_bytes", float(d["total_bytes"]), "bytes")
-        add("mem_used_bytes", float(d["used_bytes"]), "bytes")
+        add(MEMORY_UTILIZATION, _ratio(res.value), "1")
+        add(MEMORY_LIMIT, float(d["total_bytes"]), "By")
+        add(MEMORY_USAGE, float(d["used_bytes"]), "By", **{"system.memory.state": "used"})
     elif mode == "storage" and d.get("disks"):
         for disk in d["disks"]:
-            add("disk_used_pct", disk["used_pct"], "%", mount=disk["mount"])
-            add("disk_total_bytes", float(disk["total_bytes"]), "bytes", mount=disk["mount"])
-            add("disk_used_bytes", float(disk["used_bytes"]), "bytes", mount=disk["mount"])
+            mount = {"system.filesystem.mountpoint": disk["mount"]}
+            add(FILESYSTEM_UTILIZATION, _ratio(disk["used_pct"]), "1", **mount)
+            add(FILESYSTEM_USAGE, float(disk["used_bytes"]), "By",
+                **mount, **{"system.filesystem.state": "used"})
+            add(FILESYSTEM_USAGE, float(max(0, disk["total_bytes"] - disk["used_bytes"])), "By",
+                **mount, **{"system.filesystem.state": "free"})
     elif mode == "interface" and "ifIndex" in d:
-        name = str(d.get("name", d["ifIndex"]))
+        name = {"network.interface.name": str(d.get("name", d["ifIndex"]))}
         status = str(d.get("oper_status", "up"))
         up = status == "up"
-        add("if_up", 1.0 if up else 0.0, "", interface=name, status=status)
-        for key, metric, unit in (("in_bps", "if_in_bps", "bit/s"),
-                                  ("out_bps", "if_out_bps", "bit/s"),
-                                  ("speed_mbps", "if_speed_mbps", "Mbit/s")):
+        add(INTERFACE_UP, 1.0 if up else 0.0, "1", **name,
+            **{"observe.network.interface.status": status})
+        for key, direction in (("in_bps", "receive"), ("out_bps", "transmit")):
             if key in d:
-                add(metric, float(d[key]), unit, interface=name)
+                add(INTERFACE_RATE, float(d[key]), "bit/s", **name,
+                    **{"network.io.direction": direction})
+        if "speed_mbps" in d:
+            add(INTERFACE_SPEED, float(d["speed_mbps"]) * 1e6, "bit/s", **name)
         if res.value is not None and up:
-            add("if_util_pct", res.value, "%", interface=name)
+            add(INTERFACE_UTILIZATION, _ratio(res.value), "1", **name)
     if not samples:
         return None
     return Batch.model_validate({
         "schema_version": 1, "agent_version": AGENT_VERSION, "host": host, "platform": "snmp",
-        "sent_at": now, "sources": [{"source": "snmp", "available": True}], "samples": samples})
+        "sent_at": now, "sources": [{"source": SCOPE, "available": True}], "samples": samples})

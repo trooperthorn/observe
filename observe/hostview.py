@@ -192,27 +192,35 @@ def _c(source: str, metric: str) -> tuple[str, str]:
 _LOADS = ("system.cpu.load_average.1m", "system.cpu.load_average.5m",
           "system.cpu.load_average.15m")
 _UTIL = _above(0.90, 0.98)  # a ratio of 0 to 1, as the design sends it
+SNMP = "observe.check.snmp"  # scope of the readings Observe's SNMP poller stores
+
+
+def _snmp_cpu(v: float, labels: dict[str, str]) -> tuple[str, str]:
+    """The whole-host load is graded; the load of one core (`cpu.logical_number`) is shown."""
+    return _info(v, labels) if "cpu.logical_number" in labels else _UTIL(v, labels)
+
 _FAN_SOURCES = ("hwmon", "thermalctl", "win_thermalsuite")
 
 # section -> {(scope, metric): grader}. The scope is the agent's `hostwatch.collector.<source>`
 # and the metric the OpenTelemetry name of docs/DATA-API-DESIGN.md section 3.2; the point
 # attributes are the labels a grader reads. A metric the agent could not map arrives as
-# `observe.legacy.<source>.<metric>` and is graded like the reading it carried. The `snmp`,
-# `homeassistant`, `hassio` and `ha_*` keys are the sources Observe's own pollers and ha_Int_soc
-# write, which keep their names until those producers move to OpenTelemetry names.
+# `observe.legacy.<source>.<metric>` and is graded like the reading it carried. The SNMP poller
+# writes the scope `observe.check.snmp` with the section 3.5 names. The `homeassistant`, `hassio`
+# and `ha_*` keys are the sources Observe's Home Assistant poller and ha_Int_soc write, which keep
+# their names until those producers move to OpenTelemetry names.
 RULES: dict[str, dict[tuple[str, str], Grader]] = {
     "cpu": {_c("cpu", "system.cpu.utilization"): _UTIL,
             _c("win_cpu", "system.cpu.utilization"): _UTIL,
             **{_c("cpu", m): _info for m in _LOADS},
             _c("cpu", "system.cpu.frequency"): _info,
             _c("cpu", "observe.cpu.idle_residency"): _info,
-            ("snmp", "cpu_pct"): _above(90, 98), ("snmp", "cpu_core_pct"): _info},
+            (SNMP, "system.cpu.utilization"): _snmp_cpu},
     "memory": {_c("memory", "system.memory.limit"): _info,
                _c("memory", "system.memory.usage"): _info,
                _c("memory", "system.paging.usage"): _info,
                _c("memory", "observe.legacy.memory.commit_used"): _info,
-               ("snmp", "mem_used_pct"): _above(90, 97), ("snmp", "mem_total_bytes"): _info,
-               ("snmp", "mem_used_bytes"): _info},
+               (SNMP, "system.memory.utilization"): _above(0.90, 0.97),
+               (SNMP, "system.memory.limit"): _info, (SNMP, "system.memory.usage"): _info},
     "power": {_c("rapl", "hw.power"): _info, _c("hwmon", "hw.power"): _info,
               _c("hwmon", "hw.voltage"): _info},
     "temperatures": {_c("hwmon", "hw.temperature"): _above(80, 90),
@@ -256,8 +264,8 @@ RULES: dict[str, dict[tuple[str, str], Grader]] = {
               _c("truenas", "hw.temperature"): _above(50, 60),
               ("hassio", "disk_used_pct"): _above(85, 95), ("hassio", "disk_free_gb"): _info,
               ("hassio", "disk_used_gb"): _info, ("hassio", "disk_total_gb"): _info,
-              ("snmp", "disk_used_pct"): _above(85, 95), ("snmp", "disk_total_bytes"): _info,
-              ("snmp", "disk_used_bytes"): _info},
+              (SNMP, "system.filesystem.utilization"): _above(0.85, 0.95),
+              (SNMP, "system.filesystem.usage"): _info},
     "ups": {_c("nut", "observe.ups.status"): _ups_flag,
             _c("nut", "hw.battery.charge"): _below(0.50, 0.20),
             _c("nut", "hw.battery.time_left"): _info,
@@ -306,9 +314,11 @@ RULES: dict[str, dict[tuple[str, str], Grader]] = {
                 ("ha_backup", "backups_total"): _info},
     # Interfaces read over SNMP. An interface the admin chose to watch that is not up is a
     # Warning, never silently zero traffic.
-    "network": {("snmp", "if_up"): lambda v, _l: (GOOD, "") if v else (WARNING, "interface is down"),
-                ("snmp", "if_in_bps"): _info, ("snmp", "if_out_bps"): _info,
-                ("snmp", "if_speed_mbps"): _info, ("snmp", "if_util_pct"): _above(70, 90)},
+    "network": {(SNMP, "observe.network.interface.up"):
+                lambda v, _l: (GOOD, "") if v else (WARNING, "interface is down"),
+                (SNMP, "observe.network.interface.rate"): _info,
+                (SNMP, "observe.network.interface.speed"): _info,
+                (SNMP, "observe.network.interface.utilization"): _above(0.70, 0.90)},
 }
 SECTIONS = ("cpu", "memory", "power", "temperatures", "fans", "raid", "zfs", "disks", "ups",
             "ha", "containers", "integrations", "repairs", "backups", "network")

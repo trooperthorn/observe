@@ -141,18 +141,27 @@ def test_host_page_shows_cpu_memory_disks_and_interface(tmp_path):
         env.login()
         d = detail(env, "homeassistant")
         assert d["heard"] and d["platform"] == "snmp" and not d["stale"]
-        assert reading(d, "cpu", "cpu_pct")["value"] == 40.0
-        assert reading(d, "cpu", "cpu_pct")["status"] == "good"
-        assert reading(d, "cpu", "cpu_core_pct", core="3")["value"] == 70.0
-        assert reading(d, "memory", "mem_used_pct")["value"] == 25.0
-        assert reading(d, "memory", "mem_total_bytes")["value"] == 8000000 * 1024
-        root = reading(d, "disks", "disk_used_pct", mount="/")
-        data = reading(d, "disks", "disk_used_pct", mount="/data")
-        assert root["value"] == 20.0 and root["status"] == "good"
-        assert data["value"] == 90.0 and data["status"] == "warning"
-        assert reading(d, "disks", "disk_total_bytes", mount="/data")["value"] == 65536 * 3815470
-        assert reading(d, "network", "if_up", interface="2")["value"] == 1.0
-        assert reading(d, "network", "if_speed_mbps", interface="2")["value"] == 1000.0
+        cpu = [i for i in d["cpu"]["items"] if i["metric"] == "system.cpu.utilization"]
+        whole = next(i for i in cpu if "cpu.logical_number" not in i["labels"])
+        assert whole["source"] == snmpmod.SCOPE and whole["unit"] == "1"
+        assert whole["value"] == 0.4 and whole["status"] == "good"
+        assert reading(d, "cpu", "system.cpu.utilization",
+                       {"cpu.logical_number": "3"})["value"] == 0.7
+        assert reading(d, "memory", "system.memory.utilization")["value"] == 0.25
+        assert reading(d, "memory", "system.memory.limit")["value"] == 8000000 * 1024
+        mp = "system.filesystem.mountpoint"
+        root = reading(d, "disks", "system.filesystem.utilization", {mp: "/"})
+        data = reading(d, "disks", "system.filesystem.utilization", {mp: "/data"})
+        assert root["value"] == 0.2 and root["status"] == "good"
+        assert data["value"] == 0.9 and data["status"] == "warning"
+        used = reading(d, "disks", "system.filesystem.usage",
+                       {mp: "/data", "system.filesystem.state": "used"})
+        free = reading(d, "disks", "system.filesystem.usage",
+                       {mp: "/data", "system.filesystem.state": "free"})
+        assert used["value"] + free["value"] == 65536 * 3815470 and used["unit"] == "By"
+        nic = {"network.interface.name": "2"}
+        assert reading(d, "network", "observe.network.interface.up", nic)["value"] == 1.0
+        assert reading(d, "network", "observe.network.interface.speed", nic)["value"] == 1e9
         assert d["disks"]["status"] == "warning" and d["status"] == "warning"
         listed = {h["host"]: h for h in env.client.get("/api/v2/hosts").json()["items"]}
         assert listed["homeassistant"]["sections"]["disks"] == "warning"
@@ -181,8 +190,9 @@ def test_a_down_interface_is_a_warning_not_zero_traffic(tmp_path):
         assert asyncio.run(chk.run()).result is Result.FAIL
         env.login()
         d = detail(env, "homeassistant")
-        item = reading(d, "network", "if_up", interface="2")
+        item = reading(d, "network", "observe.network.interface.up", {"network.interface.name": "2"})
         assert item["value"] == 0.0 and item["status"] == "warning"
-        assert not any(i["metric"] == "if_in_bps" for i in d["network"]["items"])
+        assert not any(i["metric"] == "observe.network.interface.rate"
+                       for i in d["network"]["items"])
     finally:
         env.close()

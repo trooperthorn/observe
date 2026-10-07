@@ -35,10 +35,11 @@ T0 = 1_700_000_000.0
 NOW = T0 + 30.0
 HOST = "nas01"
 
-# Collector ids Observe's own pollers and ha_Int_soc write with names that are not hostwatch
-# collector scopes; their rules keep the names until those producers move to OpenTelemetry names.
-OTHER_PRODUCERS = {"snmp", "homeassistant", "hassio", "ha_supervisor", "ha_soc", "ha_container",
-                   "ha_watchdog", "ha_integrations", "ha_repairs", "ha_backup"}
+# Scopes and ids that Observe's own checks and ha_Int_soc write, which are not hostwatch collector
+# scopes (the SNMP check has its own section 3.5 test in test_snmp_otel.py); the Home Assistant
+# rules keep their names until those producers move to OpenTelemetry names.
+OTHER_PRODUCERS = {"observe.check.snmp", "homeassistant", "hassio", "ha_supervisor", "ha_soc",
+                   "ha_container", "ha_watchdog", "ha_integrations", "ha_repairs", "ha_backup"}
 
 # Every point of every fixture: (collector, metric, a subset of its attributes) -> (section, grade).
 # The Windows storage rows (physical disk, pool, virtual disk) are `hw.status` and are told apart by
@@ -417,7 +418,7 @@ async def test_threshold_rules_name_the_opentelemetry_metric(tmp_path):
         keys = {k for k in sched.rules._meta}
         assert len(keys) == 2
         assert rule_metric(collector_scope("hwmon"), "hw.temperature") == "hw.temperature"
-        assert rule_metric("snmp", "cpu_pct") == "snmp.cpu_pct"
+        assert rule_metric("hassio", "disk_used_pct") == "hassio.disk_used_pct"
     finally:
         store.close()
 
