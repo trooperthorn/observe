@@ -44,13 +44,13 @@ def test_page_is_static_and_holds_no_data(env):
 
 def test_admin_can_list_and_non_admin_is_denied(env):
     hdr = admin_login(env)
-    assert env.client.get("/api/admin/keys").json() == []
+    assert env.client.get("/api/v2/admin/keys").json()["items"] == []
     assert env.client.post("/api/admin/keys", json={"host": "h1"}, headers=hdr).status_code == 200
 
     env.client.cookies.clear()
     env.user("bob")
     bob = env.csrf(env.login("bob"))
-    assert env.client.get("/api/admin/keys").status_code == 403
+    assert env.client.get("/api/v2/admin/keys").status_code == 403
     assert env.client.post("/api/admin/keys", json={"host": "h2"}, headers=bob).status_code == 403
     assert env.client.post("/api/admin/keys/abc/revoke", headers=bob).status_code == 403
     assert env.client.post("/api/admin/users/1/disabled", json={"value": True},
@@ -62,7 +62,7 @@ def test_admin_can_list_and_non_admin_is_denied(env):
 
 
 def test_no_session_and_basic_auth_are_refused(env):
-    for method, path in [("GET", "/api/admin/keys"), ("POST", "/api/admin/keys"),
+    for method, path in [("GET", "/api/v2/admin/keys"), ("POST", "/api/admin/keys"),
                          ("POST", "/api/admin/keys/abc/revoke"),
                          ("POST", "/api/admin/users/1/disabled"),
                          ("POST", "/api/admin/users/1/admin")]:
@@ -93,15 +93,15 @@ def test_key_create_shows_secret_once_and_revoke(env):
     assert made["key"].startswith("wpi_") and made["host"] == "nas1"
     assert r.headers["cache-control"] == "no-store"
 
-    listing = env.client.get("/api/admin/keys")
-    assert [k["id"] for k in listing.json()] == [made["id"]]
-    assert listing.json()[0]["active"] is True
+    listing = env.client.get("/api/v2/admin/keys")
+    assert [k["id"] for k in listing.json()["items"]] == [made["id"]]
+    assert listing.json()["items"][0]["active"] is True
     assert made["key"] not in listing.text
     assert asyncio.run(verify_key(env.store, made["key"], "nas1")) is True
 
     rv = env.client.post(f"/api/admin/keys/{made['id']}/revoke", headers=hdr)
     assert rv.status_code == 200
-    assert env.client.get("/api/admin/keys").json()[0]["active"] is False
+    assert env.client.get("/api/v2/admin/keys").json()["items"][0]["active"] is False
     assert asyncio.run(verify_key(env.store, made["key"], "nas1")) is False
     again = env.client.post(f"/api/admin/keys/{made['id']}/revoke", headers=hdr)
     assert again.status_code == 404
@@ -150,9 +150,9 @@ def test_disabled_user_session_stops_working(env):
     try:
         r = other.post("/api/login", json={"username": "bob", "password": PASSWORD})
         assert r.status_code == 200
-        assert other.get("/api/session").status_code == 200
+        assert other.get("/api/v2/session").status_code == 200
         env.client.post(f"/api/admin/users/{bob}/disabled", json={"value": True}, headers=hdr)
-        assert other.get("/api/session").status_code == 401
+        assert other.get("/api/v2/session").status_code == 401
     finally:
         other.close()
 

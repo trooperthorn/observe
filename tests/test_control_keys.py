@@ -341,7 +341,7 @@ def test_wpi_and_wpf_keys_are_refused_on_control_endpoints(env):
 
 def test_wpc_key_is_refused_on_session_routes_and_admin_routes(env):
     key, _ = run(create_control_key(env.store, "nas01"))
-    for path in ("/api/admin/keys", "/api/plugins/pockethernet/reports"):
+    for path in ("/api/v2/admin/keys", "/api/plugins/pockethernet/reports"):
         assert env.client.get(path, headers=bearer(key)).status_code in (401, 403), path
     assert env.client.post("/api/admin/keys", json={"host": "h", "scope": "wpc"},
                            headers=bearer(key)).status_code in (401, 403)
@@ -356,8 +356,8 @@ def test_admin_creates_and_revokes_wpc_keys(env):
     body = made.json()
     assert body["scope"] == "wpc" and body["key"].startswith("wpc_")
     assert env.pull(body["key"]).status_code == 200
-    listing = env.client.get("/api/admin/keys")
-    assert [(k["host"], k["scope"]) for k in listing.json()] == [("nas01", "wpc")]
+    listing = env.client.get("/api/v2/admin/keys")
+    assert [(k["host"], k["scope"]) for k in listing.json()["items"]] == [("nas01", "wpc")]
     assert body["key"] not in listing.text
     revoked = env.client.post(f"/api/admin/keys/{body['id']}/revoke", headers=hdr)
     assert revoked.status_code == 200

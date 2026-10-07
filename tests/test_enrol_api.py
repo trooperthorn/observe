@@ -313,7 +313,7 @@ def test_token_and_keys_never_reach_logs_or_audit(env, caplog):
         assert s not in audit_dump and s not in caplog.text and s not in enrol_dump
         assert s not in progress.text
     # The token is also not in any later API response.
-    for path in ("/api/audit", "/api/admin/keys", "/api/hosts"):
+    for path in ("/api/v2/audit", "/api/v2/admin/keys", "/api/hosts"):
         assert token not in env.client.get(path).text
 
 

@@ -117,14 +117,12 @@ def test_bounded_read_does_not_scale_with_retention(tmp_path):
 
 
 def test_page_refresh_never_overlaps():
+    # The poller starts the next run only after the last one finished (tests/js/api.test.mjs
+    # proves that), so the pages hand their refresh to it and keep no flag or timer of their own.
     for name in ("app.js", "host.js"):
         text = (STATIC / name).read_text(encoding="utf-8")
-        body = re.search(r"async function refresh\(\) \{(.*?)\n\}\n", text, re.S).group(1)
-        assert "if (refreshing) return;" in body
-        first_read = min(body.index(call) for call in ("fetch(", "getAll(", "getJson(")
-                         if call in body)
-        assert body.index("refreshing = true") < first_read
-        assert "finally" in body and "refreshing = false" in body
+        assert "poller(refresh," in text
+        assert "setInterval" not in text and "refreshing" not in text
 
 
 @pytest.mark.parametrize("version", [10, 15, 16, 17])

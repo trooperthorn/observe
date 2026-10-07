@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Polling tiers - Observe</title>
+<link rel="stylesheet" href="/static/css/tokens.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/shell.css">
+<link rel="stylesheet" href="/static/css/components.css">
+<link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+<header id="shell-header" class="shell-head">
+  <div id="summary" aria-live="polite"></div>
+</header>
+<nav id="shell-nav" aria-label="Main"></nav>
+<main class="admin-main" id="page">
+  <div class="admin-title">
+    <p class="crumbs muted">Admin / Polling tiers</p>
+    <h1>Polling tiers</h1>
+  </div>
+  <p id="msg" class="msg-line" role="alert"></p>
+  <form id="tiers-form" class="card" aria-labelledby="g-h">
+    <h3 id="g-h">Global rates</h3>
+    <p class="card-sub">How often an agent collects each kind of data, in seconds. Leave a cell empty to use the default. An agent reads the new rates the next time it fetches its configuration.</p>
+    <div id="tiers-global"></div>
+    <h3 id="h-h">Per-host overrides</h3>
+    <p class="card-sub">A rate set here beats the global rate for that host. Leave a cell empty to use the global rate. Only hosts that have an active ingest key are listed.</p>
+    <div id="tiers-hosts"></div>
+    <p><button type="submit" class="btn primary">Save rates</button></p>
+  </form>
+</main>
+<script type="module" src="/static/admin-tiers.js"></script>
+<script type="module" src="/static/js/shell.js"></script>
+</body>
+</html>

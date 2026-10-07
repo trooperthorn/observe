@@ -121,9 +121,10 @@ def test_the_command_never_reaches_a_url_storage_or_a_toast():
 
 def test_polling_is_every_three_seconds_stops_when_done_and_ignores_stale_replies():
     js = _read("hosts-new.js")
-    assert "const POLL_MS = 3000" in js and "setTimeout(tick, POLL_MS)" in js
-    assert "if (next.ready || next.expired) return;" in js
-    assert js.count("if (gen !== pollGen) return;") == 2
+    assert "const POLL_MS = 3000" in js and "interval: POLL_MS" in js
+    assert "if (next.ready || next.expired) handle.stop();" in js
+    assert js.count("if (signal.aborted) return;") == 1
+    assert "setTimeout" not in js and "setInterval" not in js
     assert "/enrolment`" in js and 'const path = used ? "reissue" : "regenerate"' in js
     assert not re.search(r"setTimeout\(\s*[\"'`]", js)
 

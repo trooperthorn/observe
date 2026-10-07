@@ -359,38 +359,6 @@ async def record_result(store: Store, host: str, key_prefix: str, command_id: st
     return {"id": command_id, "state": state, "truncated": truncated}
 
 
-def _list(db: Conn, now: float, limit: int,
-               host: str | None) -> tuple[list[dict[str, Any]], list[str]]:
-    expired = _expire(db, now)
-    where, args = ("WHERE host=? ", (host,)) if host else ("", ())
-    rows = db.execute(
-        f"SELECT {_COLUMNS}, state, signature FROM control_commands {where}"
-        "ORDER BY issued_at DESC, seq DESC LIMIT ?", (*args, limit)).fetchall()
-    out = []
-    for r in rows:
-        item = _command_object(r[:8])
-        item["state"] = r[8]
-        res = db.execute(
-            "SELECT state, output, output_truncated, duration_s, received_at "
-            "FROM control_results WHERE command_id=? ORDER BY id DESC LIMIT 1",
-            (r[0],)).fetchone()
-        item["result"] = None if res is None else {
-            "state": res[0], "output": res[1], "output_truncated": bool(res[2]),
-            "duration_s": res[3], "received_at": res[4]}
-        out.append(item)
-    return out, expired
-
-
-async def list_commands(store: Store, now: float, limit: int = 100,
-                        host: str | None = None) -> list[dict[str, Any]]:
-    """Recent commands, newest first, with their state and latest result. Expires first.
-    `host` limits the list to one host."""
-    items, expired = await store.storage.write(
-        lambda db: _list(db, now, max(1, min(limit, 500)), host))
-    await _audit_expired(store, expired)
-    return items
-
-
 def _cancel(db: Conn, command_id: str, now: float) -> tuple[str, str, list[str]]:
     """Returns (host, refusal reason or empty, ids expired). Raises nothing inside the
     transaction, so the expiry it wrote is kept even when the cancel is refused."""

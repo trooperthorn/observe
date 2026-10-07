@@ -20,11 +20,11 @@ from fastapi.responses import JSONResponse
 from observe import audit
 from observe.plugins import KeyScope, Migration, PluginBase, PluginError, PluginRouter
 
-from .actions import CONTROLLERS, MODES, capabilities, validate
+from .actions import capabilities, validate
 from .api import register as register_resources
 from .keys import SCOPE
-from .queue import (ACTIONS, MAX_HOST, MIGRATIONS, REBOOT, Limits, QueueError, cancel_command,
-                    enqueue_command, list_commands, pull_commands, record_result)
+from .queue import (MAX_HOST, MIGRATIONS, REBOOT, Limits, QueueError, cancel_command,
+                    enqueue_command, pull_commands, record_result)
 from .signing import SigningError, load_private_key, public_key_string
 
 __version__ = "0.1.0"
@@ -126,22 +126,6 @@ class RequestBody(BaseModel):
 
 def build_admin_router(plugin: "ControlPlugin") -> APIRouter:
     router = APIRouter()
-
-    @router.get("/commands")
-    async def commands(request: Request, limit: int = 100, host: str = "") -> dict[str, Any]:
-        """Recent commands with their state and latest result, for one host when `host` is
-        given. Admin session enforced by the core. An expired command with no result is
-        reported as unknown, never as done."""
-        return {"commands": await list_commands(request.app.state.plugin_store,
-                                                _now(request), limit, host or None)}
-
-    @router.get("/capabilities")
-    async def host_capabilities(request: Request, host: str = "") -> dict[str, Any]:
-        """The actions and what the host last reported, so the page can offer valid choices."""
-        data = await request.app.state.plugin_store.latest_host(host) if host else None
-        return {"host": host, "known": data is not None, "actions": list(ACTIONS),
-                "capabilities": capabilities(data["samples"] if data else []),
-                "controllers": list(CONTROLLERS), "modes": list(MODES)}
 
     @router.post("/request")
     async def request_action(request: Request, body: RequestBody) -> JSONResponse:

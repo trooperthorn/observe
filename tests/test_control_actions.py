@@ -46,7 +46,7 @@ def login(env, user="root") -> str:
     env.client.cookies.clear()
     assert env.client.post("/api/login", json={"username": user,
                                                "password": PASSWORD}).status_code == 200
-    return env.client.get("/api/session").json()["csrf"]
+    return env.client.get("/api/v2/session").json()["csrf"]
 
 
 def post(env, csrf, body, path="/request"):
@@ -59,7 +59,7 @@ def req(action="fan.set_floor", params=None, host=HOST, **extra):
 
 
 def commands(env, host=HOST):
-    return env.client.get(f"{BASE}/commands", params={"host": host}).json()["commands"]
+    return env.client.get("/api/v2/control/commands", params={"host": host}).json()["items"]
 
 
 # ---- access ----------------------------------------------------------------------------
@@ -73,8 +73,8 @@ def test_non_admin_gets_403_on_every_route(env):
     csrf = login(env, "viewer")
     assert post(env, csrf, req()).status_code == 403
     assert post(env, csrf, {}, "/commands/x/cancel").status_code == 403
-    assert env.client.get(f"{BASE}/commands").status_code == 403
-    assert env.client.get(f"{BASE}/capabilities?host={HOST}").status_code == 403
+    assert env.client.get("/api/v2/control/commands").status_code == 403
+    assert env.client.get(f"/api/v2/control/capabilities?host={HOST}").status_code == 403
     assert env.rows("SELECT COUNT(*) FROM control_commands") == [(0,)]
 
 
@@ -203,11 +203,11 @@ def test_valid_actions_are_all_queued(env):
 
 def test_capabilities_route_reports_headers(env):
     login(env)
-    data = env.client.get(f"{BASE}/capabilities", params={"host": HOST}).json()
+    data = env.client.get("/api/v2/control/capabilities", params={"host": HOST}).json()
     assert data["known"] and data["capabilities"] == {"thermalctl": True,
                                                        "headers": ["pwm1", "pwm2"]}
     assert "host.reboot" in data["actions"]
-    other = env.client.get(f"{BASE}/capabilities", params={"host": "ghost"}).json()
+    other = env.client.get("/api/v2/control/capabilities", params={"host": "ghost"}).json()
     assert other["known"] is False
 
 
@@ -363,9 +363,9 @@ def test_hostile_strings_come_back_as_json_data(env):
     csrf = login(env)
     cid = post(env, csrf, req("service.restart", {"name": "ok"}, host=HOSTILE)).json()["id"]
     env.answer(env.key(HOSTILE), {"id": cid, "state": "failed", "output": HOSTILE + "<img>"}, HOSTILE)
-    r = env.client.get(f"{BASE}/commands", params={"host": HOSTILE})
+    r = env.client.get("/api/v2/control/commands", params={"host": HOSTILE})
     assert r.headers["content-type"].startswith("application/json")
-    (item,) = r.json()["commands"]
+    (item,) = r.json()["items"]
     assert item["host"] == HOSTILE and HOSTILE in item["result"]["output"]
     refused = post(env, csrf, req("service.restart", {"name": HOSTILE}))
     assert refused.status_code == 422

@@ -81,7 +81,8 @@ def test_viewer_is_refused_every_admin_api_the_pages_use(env):
     assert env.login("bob").status_code == 200
     for path in ("/api/v2/audit", "/api/v2/admin/keys", "/api/v2/admin/users",
                  "/api/v2/admin/config", "/api/v2/admin/settings/tiers",
-                 "/api/v2/admin/settings/storage", "/api/admin/keys", "/api/admin/users",
+                 "/api/v2/admin/settings/storage", "/api/v2/admin/settings/retention",
+                 "/api/v2/admin/settings/recheck", "/api/v2/admin/settings/rules",
                  "/api/admin/infra/unlinked"):
         assert env.client.get(path).status_code == 403, path
     # The pages are static, so a viewer who opens them gets the "admin account needed" card.

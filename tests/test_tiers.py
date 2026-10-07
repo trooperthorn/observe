@@ -12,6 +12,7 @@ from observe.ingest.keys import create_key
 from .test_auth import Env
 
 URL = "/api/admin/tiers"
+READ = "/api/v2/admin/settings/tiers"
 AGENT = "/internal/v1/agent-config"
 
 
@@ -43,7 +44,7 @@ def test_default_tier_intervals_are_served(tmp_path):
             "availability": 30.0, "device_metrics": 60.0, "storage_health": 900.0,
             "smart": 3600.0, "inventory": 3600.0}}
         assert r.headers["cache-control"] == "no-store"
-        assert env.client.get(URL).json()["global"] == tiers.DEFAULTS
+        assert env.client.get(READ).json()["global"] == tiers.DEFAULTS
     finally:
         _close(env)
 
@@ -59,7 +60,7 @@ def test_a_per_host_override_applies_to_that_host_only(tmp_path):
         two = _agent(env, k2).json()["intervals"]
         assert one["availability"] == 10.0 and one["device_metrics"] == 120.0
         assert two["availability"] == 30.0 and two["device_metrics"] == 120.0
-        assert env.client.get(URL).json()["hosts"] == {"nas01": {"availability": 10.0}}
+        assert env.client.get(READ).json()["hosts"] == {"nas01": {"availability": 10.0}}
     finally:
         _close(env)
 
@@ -90,7 +91,7 @@ def test_a_wrong_key_scope_or_no_key_is_refused(tmp_path):
         assert len(denied) >= 1
         # An ingest key is not an admin session.
         env.client.cookies.clear()
-        assert env.client.get(URL, headers={"Authorization": f"Bearer {_key(env, 'h')}"}
+        assert env.client.get(READ, headers={"Authorization": f"Bearer {_key(env, 'h')}"}
                               ).status_code in (401, 403)
     finally:
         _close(env)
@@ -122,7 +123,7 @@ def test_refused_values_are_422_audited_and_store_nothing(tmp_path):
         assert env.client.put(URL, json={"global": {"smart": 600}}).status_code in (401, 403)
         assert len(env.rows("SELECT 1 FROM audit WHERE kind='tier_rates_failed'")) == 6
         assert env.rows("SELECT 1 FROM audit WHERE kind='tier_rates_changed'") == []
-        assert env.client.get(URL).json()["global"] == tiers.DEFAULTS
+        assert env.client.get(READ).json()["global"] == tiers.DEFAULTS
     finally:
         _close(env)
 
@@ -131,8 +132,8 @@ def test_null_resets_a_global_rate(tmp_path):
     env, hdr = _admin(tmp_path)
     try:
         env.client.put(URL, headers=hdr, json={"global": {"smart": 600}})
-        assert env.client.get(URL).json()["global"]["smart"] == 600.0
+        assert env.client.get(READ).json()["global"]["smart"] == 600.0
         env.client.put(URL, headers=hdr, json={"global": {"smart": None}})
-        assert env.client.get(URL).json()["global"]["smart"] == 3600.0
+        assert env.client.get(READ).json()["global"]["smart"] == 3600.0
     finally:
         _close(env)

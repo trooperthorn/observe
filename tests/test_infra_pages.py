@@ -96,7 +96,7 @@ async def test_data_behind_every_page_needs_a_login(web):
     for files in PAGES.values():
         js = (STATIC / files[1]).read_text(encoding="utf-8") + (
             STATIC / "js" / "api.js").read_text(encoding="utf-8")
-        assert 'assign("/login")' in js
+        assert "/login?next=" in js
     await web.login("bob", admin=False)
     assert web.client.get("/api/v2/map").status_code == 200
     assert web.port()["port_key"] == "gi1/0/5"

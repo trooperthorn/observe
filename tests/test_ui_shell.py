@@ -70,7 +70,8 @@ def test_nav_table_names_only_real_pages_and_marks_admin_ones(env):
     for row in table:
         assert env.client.get(str(row["href"])).status_code == 200, row
     admin_only = {r["href"] for r in table if r["admin"]}
-    assert admin_only == {"/admin", "/admin/infra", "/admin/retention", "/admin/recheck", "/audit", "/hosts/new"}
+    assert admin_only == {"/admin", "/admin/infra", "/admin/tiers", "/admin/retention", "/admin/recheck",
+                          "/admin/rules", "/admin/storage", "/audit", "/hosts/new"}
     assert {r["workspace"] for r in table} <= NAV_WORKSPACES
     assert "O" in SHELL and 'el("span", "shell-badge", "O")' in SHELL
 
@@ -78,7 +79,7 @@ def test_nav_table_names_only_real_pages_and_marks_admin_ones(env):
 def test_viewer_session_is_not_admin_and_the_shell_filters_on_it(env):
     env.user("bob")
     assert env.login("bob").status_code == 200
-    assert env.client.get("/api/session").json()["is_admin"] is False
+    assert env.client.get("/api/v2/session").json()["is_admin"] is False
     # The shell drops entries flagged admin unless the session says is_admin.
     assert "NAV.filter((n) => isAdmin || !n.admin)" in SHELL
 

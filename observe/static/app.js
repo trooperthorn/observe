@@ -7,7 +7,7 @@ import { statusChip, statusIcon } from "/static/js/chips.js";
 import { stateInfo } from "/static/js/chip-states.js";
 import { applyLayout, initTiles, setDeclared } from "/static/js/tiles.js";
 import { groupTile } from "/static/js/tiles-logic.js";
-import { getAll, getJson, seconds } from "/static/js/v2.js";
+import { getAll, get, poller, seconds } from "/static/js/api.js";
 
 const ORDER = { down: 0, unreachable: 1, warn: 2, pending: 3, up: 4 };
 const expanded = new Set();
@@ -160,9 +160,9 @@ async function loadHistory(slug, node) {
   try {
     const id = encodeURIComponent(slug);
     const [mon, body, events] = await Promise.all([
-      getJson(`/api/v2/monitors/${id}`),
-      getJson(`/api/v2/metrics/query?metric=monitor.*&resource=${id}&kind=monitor&from=-24h&agg=avg,max`),
-      getJson(`/api/v2/events?resource=${id}&kind=monitor&limit=8`),
+      get(`/api/v2/monitors/${id}`),
+      get(`/api/v2/metrics/query?metric=monitor.*&resource=${id}&kind=monitor&from=-24h&agg=avg,max`),
+      get(`/api/v2/events?resource=${id}&kind=monitor&limit=8`),
     ]);
     drawSpark(node.querySelector(".spark"), sparkPoints(body));
     node.querySelector(".avail").textContent = mon.availability_24h == null
@@ -288,7 +288,7 @@ function eventText(e) {
 }
 
 async function renderEvents() {
-  const page = await getJson("/api/v2/events?limit=25");
+  const page = await get("/api/v2/events?limit=25");
   document.getElementById("events").replaceChildren(...page.items.map((e) => {
     const li = el("li");
     li.append(el("span", "when", fmtTime(e.ts)), eventText(e));
@@ -298,7 +298,7 @@ async function renderEvents() {
 
 async function renderFindings() {
   let list;
-  try { list = (await getJson("/api/v2/findings")).items; } catch (_) { return; }
+  try { list = (await get("/api/v2/findings", null, { redirect: false })).items; } catch (_) { return; }
   document.getElementById("findings-panel").hidden = list.length === 0;
   document.getElementById("findings").replaceChildren(...list.map((f) => {
     const li = el("li", `finding ${f.severity}`);
@@ -316,7 +316,7 @@ async function renderWaiting() {
   const panel = document.getElementById("waiting-panel");
   let list = [];
   try {
-    list = (await getJson("/api/v2/waiting-hosts")).items;
+    list = (await get("/api/v2/waiting-hosts", null, { redirect: false })).items;
   } catch (_) { list = []; }
   panel.hidden = list.length === 0;
   document.getElementById("waiting").replaceChildren(...list.map((w) => {
@@ -329,16 +329,12 @@ async function renderWaiting() {
   }));
 }
 
-let refreshing = false;
-
-// A refresh never starts while the previous one is still running, so a slow server is
-// not given a growing queue of overlapping requests.
+// The poller waits for a refresh to finish before it plans the next one, so a slow server is
+// not given a growing queue of overlapping requests. It runs again when a domain it reads moves.
 async function refresh() {
-  if (refreshing) return;
-  refreshing = true;
   try {
     const [monitors, groups, status] = await Promise.all([
-      getAll("/api/v2/monitors"), getAll("/api/v2/groups"), getJson("/api/v2/status"),
+      getAll("/api/v2/monitors"), getAll("/api/v2/groups"), get("/api/v2/status"),
     ]);
     lastData = {
       version: status.version, monitors,
@@ -350,10 +346,9 @@ async function refresh() {
     await renderFindings();
     await renderWaiting();
   } catch (e) {
-    if (e.status === 401) { window.location.assign("/login"); return; }
+    if (e.status === 401) return;  // the client is already sending the visitor to sign in
     document.getElementById("footer").textContent = "observe unreachable, retrying";
-  } finally {
-    refreshing = false;
+    throw e;
   }
 }
 
@@ -368,5 +363,4 @@ document.getElementById("kpi-capacity").addEventListener("click", () => {
   if (!panel.hidden) { panel.open = true; panel.scrollIntoView(); }
 });
 initTiles(() => { if (lastData) render(lastData); });
-refresh();
-setInterval(refresh, 10000);
+poller(refresh, { interval: 10000, domains: ["monitors", "events", "map", "ports", "hosts"] });

@@ -115,9 +115,10 @@ def test_the_save_shows_the_diff_and_needs_the_dialog_before_the_request():
 
 def test_polling_is_every_three_seconds_stops_when_done_and_ignores_stale_replies():
     js = _read("host-settings.js")
-    assert "const POLL_MS = 3000" in js and "setTimeout(tick, POLL_MS)" in js
-    assert js.count("if (gen !== pollGen) return;") == 2
+    assert "const POLL_MS = 3000" in js and "interval: POLL_MS, delay: POLL_MS" in js
+    assert js.count("if (signal.aborted) return;") == 1
     assert "shown.finished = true" in js and "shouldPoll(settings, watching)" in js
+    assert "setTimeout" not in js and "setInterval" not in js
     assert not re.search(r"setTimeout\(\s*[\"'`]", js)
 
 
@@ -136,7 +137,7 @@ def test_css_uses_tokens_only():
 def test_the_host_page_links_to_settings_for_admins_only():
     js = _read("host.js")
     assert 'if (isAdmin) {' in js and "/hosts/${encodeURIComponent(h.host)}/settings" in js
-    assert 'fetch("/api/session")' in js and "is_admin" in js
+    assert "whoami()" in js and "is_admin" in js
     assert "Settings" in js
 
 

@@ -1,7 +1,7 @@
 // Port page: live state, findings with acknowledge, current properties and property history.
 // Every string came from a field report, so it is written with textContent only, never as
 // markup.
-import { el, stateChip, when, api, whoami } from "/static/infra-common.js";
+import { el, stateChip, when, api, get, poller, whoami } from "/static/infra-common.js";
 import { statusChip, monoTag } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { toast } from "/static/js/toast.js";
@@ -102,17 +102,17 @@ function render(d) {
 
 async function refresh() {
   try {
-    const r = await fetch(`/api/v2/ports/${encodeURIComponent(switchId)}/${encodeURIComponent(portName)}`);
-    if (r.status === 401) { location.assign("/login"); return; }
-    if (r.status === 404) {
+    render(await get(`/api/v2/ports/${encodeURIComponent(switchId)}/${encodeURIComponent(portName)}`));
+  } catch (e) {
+    if (e.status === 401) return;  // the client is already sending the visitor to sign in
+    if (e.status === 404) {
       const c = el("section", "card notice");
       c.append(el("h3", null, "Unknown port"), el("p", null, "No port with this switch and name is known."));
       page.replaceChildren(c);
       return;
     }
-    if (r.ok) render(await r.json());
-  } catch (_) {
     document.getElementById("footer").textContent = "observe unreachable, retrying";
+    throw e;
   }
 }
 
@@ -122,6 +122,5 @@ async function refresh() {
     csrf = me.csrf;
     isAdmin = !!me.is_admin;
   } catch (_) { return; }
-  await refresh();
-  setInterval(refresh, 15000);
+  poller(refresh, { interval: 15000, domains: ["map", "ports"] });
 })();

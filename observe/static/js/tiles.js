@@ -2,7 +2,7 @@
 // The layout is stored per user on the server (/api/ui/layout/dashboard). A failed load keeps the
 // declared order and a failed save keeps the screen as the user left it, with a message.
 // Ported in spirit from customize.ts in ha_Int_soc (MIT, same owner). No drag and drop.
-import { api } from "/static/js/api.js";
+import { api, get } from "/static/js/api.js";
 import { el } from "/static/js/dom.js";
 import {
   declaredTiles, effectiveHidden, effectiveOrder, layoutBody, moveTile, toggleHidden,
@@ -138,13 +138,12 @@ export async function initTiles(rerender) {
     applyLayout();
   });
   try {
-    // Plain fetches: a viewer with basic auth, or an open dashboard, has no session and must stay on this page.
-    const s = await fetch("/api/session");
-    if (!s.ok) throw new Error("no session");
-    csrf = (await s.json()).csrf || "";
-    const r = await fetch(URL);
-    if (!r.ok) throw new Error(`layout request failed (${r.status})`);
-    const got = await r.json();
+    // No redirect: a viewer with basic auth, or an open dashboard, has no session and must stay on this page.
+    let me;
+    try { me = await get("/api/v2/session", null, { redirect: false }); } catch (_) { throw new Error("no session"); }
+    csrf = me.csrf || "";
+    let got;
+    try { got = await get(URL, null, { redirect: false }); } catch (e) { throw new Error(`layout request failed (${e.status})`); }
     order = Array.isArray(got.order) ? got.order : [];
     hidden = new Set(Array.isArray(got.hidden) ? got.hidden : []);
     ready = true;

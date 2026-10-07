@@ -1,10 +1,10 @@
-"""The admin retention page: admin only, CSRF token in the form, the rollup_state rows from the
+"""The admin retention and storage pages: static pages that hold no data, an admin only read of
+the retention document and the storage status from /api/v2, the rollup_state rows from the
 storage, the backend name and never the DSN or its password."""
 
 from __future__ import annotations
 
-import html
-import re
+import json
 
 from observe.storage import rollups
 
@@ -13,6 +13,8 @@ from .test_ui_shell import _nav_table
 
 DSN = "postgresql://observe:hunter2secret@db.internal:5432/observe"
 PASSWORD = "hunter2secret"
+RETENTION = "/api/v2/admin/settings/retention"
+STORAGE = "/api/v2/admin/settings/storage"
 
 
 class FakeStorage:
@@ -41,36 +43,39 @@ def _env(tmp_path, states=()):
     return env
 
 
-def test_the_page_renders_for_an_admin_with_the_csrf_token_in_the_form(tmp_path):
+def test_the_pages_are_static_and_carry_no_token_or_data(tmp_path):
     env = _env(tmp_path)
     try:
         env.user("root", admin=True)
         token = env.login("root").json()["csrf"]
-        r = env.client.get("/admin/retention")
-        assert r.status_code == 200 and "text/html" in r.headers["content-type"]
-        form = re.search(r'<form id="retention-form".*?</form>', r.text, re.S).group(0)
-        assert f'name="csrf" value="{token}"' in form
-        assert f'<meta name="csrf-token" content="{token}">' in r.text
-        assert 'name="raw_days"' in form and 'name="metric"' in form
-        assert "Content-Security-Policy" in r.headers
+        for route, script, ident in (("/admin/retention", "admin-retention.js", "retention-form"),
+                                     ("/admin/storage", "admin-storage.js", "levels")):
+            r = env.client.get(route)
+            assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+            assert f'src="/static/{script}"' in r.text and f'id="{ident}"' in r.text
+            assert token not in r.text and "csrf" not in r.text.lower()
+            assert "Content-Security-Policy" in r.headers
+            assert "postgres" not in r.text and "db.internal" not in r.text
     finally:
         env.client.close()
         env.store.close()
 
 
-def test_the_page_is_refused_without_an_admin_session(tmp_path):
+def test_the_settings_documents_are_refused_without_an_admin_session(tmp_path):
     env = _env(tmp_path)
     try:
-        assert env.client.get("/admin/retention").status_code == 401
+        for path in (RETENTION, STORAGE):
+            assert env.client.get(path).status_code == 401
         env.user("bob")
         env.login("bob")
-        assert env.client.get("/admin/retention").status_code == 403
+        for path in (RETENTION, STORAGE):
+            assert env.client.get(path).status_code == 403
     finally:
         env.client.close()
         env.store.close()
 
 
-def test_the_page_shows_the_rollup_state_and_never_the_dsn(tmp_path):
+def test_the_storage_status_has_the_rollup_state_and_never_the_dsn(tmp_path):
     states = [
         ("1h", 1_700_000_000.0, 42, ""),
         ("compaction", 1_700_003_600.0, 7, "OperationalError: <b>disk</b> full"),
@@ -79,30 +84,32 @@ def test_the_page_shows_the_rollup_state_and_never_the_dsn(tmp_path):
     try:
         env.user("root", admin=True)
         env.login("root")
-        text = env.client.get("/admin/retention").text
-        assert "2023-11-14 22:13:20 UTC" in text and "<td>42</td>" in text
-        assert "OperationalError: &lt;b&gt;disk&lt;/b&gt; full" in text
-        assert "<b>disk</b>" not in text
-        assert '<strong id="backend">postgres</strong>' in text
-        assert DSN not in html.unescape(text) and PASSWORD not in text
-        assert "db.internal" not in text
+        r = env.client.get(STORAGE)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["backend"] == "postgres"
+        by_level = {row["level"]: row for row in body["levels"]}
+        assert by_level["1h"]["last_rows"] == 42
+        assert by_level["compaction"]["last_error"] == "OperationalError: <b>disk</b> full"
+        text = json.dumps(body)
+        assert DSN not in text and PASSWORD not in text and "db.internal" not in text
     finally:
         env.client.close()
         env.store.close()
 
 
-def test_the_page_says_so_when_nothing_has_run(tmp_path):
+def test_the_storage_status_is_empty_when_nothing_has_run(tmp_path):
     env = _env(tmp_path)
     try:
         env.user("root", admin=True)
         env.login("root")
-        assert "No compaction has run yet." in env.client.get("/admin/retention").text
+        assert env.client.get(STORAGE).json()["levels"] == []
     finally:
         env.client.close()
         env.store.close()
 
 
-def test_overrides_are_listed_in_the_form(tmp_path):
+def test_overrides_are_in_the_retention_document(tmp_path):
     env = _env(tmp_path)
     try:
         env.user("root", admin=True)
@@ -110,8 +117,9 @@ def test_overrides_are_listed_in_the_form(tmp_path):
         r = env.client.put("/api/admin/retention", headers=hdr,
                            json={"overrides": {"temp": {"raw_days": 2}}})
         assert r.status_code == 200
-        text = env.client.get("/admin/retention").text
-        assert 'name="metric" type="text" maxlength="64" aria-label="Metric name for override 1" value="temp"' in text
+        doc = env.client.get(RETENTION).json()
+        assert doc["settings"]["overrides"] == {"temp": {"raw_days": 2}}
+        assert doc["override_fields"] and doc["bounds"]["raw_days"]["default"]
     finally:
         env.client.close()
         env.store.close()
@@ -130,6 +138,8 @@ async def test_a_real_run_leaves_a_compaction_row_with_its_error(tmp_path):
         env.store.close()
 
 
-def test_the_navigation_link_is_for_admins_only():
-    rows = [r for r in _nav_table() if r["href"] == "/admin/retention"]
-    assert len(rows) == 1 and rows[0]["admin"] is True and rows[0]["workspace"] == "admin"
+def test_the_navigation_links_are_for_admins_only():
+    for href in ("/admin/retention", "/admin/storage", "/admin/tiers", "/admin/rules",
+                 "/admin/recheck"):
+        rows = [r for r in _nav_table() if r["href"] == href]
+        assert len(rows) == 1 and rows[0]["admin"] is True and rows[0]["workspace"] == "admin", href

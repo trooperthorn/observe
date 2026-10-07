@@ -19,7 +19,7 @@ from .conftest import make_config
 
 PASSWORD = "correct horse battery"
 BASIC = {"Authorization": "Basic " + base64.b64encode(b"ui:uipass").decode()}
-ADMIN_ROUTES = [("GET", "/api/admin/users"), ("POST", "/api/admin/users")]
+ADMIN_ROUTES = [("GET", "/api/v2/admin/users"), ("POST", "/api/admin/users")]
 
 
 class Clock:
@@ -80,7 +80,7 @@ def test_good_login_sets_session_and_reads(env):
     assert r.json()["username"] == "alice" and r.json()["is_admin"] is False
     # A session alone opens the read API even though basic auth is configured.
     assert env.client.get("/api/v2/monitors").status_code == 200
-    assert env.client.get("/api/session").json()["username"] == "alice"
+    assert env.client.get("/api/v2/session").json()["username"] == "alice"
     assert env.rows("SELECT kind, actor FROM audit WHERE kind='login_ok'") == [("login_ok", "alice")]
 
 
@@ -122,7 +122,7 @@ def test_disabled_user_cannot_log_in_or_keep_session(env):
     env.user("alice")
     assert env.login("alice").status_code == 200
     asyncio.run(env.store.execute("UPDATE users SET disabled=1"))
-    assert env.client.get("/api/session").status_code == 401
+    assert env.client.get("/api/v2/session").status_code == 401
     assert env.login("alice").status_code == 401
 
 
@@ -130,10 +130,10 @@ def test_idle_session_expires(env):
     env.user("alice")
     env.login("alice")
     env.clock.now += env.cfg.server.session_idle_s + 1
-    assert env.client.get("/api/session").status_code == 401
+    assert env.client.get("/api/v2/session").status_code == 401
     # Revoked for good once seen expired, even if the clock were wound back.
     env.clock.now -= env.cfg.server.session_idle_s
-    assert env.client.get("/api/session").status_code == 401
+    assert env.client.get("/api/v2/session").status_code == 401
 
 
 def test_absolute_expiry_applies_despite_activity(env):
@@ -142,7 +142,7 @@ def test_absolute_expiry_applies_despite_activity(env):
     step = env.cfg.server.session_idle_s - 1
     while env.clock.now < 1_000_000.0 + env.cfg.server.session_absolute_s:
         env.clock.now += step
-        status = env.client.get("/api/session").status_code
+        status = env.client.get("/api/v2/session").status_code
         if status == 401:
             break
     assert status == 401
@@ -164,7 +164,7 @@ def test_post_without_csrf_is_403_and_with_csrf_works(env):
     # Logout is state changing too.
     assert env.client.post("/api/logout").status_code == 403
     assert env.client.post("/api/logout", headers=env.csrf(r)).status_code == 200
-    assert env.client.get("/api/session").status_code == 401
+    assert env.client.get("/api/v2/session").status_code == 401
 
 
 def test_csrf_token_of_another_session_is_rejected(env):
@@ -181,7 +181,7 @@ def test_csrf_token_of_another_session_is_rejected(env):
 def test_non_admin_gets_403_on_admin_routes(env):
     env.user("alice")
     r = env.login("alice")
-    assert env.client.get("/api/admin/users").status_code == 403
+    assert env.client.get("/api/v2/admin/users").status_code == 403
     assert env.client.post("/api/admin/users", headers=env.csrf(r),
                            json={"username": "x", "password": PASSWORD}).status_code == 403
     assert env.rows("SELECT COUNT(*) FROM users") == [(1,)]
@@ -190,7 +190,7 @@ def test_non_admin_gets_403_on_admin_routes(env):
 def test_admin_can_list_users(env):
     env.user("root", admin=True)
     env.login("root")
-    rows = env.client.get("/api/admin/users").json()
+    rows = env.client.get("/api/v2/admin/users").json()["items"]
     assert [(u["username"], u["is_admin"]) for u in rows] == [("root", True)]
     assert "hash" not in rows[0]
 
@@ -223,8 +223,8 @@ def test_basic_auth_reads_but_never_reaches_admin_routes(env):
             r = env.client.request(method, path, headers=headers,
                                    json={"username": "x", "password": PASSWORD})
             assert r.status_code in (401, 403), (method, path)
-            assert "www-authenticate" not in r.headers  # basic is not offered here
-    for path in ("/api/session",):
+            assert not r.headers.get("www-authenticate", "").lower().startswith("basic")  # basic is not offered here
+    for path in ("/api/v2/session",):
         assert env.client.get(path, headers=BASIC).status_code == 401
     assert env.client.post("/api/logout", headers=BASIC).status_code in (401, 403)
     assert env.rows("SELECT COUNT(*) FROM users") == [(1,)]
@@ -233,14 +233,14 @@ def test_basic_auth_reads_but_never_reaches_admin_routes(env):
 def test_admin_user_with_basic_credentials_header_still_needs_session(env):
     env.user("ui", admin=True, password="uipass-but-longer")
     bad = {"Authorization": "Basic " + base64.b64encode(b"ui:uipass-but-longer").decode()}
-    assert env.client.get("/api/admin/users", headers=bad).status_code == 401
+    assert env.client.get("/api/v2/admin/users", headers=bad).status_code == 401
 
 
 def test_without_basic_auth_configured_reads_stay_open(tmp_path):
     e = Env(tmp_path, basic=False)
     assert e.client.get("/metrics").status_code == 200
     assert e.client.get("/api/v2/monitors").status_code == 401  # v2 is closed unless anonymous_read
-    assert e.client.get("/api/admin/users").status_code == 401
+    assert e.client.get("/api/v2/admin/users").status_code == 401
     e.client.close()
     e.store.close()
 

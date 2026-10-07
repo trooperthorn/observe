@@ -208,10 +208,10 @@ def test_new_files_are_served_with_lf_endings(env):
 
 def test_the_dashboard_still_loads_without_a_session_and_tiles_never_redirects(env):
     # A basic-auth viewer has no session: the page loads and the layout API says 401, which
-    # tiles.js handles with plain fetches (it must not use whoami, which redirects to /login).
+    # tiles.js handles by reading with redirect: false (it must not use whoami, which redirects).
     assert env.client.get(URL).status_code == 401
     tiles = (STATIC / "js" / "tiles.js").read_text(encoding="utf-8")
-    assert "whoami" not in tiles and 'fetch("/api/session")' in tiles
+    assert "whoami" not in tiles and '"/api/v2/session", null, { redirect: false }' in tiles
     assert "button.disabled = true" in tiles  # Customize is off until the saved layout has loaded
     assert "window.confirm" in tiles
 

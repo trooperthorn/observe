@@ -184,8 +184,8 @@ def test_admin_issues_wpf_keys_only_when_the_plugin_is_listed(env):
     body = made.json()
     assert body["scope"] == "wpf" and body["key"].startswith("wpf_")
     assert run(verify_field_key(env.store, body["key"], "sean-pixel"))
-    listing = env.client.get("/api/admin/keys")
-    assert [(k["host"], k["scope"]) for k in listing.json()] == [("sean-pixel", "wpf")]
+    listing = env.client.get("/api/v2/admin/keys")
+    assert [(k["host"], k["scope"]) for k in listing.json()["items"]] == [("sean-pixel", "wpf")]
     assert body["key"] not in listing.text
     default = env.client.post("/api/admin/keys", json={"host": "h"}, headers=hdr)
     assert default.json()["scope"] == "wpi"

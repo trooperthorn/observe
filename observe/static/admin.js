@@ -3,7 +3,7 @@
 // CSRF token in X-CSRF-Token; the CSP forbids native form posts. This page offers no action
 // that changes a host. The audit log has its own page at /audit.
 import { el } from "/static/js/dom.js";
-import { api, whoami } from "/static/js/api.js";
+import { api, getAll, seconds, whoami } from "/static/js/api.js";
 import { statusChip, monoTag } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { confirmDialog } from "/static/js/dialog.js";
@@ -13,7 +13,7 @@ import { button, copyText, notAdmin, showError } from "/static/js/admin-ui.js";
 let csrf = "";
 let tables = null;
 const msg = document.getElementById("msg");
-const when = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : "never");
+const when = (ts) => (ts ? new Date(seconds(ts) * 1000).toLocaleString() : "never");
 
 async function run(fn, done) {
   msg.textContent = "";
@@ -28,7 +28,7 @@ function keyColumns() {
     { key: "state", label: "State", get: (k) => (k.active ? 0 : 1),
       render: (k) => (k.active ? statusChip("up", "Active") : statusChip("pending", `Revoked ${when(k.revoked_at)}`)) },
     { key: "by", label: "Created by", get: (k) => k.created_by },
-    { key: "used", label: "Last used", numeric: true, get: (k) => k.last_used || 0, render: (k) => when(k.last_used) },
+    { key: "used", label: "Last used", numeric: true, get: (k) => seconds(k.last_used) || 0, render: (k) => when(k.last_used) },
     { key: "act", label: "Actions", render: (k) => {
       const box = el("span", "row-actions");
       if (k.active) {
@@ -81,7 +81,7 @@ function mountTables() {
 
 async function refresh() {
   try {
-    const [keys, users] = await Promise.all([api("GET", "/api/admin/keys"), api("GET", "/api/admin/users")]);
+    const [keys, users] = await Promise.all([getAll("/api/v2/admin/keys"), getAll("/api/v2/admin/users")]);
     if (!tables) tables = mountTables();
     tables.keys.setRows(keys);
     tables.users.setRows(users);

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Storage - Observe</title>
+<link rel="stylesheet" href="/static/css/tokens.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/shell.css">
+<link rel="stylesheet" href="/static/css/components.css">
+<link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+<header id="shell-header" class="shell-head">
+  <div id="summary" aria-live="polite"></div>
+</header>
+<nav id="shell-nav" aria-label="Main"></nav>
+<main class="admin-main" id="page">
+  <div class="admin-title">
+    <p class="crumbs muted">Admin / Storage</p>
+    <h1>Storage</h1>
+  </div>
+  <p id="msg" class="msg-line" role="alert"></p>
+  <section class="card" aria-labelledby="be-h">
+    <h3 id="be-h">Backend</h3>
+    <p class="card-sub" id="backend-line"></p>
+    <p id="rollup-line"></p>
+  </section>
+  <section class="card" aria-labelledby="last-h">
+    <h3 id="last-h">Last compaction and rollup runs</h3>
+    <div id="levels"></div>
+  </section>
+  <section class="card" aria-labelledby="seq-h">
+    <h3 id="seq-h">Change counters</h3>
+    <p class="card-sub">How many times each part of the data changed since this server started. The console reads these to know when to refresh.</p>
+    <div id="seqs"></div>
+  </section>
+  <p class="admin-note" id="footer"></p>
+</main>
+<script type="module" src="/static/admin-storage.js"></script>
+<script type="module" src="/static/js/shell.js"></script>
+</body>
+</html>

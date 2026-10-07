@@ -563,7 +563,7 @@ Token bucket per principal (session user or token) and per peer for anonymous: 2
 ### 4.9 Versioning and deprecation of /api
 
 * `/api/v2` is stable: additive changes only (new fields, new resources, new optional parameters). A breaking change means `/api/v3`.
-* *Superseded by section 11 and built in slices r5-api-v2-core and r6-api-v2-resources:* the legacy `/api/*` read routes for monitors, groups, forecasts, events, monitor history and hosts were removed outright, with no adapter, no `Deprecation` or `Sunset` headers and no window. Slice r6 did the same for the map, ports, findings, audit and plugin list reads (`/api/infra/map`, `/api/infra/port`, `/api/infra/findings`, `/api/audit`, `/api/plugins`) and for the finding acknowledgement route. The reads left on legacy routes (the user and key lists the admin page draws, the session read, the settings reads next to their `PUT`) move with the admin pages in slice O-9.
+* *Superseded by section 11 and built in slices r5-api-v2-core and r6-api-v2-resources:* the legacy `/api/*` read routes for monitors, groups, forecasts, events, monitor history and hosts were removed outright, with no adapter, no `Deprecation` or `Sunset` headers and no window. Slice r6 did the same for the map, ports, findings, audit and plugin list reads (`/api/infra/map`, `/api/infra/port`, `/api/infra/findings`, `/api/audit`, `/api/plugins`) and for the finding acknowledgement route. The reads left on legacy routes (the user and key lists the admin page draws, the session read, the settings reads next to their `PUT`) moved with the admin pages in slice r8-ui-client, section 5.4, which removed them with no adapter.
 * Ingest routes (`/internal/v1/ingest`, `/api/ingest`, `/api/v1/field-reports`) and the control API (`/api/v1/control/*`) are not part of v2 and follow the producer window in section 7.
 
 ### 4.10 Plugin API resources
@@ -628,8 +628,8 @@ What differs from the text above, and what is left:
   limited to resource kinds; `PATCH` on monitors and the operator-only resources belong to slice O-9 (the
   session, resource, plugin, map, port, finding, audit and admin resources and the plugin
   resources were built in slice r6, section 4.12); the
-  JavaScript client of section 5 (`api.js` with ETag caching, the poller and `/changes`) is O-9, and
-  the pages meanwhile use `static/js/v2.js`, which only fetches and follows cursors; plugin
+  JavaScript client of section 5 (`api.js` with ETag caching, the poller and `/changes`) was built in
+  slice r8-ui-client (section 5.4), which deleted `static/js/v2.js`; plugin
   resources are not part of the committed schema, because it is built from the core alone.
 
 ### 4.12 Built in slice r6-api-v2-resources (O-7)
@@ -660,7 +660,7 @@ What differs from the text above, and what is left:
 * **Prefixes.** A plugin may mount only under its own name, so the Pockethernet reports are under `/pockethernet` (not `/field-reports`) and the control resources under `/control`. There is no Home Assistant plugin, so `/ha` is a core resource built from the host view.
 * **Finding acknowledgement** needs the admin role, as the route it replaces did, and not the operator role of section 4.7, because an acknowledgement is a change made in the name of a person and a read token has none.
 * **Settings are read only on v2.** The `PUT` routes of the tiers, retention and re-check settings stay on `/api/admin/*` beside their pages, and the rules have no write route yet. A write there bumps the `admin` domain, so the ETag of a settings document changes with it.
-* **Not done here:** `/admin/sessions`, `/admin/exporter` and `/admin/maintenance/*` (the exporter and the maintenance jobs do not exist yet), `PATCH` on monitors and host settings, writes to keys and users through v2, `/hosts/{name}/settings`, and the dependency and link routes of the infrastructure admin page. The admin page still reads its key and user lists from `/api/admin/keys` and `/api/admin/users`. The legacy plugin routes under `/api/plugins/<name>/` that the UniFi, Pockethernet and control pages read stay until those pages move in slice O-9.
+* **Not done here:** `/admin/sessions`, `/admin/exporter` and `/admin/maintenance/*` (the exporter and the maintenance jobs do not exist yet), `PATCH` on monitors and host settings, writes to keys and users through v2, `/hosts/{name}/settings`, and the dependency and link routes of the infrastructure admin page. Slice r8-ui-client moved the admin page onto `/admin/keys` and `/admin/users` and the control page onto `/control/*`, and removed the legacy lists, the session read and the control plugin reads. The UniFi and Pockethernet pages still read their `/api/plugins/<name>/` page routes (section 5.4).
 * **Schema.** The committed schema lists the core resources only, as before. The plugin resources are in the live schema of a running Observe that loaded the plugins.
 
 ---
@@ -685,18 +685,54 @@ What differs from the text above, and what is left:
 | Dashboard | `/api/monitors`, `/api/events?limit=25`, `/api/infra/findings`, `/api/hosts` sequential every 10 s (41.5 s total x86) | `GET /monitors?fields=..`, `GET /events?limit=25`, `GET /findings?state=open&count_only=1`, `GET /hosts?fields=name,grade,last_seen,waiting` in parallel | `/changes` domains `monitors`, `events`, `map`, `hosts`; floor 10 s |
 | Dashboard monitor expand | `/api/monitors/{slug}/history?hours=24` (126 KB), 168 h (877 KB) | `GET /metrics/query?metric=observe.monitor.latency&match[observe.monitor.id]=..&from=-24h&step=auto` plus `GET /events?resource=..&limit=50` | on demand |
 | Host page | `/api/hosts/{host}` every 10 s (10.3 s x86) | `GET /hosts/{name}`, charts via `/metrics/query` per panel | `hosts` domain, floor 10 s; charts floor 60 s |
-| Host control box | `/api/plugins/control/commands` every 10 s | `GET /control/commands?host=..` (plugin resource) | `control` domain |
+| Host control box | `/api/plugins/control/commands` every 10 s | `GET /control/commands?host=..` (plugin resource) | `control` domain (built in r8 as a 10 s poller, because a pull or a result bumps no domain) |
 | Map | `/api/infra/map` every 15 s, twice with a site filter | `GET /map?site=..` | `map` domain, floor 15 s |
 | Port page | `/api/infra/port` every 15 s | `GET /ports/{switch}/{port}`, history via `/metrics/query` | `ports` domain |
 | UniFi page | devices, clients (176 KB), protect | `GET /unifi/devices`, `GET /unifi/clients?limit=100&cursor=..` (virtual list pages), `GET /unifi/cameras` | `unifi` domain, floor 30 s |
 | HA page (staged/unifi-ha) | host page sections | `GET /ha/instances/{id}` | `ha`, `metrics` |
 | Audit | `/api/audit?limit=500` (79 KB) | `GET /audit?limit=100&cursor=..` | on demand |
 | Admin pages | many | `/admin/*` | on demand |
-| Shell (every page) | `/api/session`, `/api/plugins` | `GET /session`, `GET /plugins` once, cached in `sessionStorage` for 60 s | once |
+| Shell (every page) | `/api/session`, `/api/plugins` | `GET /session`, `GET /plugins` once (built in r8 as one read each per page load; only the admin role is kept in `sessionStorage`, to draw the nav at once) | once |
 
 ### 5.3 What stays
 
 HTML page shells, CSS, the existing page layout and widgets, the `vlist-core.js` virtual list from staged/unifi-ha, server-side login and CSRF, and the control plugin's signed command flow. Pages are migrated one at a time. The dashboard, the host page and the Add host and infrastructure admin pages already read from v2 (slice r5-api-v2-core); a page whose resource is not in v2 yet (map, port, audit and the findings panel) keeps its own route until slice O-7, because the legacy read routes have no adapters (section 11).
+
+### 5.4 Built in slice r8-ui-client (O-9)
+
+`observe/static/js/api.js` is the client of section 5.1, about 300 lines, with no build step and no
+dependency. The design is in `docs/ARCHITECTURE.md`, "The console as a v2 client". What differs from
+the text above, and what is left:
+
+* **Calls.** The pages call `api(method, path, csrf, body)` as before, so a page change was an import
+  and a path, not a rewrite; a GET goes through `get` (ETag cache), and the CSRF token comes from
+  `whoami()` when a page passes none. `api.poller` and `api.changes` are the exports `poller` and
+  `changes`.
+* **Poller.** `poller(fn, {interval, domains, maxAge, delay})` runs `fn`, waits for it, then sleeps
+  `interval`; with `domains` it then also waits for a change in one of them, for at most `maxAge`
+  (six intervals by default). The text above says "whichever is later"; the build reads that as "not
+  more often than the interval, and only after a change or `maxAge`". The failure delay is the
+  `Retry-After` of a 429 or 503, else 2 seconds doubling to 60.
+* **Types.** No JSDoc types are generated from the schema; `scripts/gen_api_types.py` was not written.
+* **Pages on v2.** Dashboard, host, port, map, audit and the control box poll through the client. The
+  admin page reads `/admin/keys` and `/admin/users`. The shell reads `/session` and `/plugins`. The
+  enrolment and host settings pages use the poller for their status reads.
+* **New admin pages.** `/admin/tiers`, `/admin/retention`, `/admin/recheck`, `/admin/rules` and
+  `/admin/storage` are static pages that read the settings documents of section 4.12 and save the
+  whole form with the `PUT` that already existed. The retention and re-check pages were server-written
+  and are now static, and the compaction table moved from the retention page to the storage page.
+  `PUT /api/admin/rules` is new (admin session, CSRF, audited, 422 for a refused rule). The rule engine
+  is still not wired, so the rules page says that saved rules are stored and evaluated by nothing.
+* **Removed with no adapter.** `GET /api/session`, `GET /api/admin/users`, `GET /api/admin/keys`, the
+  `GET` of `/api/admin/tiers`, `/retention` and `/recheck`, the server-written pages behind the last
+  two, and the control plugin's `GET /commands` and `/capabilities`.
+* **Not done.** The UniFi and Pockethernet pages keep their `/api/plugins/<name>/` page routes: those
+  carry stale flags, totals and notes that the v2 resources do not, and Pockethernet pages by offset,
+  so moving them needs those fields added to the resources first. The host settings, enrolment and
+  map admin pages keep `/api/hosts/*`, `/api/infra/dependencies` and `/api/admin/infra/unlinked`, for
+  which section 4.12 lists no resource yet. No Playwright test runs: the repo has no browser harness,
+  so the page tests check the served markup, the module wiring and the guards, and `node --test`
+  covers the client and the form logic.
 
 ---
 
@@ -864,7 +900,7 @@ Each slice is one agent session where possible, ends with green tests and a shor
 | O-6 (done in slice r5-api-v2-core, without adapters) | `/api/v2` core: ApiRegistry, auth (session, `wpr_` tokens, roles), problem details, ETag, `/changes`, rate limits, pagination; resources hosts, monitors, groups, events, metrics catalogue, latest, query; committed OpenAPI and CI diff check; the legacy read routes are removed with no adapters or Deprecation headers (section 11) | Schema snapshot test; 304 path opens no read connection; cursor pagination stable under inserts; query tier selection and 1,000 point cap; role matrix tests; 429 and 503 paths |
 | O-7 | v2 map, ports, findings, audit, admin, plugins; plugin resources for UniFi, HA, Pockethernet, control | Per-resource contract tests generated from the schema; plugin cannot mount outside its prefix |
 | O-8 | OTLP ingest: minimal decoder, JSON path, gzip, auth mapping, limits, partial success, Idempotency-Key, clock skew | Conformance against `opentelemetry-proto` (dev dependency) fixtures for every message used; fuzzing; host binding rejects mismatched `host.name`; same data via legacy and OTLP yields identical series |
-| O-9 | UI client module and page migrations (dashboard, host, map, port, UniFi, HA, audit, admin), one page per sub-slice | JS unit tests for `api.js` (in-flight guard, 304 cache, backoff, hidden tab pause); Playwright or the existing `tests/js` harness per page against a fixture server |
+| O-9 (done in slice r8-ui-client, with the exceptions of section 5.4) | UI client module and page migrations (dashboard, host, map, port, UniFi, HA, audit, admin), one page per sub-slice | JS unit tests for `api.js` (in-flight guard, 304 cache, backoff, hidden tab pause); Playwright or the existing `tests/js` harness per page against a fixture server |
 | O-10 | OTLP exporter | Fake collector: batching, gzip, retry on 503 with Retry-After, no retry on 400, cursor survives restart, lag gap record |
 | O-11 | Legacy removal after the window: 410 on legacy ingest, drop legacy read routes | Route inventory test |
 

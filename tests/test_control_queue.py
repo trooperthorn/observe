@@ -270,11 +270,11 @@ def test_expiry_without_result_is_unknown_never_done(env):
 def test_admin_list_shows_unknown_after_expiry(env):
     cmd = env.enqueue()["command"]
     env.clock.now = cmd["expires_at"] + 5
-    assert env.client.get("/api/plugins/control/commands").status_code == 401
+    assert env.client.get("/api/v2/control/commands").status_code == 401
     run(auth.create_user(env.store, env.cfg, "root", PASSWORD, True, now=env.clock()))
     assert env.client.post("/api/login", json={"username": "root",
                                                "password": PASSWORD}).status_code == 200
-    listed = env.client.get("/api/plugins/control/commands").json()["commands"]
+    listed = env.client.get("/api/v2/control/commands").json()["items"]
     assert [(c["id"], c["state"]) for c in listed] == [(cmd["id"], "unknown")]
     assert listed[0]["result"] is None
 

@@ -669,7 +669,7 @@ Enrolment survives the wrong machine and explains failures. The audit of the con
 - `js/shell.js` and `css/shell.css` are loaded by every signed-in page (not the login page). Each page keeps a `<header id="shell-header">` with its `#summary` live region and any page-specific controls, plus `<nav id="shell-nav">`. Classic page scripts still find `#summary` at load time because the markup is static; the module adds the brand, the theme toggle and the user name around it.
 - The `NAV` table lists only pages that exist today: Dashboard (host pages sit under it), Map (port pages sit under it), Map admin and Users and keys. The Hosts and Reports workspaces and Audit appear when their pages are added (Add host arrived with S12); a workspace with no visible item is not drawn.
 - Deviation from section 2.3: the workspace row and the subnav are one grouped row (workspace label, then its links), because no workspace has a landing page yet. Below 700px it scrolls sideways.
-- The nav data is not a new endpoint. The shell uses `GET /api/session` for the role and `GET /api/v2/plugins` for plugin entries, which already omits admin-only plugin entries for viewers. `NavEntry` gained an optional `workspace` field (default `network`), validated at load.
+- The nav data is not a new endpoint. The shell uses `GET /api/v2/session` for the role and `GET /api/v2/plugins` for plugin entries, which already omits admin-only plugin entries for viewers. `NavEntry` gained an optional `workspace` field (default `network`), validated at load.
 - The header summary pill row is still written by each page's own script (dashboard and map). Making it a shared, clickable summary needs the dashboard rework in S5.
 
 ### S2 notes (done)

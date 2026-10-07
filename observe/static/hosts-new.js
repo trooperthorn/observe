@@ -2,7 +2,7 @@
 // command and the token; this page only shows them. The command lives in memory only. It never
 // goes into the URL, storage or a toast. Everything from the server is written with textContent.
 import { el, clear } from "/static/js/dom.js";
-import { api, whoami } from "/static/js/api.js";
+import { api, poller, whoami } from "/static/js/api.js";
 import { statusChip } from "/static/js/chips.js";
 import { notAdmin, showError, copyText } from "/static/js/admin-ui.js";
 import { confirmDialog } from "/static/js/dialog.js";
@@ -22,7 +22,6 @@ let csrf = "";
 let known = new Set();
 let created = null;   // { host, platform, platform_label, expires_at, command }
 let latest = null;    // the last progress response
-let pollGen = 0;
 let current = "host";
 let state = fresh();
 
@@ -273,29 +272,32 @@ function drawProgress() {
 }
 
 // Poll while step 4 or 5 is showing, and stop when the host is ready or the command expired.
-// A generation counter makes a poll that was in flight when the page left a step do nothing.
-function stopPoll() { pollGen += 1; }
+// The poller waits for a read to finish before it plans the next, and a read that was in flight
+// when the page left a step does nothing.
+let pollHandle = null;
+
+function stopPoll() {
+  if (pollHandle) { pollHandle.stop(); pollHandle = null; }
+}
 
 function poll() {
   if (!created) return;
-  pollGen += 1;
-  const gen = pollGen;
+  stopPoll();
   const host = created.host;
-  const tick = async () => {
-    try {
-      const next = await api("GET", `/api/hosts/${encodeURIComponent(host)}/enrolment`);
-      if (gen !== pollGen) return;
-      latest = next;
-      drawProgress();
-      if (next.ready || next.expired) return;
-    } catch (e) {
-      if (gen !== pollGen) return;
-      if (e.message === "not signed in") return;
-      showError(msg, e.message);
-    }
-    setTimeout(tick, POLL_MS);
-  };
-  tick();
+  const handle = poller(async ({ signal }) => {
+    const next = await api("GET", `/api/hosts/${encodeURIComponent(host)}/enrolment`);
+    if (signal.aborted) return;
+    latest = next;
+    drawProgress();
+    if (next.ready || next.expired) handle.stop();
+  }, {
+    interval: POLL_MS,
+    errorHandler: (e) => {
+      if (e.message === "not signed in") handle.stop();
+      else showError(msg, e.message);
+    },
+  });
+  pollHandle = handle;
 }
 
 $("again").addEventListener("click", () => {

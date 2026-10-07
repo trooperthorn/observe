@@ -227,10 +227,10 @@ def admin(env):
 
 
 def test_the_endpoint_needs_an_admin_session(env):
-    assert env.client.get("/api/admin/retention").status_code == 401
+    assert env.client.get("/api/v2/admin/settings/retention").status_code == 401
     env.user("bob")
     hdr = env.csrf(env.login("bob"))
-    assert env.client.get("/api/admin/retention").status_code == 403
+    assert env.client.get("/api/v2/admin/settings/retention").status_code == 403
     r = env.client.put("/api/admin/retention", json={"raw_days": 3}, headers=hdr)
     assert r.status_code == 403
     assert env.rows("SELECT COUNT(*) FROM audit WHERE kind LIKE 'retention%'") == [(0,)]
@@ -252,14 +252,14 @@ def test_an_ingest_key_of_any_scope_is_not_an_admin_credential(env):
         keys.append(key)
     for key in keys:
         hdr = {"Authorization": f"Bearer {key}", "X-API-Key": key}
-        assert env.client.get("/api/admin/retention", headers=hdr).status_code == 401
+        assert env.client.get("/api/v2/admin/settings/retention", headers=hdr).status_code == 401
         assert env.client.put("/api/admin/retention", json={"raw_days": 3}, headers=hdr
                               ).status_code == 401
 
 
 def test_an_admin_reads_and_updates_the_settings(env):
     hdr = admin(env)
-    got = env.client.get("/api/admin/retention").json()
+    got = env.client.get("/api/v2/admin/settings/retention").json()
     assert got["settings"]["raw_days"] == 30  # server.retention_days
     assert got["bounds"]["hourly_days"] == {"min": 90, "max": 180, "default": 90}
     r = env.client.put("/api/admin/retention", headers=hdr, json={

@@ -89,7 +89,7 @@ def test_an_admin_creates_lists_and_revokes_read_tokens(tmp_path):
         assert e.get("/monitors", headers=token).status_code == 200
         assert e.get("/hosts", headers=token).status_code == 200
         e.login("root2", admin=True)
-        listed = {k["id"]: k for k in e.client.get("/api/admin/keys").json()}
+        listed = {k["id"]: k for k in e.client.get("/api/v2/admin/keys").json()["items"]}
         assert listed[made["id"]]["role"] == "viewer" and listed[made["id"]]["scope"] == "wpr"
         assert listed[made["id"]]["host"] == "kiosk"
         rows = asyncio.run(e.store.fetch(

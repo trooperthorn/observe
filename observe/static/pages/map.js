@@ -1,6 +1,6 @@
 // Infrastructure map: core, distribution, access, jacks and endpoints, drawn from
 // /api/v2/map. Every node shows its state in words, so colour is never the only signal.
-import { el, stateText, portHref, api, STATE_WORDS } from "/static/infra-common.js";
+import { el, stateText, portHref, api, poller, STATE_WORDS } from "/static/infra-common.js";
 import { svg as svgEl } from "/static/js/dom.js";
 import "/static/js/theme.js";
 import { layoutForce } from "/static/js/graph/force.js";
@@ -292,14 +292,15 @@ async function refresh() {
     applyView(data);
     document.getElementById("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;
   } catch (e) {
-    if (e.message !== "not signed in") {
-      document.getElementById("footer").textContent = "observe unreachable, retrying";
-    }
+    if (e.message === "not signed in") return;
+    document.getElementById("footer").textContent = "observe unreachable, retrying";
+    throw e;
   }
 }
 
-siteSel.addEventListener("change", refresh);
-buildingSel.addEventListener("change", refresh);
+// A change of filter reads at once; a failed read is left to the poller to retry.
+const refreshNow = () => refresh().catch(() => {});
+siteSel.addEventListener("change", refreshNow);
+buildingSel.addEventListener("change", refreshNow);
 window.addEventListener("resize", () => { if (lastData && !layersEl.hidden) draw(lastData); });
-refresh();
-setInterval(refresh, 15000);
+poller(refresh, { interval: 15000, domains: ["map", "monitors"] });

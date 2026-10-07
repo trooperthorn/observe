@@ -4,7 +4,7 @@
 // lives in memory only: it never goes into the URL, storage or a toast. Everything from the
 // server is written with textContent.
 import { el, clear } from "/static/js/dom.js";
-import { api, whoami } from "/static/js/api.js";
+import { api, poller, whoami } from "/static/js/api.js";
 import { statusChip } from "/static/js/chips.js";
 import { confirmDialog, typedConfirm } from "/static/js/dialog.js";
 import { toast } from "/static/js/toast.js";
@@ -30,7 +30,7 @@ let settings = null;     // the last GET /api/hosts/{host}/settings
 let draft = null;        // the editable allowlist
 let shown = null;        // { kind: "update" | "cleanup" | "install", made } the command on screen
 let install = null;      // the last enrolment progress while an install command is being watched
-let pollGen = 0;
+let pollHandle = null;
 
 // The confirm-the-address box: the install command never uses the address this page was reached at.
 const urlParts = { box: $("public-url-box"), form: $("public-url-form"), input: $("public-url"), status: $("public-url-status") };
@@ -335,7 +335,9 @@ $("remove").addEventListener("click", async () => {
 });
 
 // ---- loading and polling ----
-function stopPoll() { pollGen += 1; }
+function stopPoll() {
+  if (pollHandle) { pollHandle.stop(); pollHandle = null; }
+}
 
 async function load() {
   settings = await api("GET", hostUrl("/settings"));
@@ -353,34 +355,33 @@ async function reload(resetDraft) {
 }
 
 // Poll while an update or cleanup is waiting or running, or an install command is being watched.
-// A generation counter makes a poll that was in flight when a newer one started do nothing.
+// The poller waits for a read to finish before it plans the next, and a read that was in flight
+// when a newer poller started does nothing.
 function poll() {
-  pollGen += 1;
-  const gen = pollGen;
-  const tick = async () => {
+  stopPoll();
+  const handle = poller(async ({ signal }) => {
     const watching = !!shown && shown.kind === "install" && !shown.finished;
-    if (!shouldPoll(settings, watching)) return;
-    try {
-      const [next, prog] = await Promise.all([
-        api("GET", hostUrl("/settings")),
-        watching ? api("GET", hostUrl("/enrolment")) : Promise.resolve(null),
-      ]);
-      if (gen !== pollGen) return;
-      settings = next;
-      if (prog) install = prog;
-      drawIdentity();
-      drawInstallCard();
-      drawCommand();
-      drawAllowlistState();
-      if (prog && (prog.ready || prog.expired)) { shown.finished = true; return; }
-    } catch (err) {
-      if (gen !== pollGen) return;
-      if (err.message === "not signed in") return;
-      showError(msg, err.message);
-    }
-    setTimeout(tick, POLL_MS);
-  };
-  setTimeout(tick, POLL_MS);
+    if (!shouldPoll(settings, watching)) { handle.stop(); return; }
+    const [next, prog] = await Promise.all([
+      api("GET", hostUrl("/settings")),
+      watching ? api("GET", hostUrl("/enrolment")) : Promise.resolve(null),
+    ]);
+    if (signal.aborted) return;
+    settings = next;
+    if (prog) install = prog;
+    drawIdentity();
+    drawInstallCard();
+    drawCommand();
+    drawAllowlistState();
+    if (prog && (prog.ready || prog.expired)) { shown.finished = true; handle.stop(); }
+  }, {
+    interval: POLL_MS, delay: POLL_MS,
+    errorHandler: (err) => {
+      if (err.message === "not signed in") handle.stop();
+      else showError(msg, err.message);
+    },
+  });
+  pollHandle = handle;
 }
 
 (async () => {

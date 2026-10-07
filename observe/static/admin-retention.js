@@ -1,48 +1,95 @@
-// Retention page: the settings form saves through PUT /api/admin/retention with the CSRF token
-// the server put in the page. Messages are written with textContent only.
-import { showError } from "/static/js/admin-ui.js";
-import { toast } from "/static/js/toast.js";
+// Retention page: the days each level keeps and the per-metric overrides, read from
+// GET /api/v2/admin/settings/retention and saved through PUT /api/admin/retention. Every string
+// is written with textContent only.
+import { el } from "/static/js/dom.js";
+import { numberInput } from "/static/js/admin-ui.js";
+import { settingsPage } from "/static/js/settings-page.js";
+import { retentionBody } from "/static/js/admin-settings-logic.js";
 
+const LABELS = {
+  raw_days: "Raw samples", rollup_5m_days: "5 minute summaries", hourly_days: "Hourly summaries",
+  daily_days: "Daily summaries", history_days: "Availability history", compress_after_days: "Compress raw chunks after",
+};
+const EXTRA_ROWS = 3;
 const form = document.getElementById("retention-form");
-const msg = document.getElementById("msg");
-const token = () => document.querySelector('meta[name="csrf-token"]').content;
+const globalBox = document.getElementById("retention-global");
+const overridesBox = document.getElementById("retention-overrides");
+let current = null;
+let table = null;
 
-function body() {
-  const out = {};
-  for (const input of form.querySelectorAll(".retention-fields input")) {
-    out[input.name] = Number(input.value);
+const label = (name) => LABELS[name] || name;
+
+function overrideRow(doc, metric, values, index) {
+  const tr = el("tr", "override-row");
+  const first = el("td");
+  const name = el("input");
+  name.name = "metric";
+  name.type = "text";
+  name.maxLength = 64;
+  name.value = metric;
+  name.setAttribute("aria-label", `Metric name for override ${index}`);
+  first.append(name);
+  tr.append(first);
+  for (const level of doc.override_fields) {
+    const b = doc.bounds[level];
+    const td = el("td");
+    td.append(numberInput(level, `${label(level)} for override ${index}`, { min: b.min, max: b.max, step: 1, value: values[level] }));
+    tr.append(td);
   }
-  const overrides = {};
-  for (const row of form.querySelectorAll(".override-row")) {
-    const metric = row.querySelector('input[name="metric"]').value.trim();
-    if (!metric) continue;
-    const levels = {};
-    for (const input of row.querySelectorAll('input[type="number"]')) {
-      if (input.value !== "") levels[input.name] = Number(input.value);
-    }
-    overrides[metric] = levels;
-  }
-  out.overrides = overrides;
-  return out;
+  return tr;
 }
 
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  showError(msg, "");
-  try {
-    const r = await fetch("/api/admin/retention", {
-      method: "PUT", credentials: "same-origin",
-      headers: { "Content-Type": "application/json", "X-CSRF-Token": token() },
-      body: JSON.stringify(body()),
-    });
-    if (!r.ok) {
-      let detail = `Save failed (${r.status}).`;
-      try { detail = (await r.json()).detail || detail; } catch (_) { /* keep the status text */ }
-      showError(msg, String(detail));
-      return;
-    }
-    toast("Retention settings saved.", "up");
-  } catch (_) {
-    showError(msg, "Could not reach the server.");
+function render(doc) {
+  current = doc;
+  const grid = el("div", "settings-grid");
+  for (const name of Object.keys(doc.bounds)) {
+    if (!(name in doc.settings)) continue;
+    const b = doc.bounds[name];
+    const input = numberInput(name, label(name), { min: b.min, max: b.max, step: 1, value: doc.settings[name], required: true });
+    input.id = `f-${name}`;
+    const l = el("label", null, label(name));
+    l.htmlFor = input.id;
+    grid.append(l, input, el("span", "muted", `${b.min} to ${b.max}, default ${b.default}`));
   }
+  globalBox.replaceChildren(grid);
+
+  document.getElementById("ov-sub").textContent =
+    `At most ${doc.max_overrides} metrics. A row with no metric name is ignored. Leave a level empty to keep the global value.`;
+  table = el("table", "data");
+  table.id = "overrides";
+  table.append(el("caption", "sr-only", "Per-metric retention overrides in days"));
+  const head = el("tr");
+  head.append(el("th", null, "Metric"));
+  for (const level of doc.override_fields) head.append(el("th", null, label(level)));
+  const thead = el("thead");
+  thead.append(head);
+  const body = el("tbody");
+  const entries = Object.entries(doc.settings.overrides || {});
+  entries.forEach(([metric, values], i) => body.append(overrideRow(doc, metric, values, i + 1)));
+  for (let i = 0; i < EXTRA_ROWS; i++) body.append(overrideRow(doc, "", {}, entries.length + i + 1));
+  table.append(thead, body);
+  overridesBox.replaceChildren(table);
+}
+
+document.getElementById("add-override").addEventListener("click", () => {
+  if (!current || !table) return;
+  const body = table.querySelector("tbody");
+  body.append(overrideRow(current, "", {}, body.children.length + 1));
+});
+
+function collect() {
+  const globalValues = {};
+  for (const input of globalBox.querySelectorAll("input")) globalValues[input.name] = input.value;
+  const rows = [];
+  for (const tr of overridesBox.querySelectorAll("tr.override-row")) {
+    const values = {};
+    for (const input of tr.querySelectorAll('input[type="number"]')) values[input.name] = input.value;
+    rows.push({ metric: tr.querySelector('input[name="metric"]').value, values });
+  }
+  return retentionBody(globalValues, rows);
+}
+
+settingsPage({
+  docPath: "/api/v2/admin/settings/retention", putPath: "/api/admin/retention", what: "The retention page",
+  form, msg: document.getElementById("msg"), render, collect, saved: "Retention settings saved.",
 });

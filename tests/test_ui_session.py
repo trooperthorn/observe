@@ -11,7 +11,7 @@ STATIC = Path(__file__).resolve().parent.parent / "observe" / "static"
 def test_the_nav_is_drawn_at_once_from_the_last_known_role():
     shell = (STATIC / "js" / "shell.js").read_text(encoding="utf-8")
     first = shell.index("renderNav(nav, visibleItems(cachedAdmin(), null)")
-    assert first < shell.index('getJson("/api/session")')
+    assert first < shell.index('read("/api/v2/session")')
     assert "sessionStorage" in shell
 
 

@@ -90,7 +90,8 @@ validated and stored in the database; they are not yet connected to polling, ing
 
 Agents poll in five tiers: availability (default 30 s), device metrics (60 s), storage health
 (15 min), SMART (1 h) and inventory (1 h). An admin changes the global rates and sets a per-host
-override with `GET` and `PUT /api/admin/tiers`. Each rate must be inside a fixed range per tier (for
+override with `PUT /api/admin/tiers` or on the page `/admin/tiers` (Admin menu, "Polling tiers"; the document is
+`GET /api/v2/admin/settings/tiers`). Each rate must be inside a fixed range per tier (for
 example availability 5 to 3,600 s), and an override must name a host that has an ingest key. An agent
 reads its own effective rates with `GET /internal/v1/agent-config` and its host ingest key; the host
 comes from the key, so it never sees another host's rates. Every change is audited with its old and
@@ -541,11 +542,19 @@ results and host samples (minimum 1), and the new `server.audit_retention_days` 
 365, minimum 1) governs the audit log independently. The tables for hosts, keys,
 users, sessions and audit are filled by the ingest and login routes.
 An admin can change the retention levels, the compaction delay and
-per-metric retention overrides with `GET` and `PUT /api/admin/retention` (admin session and CSRF
-token). Every change is audited with its old and new values.
+per-metric retention overrides with `PUT /api/admin/retention` (admin session and CSRF
+token) or on the page `/admin/retention`; the document is `GET /api/v2/admin/settings/retention`. Every
+change is audited with its old and new values. The page `/admin/storage` (Admin menu, "Storage") shows the backend,
+who runs the rollups, the last run of each compaction and rollup level and the change counters, read only
+from `GET /api/v2/admin/settings/storage`.
 
-An admin can also change the fast re-check with `GET` and `PUT /api/admin/recheck` or the page
-`/admin/recheck` (Admin menu): the re-check window in seconds (0 turns it off), the re-check
+An admin can keep threshold rules on the page `/admin/rules` (Admin menu, "Threshold rules"), saved as a whole
+list with `PUT /api/admin/rules` (admin session and CSRF token; the list is `GET /api/v2/admin/settings/rules`).
+Every change is audited with the old and new rules. The rules are validated and stored; no engine evaluates the
+saved rules yet, and the page says so.
+
+An admin can also change the fast re-check with `PUT /api/admin/recheck` or the page
+`/admin/recheck` (Admin menu; the document is `GET /api/v2/admin/settings/recheck`): the re-check window in seconds (0 turns it off), the re-check
 interval (at least 5 seconds) and the good replies in a row that return a monitor to Up, as global
 values and as an override per monitor. A saved per-monitor override beats the value in the monitor's
 config entry, which beats the saved global value, which beats `defaults` in the config file. A change
@@ -663,7 +672,7 @@ hours in all (`server.session_idle_s`, `session_absolute_s`). Set
 `server.session_cookie_secure: false` only when serving plain HTTP on a trusted
 network. An account locks for 15 minutes after 5 failures, and logins are
 limited per peer address. Routes that change state need the session's CSRF
-token in an `X-CSRF-Token` header (`GET /api/session` returns it), and admin
+token in an `X-CSRF-Token` header (`GET /api/v2/session` returns it), and admin
 routes (everything under `/api/admin/` and `GET /api/v2/audit`) also need an admin
 user. The optional basic auth is kept for `/metrics` and the page shells and is never
 accepted for admin routes or for the `/api/v2` read API. A session or a read token opens the
@@ -686,7 +695,7 @@ fails partway, such as a refused user, a login that cannot create a session, a
 failed key action or a batch the store could not write, a separate `*_failed`
 or `*_error` row says so. Passwords, tokens and keys are never written, paths
 are sanitized, and `GET /api/v2/audit` (admin session only; parameters `limit`,
-`kind` and `before`) returns the rows newest first. The retention page at `/admin/retention` (Admin menu, admins only) edits the global and per-metric retention settings and shows the last compaction run with its row counts and any error, and the storage backend name but never the DSN. The audit page at `/audit` (Admin menu,
+`kind` and `before`) returns the rows newest first. The retention page at `/admin/retention` (Admin menu, admins only) edits the global and per-metric retention settings; the storage page at `/admin/storage` shows the last compaction run with its row counts and any error, and the storage backend name but never the DSN. The audit page at `/audit` (Admin menu,
 admin only) shows the newest 500 rows in a sortable table with filters for actor, kind, status
 (OK, Refused, Failed) and time range, and pages of 25 or 100.
 

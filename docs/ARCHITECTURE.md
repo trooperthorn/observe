@@ -236,31 +236,37 @@ overrides are one JSON value in `retention.overrides`: a metric name maps to its
 compaction gives that metric's series their own cuts, on SQLite and plain PostgreSQL.
 `observe/retention.py` validates a change (whole numbers inside the bounds, unknown names refused)
 and `Storage.save_retention_settings` writes the keys and one `retention_settings_changed` audit row
-holding the old and new values in one transaction. `GET` and `PUT /api/admin/retention` (admin
-session, CSRF on the PUT) read and change them; a refused value is 422 and audited as
+holding the old and new values in one transaction. `PUT /api/admin/retention` (admin
+session and CSRF) changes them, and `GET /api/v2/admin/settings/retention` reads them; a refused value is 422 and audited as
 `retention_settings_failed`. On TimescaleDB a change also registers the policies again at once.
 
-The admin retention page `GET /admin/retention` (admin session, in the Admin menu) is written by
-the server (`observe/retention_page.py`) so the CSRF token and the last-run table are in the first
-response; `admin-retention.js` saves the form with `PUT /api/admin/retention`.
+The admin retention page `/admin/retention` (Admin menu) is a static page like the other admin pages
+(slice r8-ui-client): `admin-retention.js` reads `GET /api/v2/admin/settings/retention` and saves the
+form with `PUT /api/admin/retention`, taking the CSRF token from the session read. The last compaction
+and rollup runs moved to the storage page `/admin/storage` (`admin-storage.js`, read only, refreshed by
+the poller every 30 seconds), which shows the backend, whether TimescaleDB runs the rollups, the last
+run of each level with its error, and the change counters from `GET /api/v2/admin/settings/storage`.
+The former server-written retention and re-check pages (`observe/retention_page.py` and
+`observe/recheck_page.py`) were deleted.
 
 The re-check settings (`observe/recheck_settings.py`) are the global window, interval and good-reply
 count and one optional override per monitor. They are `app_settings` keys `recheck.window`,
 `recheck.interval`, `recheck.good` and `recheck.overrides` (one JSON value of monitor slug to values),
 written through `Storage.write` on both backends together with one `recheck_settings_changed` audit row
-holding the old and new values. `GET` and `PUT /api/admin/recheck` need an admin session, the PUT needs
-the CSRF token, and a refused value answers 422 and writes `recheck_settings_failed`. The scheduler
+holding the old and new values. `PUT /api/admin/recheck` needs an admin session and the CSRF token
+(the document is `GET /api/v2/admin/settings/recheck`), and a refused value answers 422 and writes `recheck_settings_failed`. The scheduler
 loads the values before the first poll and again after each save (`Scheduler.apply_recheck`), and
 `Scheduler.recheck_value` resolves a value as: saved per-monitor override, then the monitor's own config
-value, then the saved global value, then the config default. The page `/admin/recheck` is written by
-`observe/recheck_page.py` and saved by `admin-recheck.js`.
+value, then the saved global value, then the config default. The page `/admin/recheck` is static and saved by
+`admin-recheck.js`.
 
 The polling tiers (`observe/tiers.py`) are availability, device metrics, storage health, SMART and
 inventory, each with a default rate and a minimum and maximum in seconds (section 10.1 of the data
 design). The saved global rates and the per-host overrides are the `app_settings` keys `tiers.global`
 and `tiers.hosts` (one JSON value of host name to rates), written through `Storage.write` on both
-backends together with one `tier_rates_changed` audit row holding the old and new values. `GET` and
-`PUT /api/admin/tiers` need an admin session, the PUT needs the CSRF token, and a refused value answers
+backends together with one `tier_rates_changed` audit row holding the old and new values.
+`PUT /api/admin/tiers` needs an admin session and the CSRF token (the document is
+`GET /api/v2/admin/settings/tiers`; the page is `/admin/tiers`, `admin-tiers.js`), and a refused value answers
 422 and writes `tier_rates_failed`. An override must name a host with an unrevoked `wpi` key. For one
 host the effective rate is its override, then the saved global value, then the default.
 `GET /internal/v1/agent-config` (in `observe/ingest/api.py`) returns `{"host", "intervals"}` for the
@@ -282,7 +288,9 @@ move to a higher level is immediate. The clock is a function passed to the engin
 the missing-data rules for time that passed with no sample. The rule set is validated by
 `rules.validate` (fixed bounds, unique ids, at most 500 rules) and stored as the `app_settings` key
 `rules.config` by `rules.save` inside one `Storage.write` unit with one `rules_changed` audit row holding
-the old and new rules. The engine is not yet wired to ingest or to an admin route.
+the old and new rules. `PUT /api/admin/rules` (admin session, CSRF) replaces the whole list and answers 422
+with a `rules_failed` audit row for a refused rule; the page `/admin/rules` (`admin-rules.js`) edits the
+list. The engine is not yet wired to ingest, so a saved rule is stored and audited but evaluated by nothing.
  The table reads
 `rollup_state`: one row per trimmed level (`raw`, `5m`, `1h`, `1d`) with the time it was trimmed to,
 when, the rows removed and the first coverage problem, and one `compaction` row that the
@@ -501,7 +509,7 @@ summary adapted from hostwatch's `integrations/summary.py` is the host views sec
 
 ## Host views
 
-The host page at `/host` is a static page too: `host.js` and `host-control.js` are ES modules, the Control section is a card inside `<main>`, and both use the shared chip, dialog and toast modules. The dashboard at `/` is a static page whose module script (`app.js`) builds the KPI row, availability tiles and group cards in the browser from `/api/v2/monitors`, `/api/v2/groups`, `/api/v2/status`, `/api/v2/events` and `/api/v2/findings`, using the shared chip and DOM modules. `static/js/v2.js` is the small reader the pages share (problem details as an Error with a status, `getAll` to follow `next_cursor`, and `seconds` to read an RFC 3339 time).
+The host page at `/host` is a static page too: `host.js` and `host-control.js` are ES modules, the Control section is a card inside `<main>`, and both use the shared chip, dialog and toast modules. The dashboard at `/` is a static page whose module script (`app.js`) builds the KPI row, availability tiles and group cards in the browser from `/api/v2/monitors`, `/api/v2/groups`, `/api/v2/status`, `/api/v2/events` and `/api/v2/findings`, using the shared chip and DOM modules. `static/js/api.js` is the console's client for the v2 API; see "The console as a v2 client" below.
 
 Each pushed host has a page at `/host?name=HOST`, linked from the dashboard
 row of its `pushed_host` monitor. It is served by two v2 routes, `GET /api/v2/hosts`
@@ -639,7 +647,7 @@ boundary: `session` (any user), `mutating` (session plus CSRF), `admin`, and
 `admin_mutating`. None of them looks at the Authorization header, so basic
 auth credentials get 401 there. `/metrics` accepts a session or, when
 configured, basic auth; the v2 read routes accept a session or a read token. Login is `POST /api/login` (JSON), logout is
-`POST /api/logout`, and `GET /api/session` returns the current user and token.
+`POST /api/logout`, and `GET /api/v2/session` returns the current user, the role and the CSRF token.
 The first admin is created from the command line (`--create-admin`). Failed
 logins lock the account (`login_max_failures`, `login_lock_s`) and are limited
 per peer, with an unknown account taking the same time and answer as a wrong
@@ -680,9 +688,10 @@ It is the first write surface in Observe's web UI, which is why every
 route behind it sits behind the login, role, and CSRF dependencies.
 
 The page is a static file with no data, so a visitor without a session is sent
-to `/login` by the script. The routes are `GET` and `POST /api/admin/users`,
+to `/login` by the script. It reads the key and user lists from `GET /api/v2/admin/keys` and
+`/api/v2/admin/users` (the legacy lists were removed). The write routes are `POST /api/admin/users`,
 `POST /api/admin/users/{id}/disabled` and `/admin` (body `{"value": bool}`),
-`GET` and `POST /api/admin/keys`, and `POST /api/admin/keys/{id}/revoke`. A
+`POST /api/admin/keys`, and `POST /api/admin/keys/{id}/revoke`. A
 created key is returned once in the create response and is never listed. The
 last active admin cannot be disabled or demoted, enforced in one SQL
 statement. Rendering uses `textContent` only. Host confirmation is not on the
@@ -919,7 +928,7 @@ allows anonymous reads, and lets `api.submit_write` bump only the change domains
 declared. The legacy read routes were removed with no adapter (no migration path, section 11 of the
 design). Slice r6-api-v2-resources moved the map, port, finding, audit and plugin-list reads too;
 the session read, the key and user lists of the admin page and the settings reads next to their
-`PUT` still use their own routes until the admin pages move in slice O-9.
+`PUT` used their own routes until the admin pages moved in slice r8-ui-client, which removed them.
 
 Slice r6 added these modules. `network.py` serves `/map`, `/map/nodes`, `/map/edges`, `/ports`,
 `/ports/{switch_id}/{port}`, `/findings` and `POST /findings/ack`: the map and the port list are
@@ -940,10 +949,66 @@ The UniFi, Pockethernet and control plugins each have an `api.py` and a `registe
 (`/unifi/devices`, `/unifi/clients`, `/unifi/cameras`; `/pockethernet/reports`, `/reports/{source}/{report_id}`,
 `/jacks/{key}`; `/control/commands`, `/control/capabilities`). They read their own tables on the
 read connection and page by primary key. The control list never writes: a command that expired
-without an answer is shown as `unknown` from the clock, where the legacy admin route also stored
-that state. The Pockethernet resources send no ETag, because a stored but not yet derived report
+without an answer is shown as `unknown` from the clock, where the legacy admin route (removed in
+slice r8-ui-client) also stored that state. The Pockethernet resources send no ETag, because a stored but not yet derived report
 changes no change domain. The page scripts `app.js`, `audit.js`, `pages/map.js`, `port.js` and
 `js/shell.js` read the v2 routes.
+
+## The console as a v2 client
+
+Slice r8-ui-client (design O-9) moved the console pages onto one client module,
+`observe/static/js/api.js`, and deleted `js/v2.js`. The module has no build step and no dependency and
+looks up `fetch`, `document` and `location` when it uses them, so `tests/js/api.test.mjs` drives it with
+a fake fetch and a sleep that the test opens by hand.
+
+* `get(path, params, {signal, redirect})` keeps one ETag and body per URL (at most 200) and sends
+  `If-None-Match`; a 304 returns the cached body, and the body is shared, so callers treat it as read
+  only. A response without an ETag is not cached. `getAll` follows `next_cursor`.
+* Every failure becomes an `ApiError` with `status`, `type`, `detail`, `code` (the machine-readable
+  reason of the older routes, such as `public_url_required`) and `retryAfter` from `Retry-After`. A 401
+  sends the visitor to `/login?next=...` once per page load; the open dashboard, the layout read and the
+  shell pass `redirect: false` because they must stay on their page without a session.
+* `api(method, path, csrf, body)` is the call the pages make. A GET goes through `get`. Any other method
+  sends the CSRF header, taken from `whoami()` when the page passes none, and a JSON body. `whoami()` is
+  `GET /api/v2/session`, read once per page load; a failed read is not remembered.
+* `poller(fn, {interval, domains, maxAge, delay, errorHandler})` waits for `fn` to finish before it plans the
+  next run (a timer started after completion, never `setInterval`), pauses while `document.hidden`,
+  stops on `pagehide` or `stop()`, and after a failure waits `Retry-After` on 429 and 503 or a doubling
+  delay (2 seconds up to 60). `interval` is the least time between two runs. With `domains` the next
+  run also waits for one of those change domains to move and runs anyway after `maxAge` (six
+  intervals by default), so a lost notice never leaves a page stale.
+* `changes` is one `/changes` long poll per tab (`wait=25`), started by the first subscriber and
+  stopped with the last. It delivers by domain, pauses while the tab is hidden and backs off like the
+  poller.
+
+The dashboard, host, port and map pages refresh through the poller with the domains they read
+(`monitors`, `events`, `hosts`, `map`, `ports`), the storage page every 30 seconds, the Control history
+every 10 seconds, and the enrolment and host settings pages while a command is being watched. A
+refresh that fails throws after it writes "observe unreachable, retrying", so the poller backs off. The
+shell reads `/api/v2/session` and `/api/v2/plugins`. The legacy `GET /api/session`, `GET
+/api/admin/users`, `GET /api/admin/keys`, the `GET` of the tiers, retention and re-check settings and
+the control plugin's `GET /commands` and `/capabilities` were removed with no adapter.
+
+The admin settings pages share `js/settings-page.js` (sign in, require an admin, read the document from
+`/api/v2/admin/settings/<name>`, draw it, save the whole form with the page's `PUT`, draw the response)
+and `js/admin-settings-logic.js` (pure functions from form text to the body of each `PUT`, tested by
+`tests/js/admin-settings.test.mjs`). Each page is a static HTML file served by a route in
+`observe/web.py` that sends no data and no token: `/admin/tiers`, `/admin/retention`, `/admin/recheck`,
+`/admin/rules` and `/admin/storage`. A viewer who opens one gets the page and a "Admin account needed" card,
+because every document it reads answers 403.
+
+Two properties of the v2 session changed with the move. A user whose account is disabled or demoted
+is forgotten by the v2 credential cache at once (`Authenticator.forget_user`), so the change shows on the
+next read and not after `server.api_auth_cache_s`. A session that the v2 read finds expired or idle is
+marked revoked (`auth.revoke_dead_session`), as the older routes always did, so it stays dead if the
+clock moves back. A cookie that names no session writes nothing.
+
+Not moved: the UniFi and Pockethernet pages still read `/api/plugins/unifi/*` and
+`/api/plugins/pockethernet/*`, because those routes carry derived fields (stale flags, totals, last
+update) that the v2 resources do not, and the Pockethernet pages page by offset; the host settings,
+enrolment and map admin pages read `/api/hosts/*`, `/api/infra/dependencies` and
+`/api/admin/infra/unlinked`, which have no v2 resource yet. They use the same client for the session,
+the CSRF header and the poller.
 
 ## Plugin host
 
@@ -1094,7 +1159,7 @@ The console shell: every signed-in page has a `<header id="shell-header">` (hold
 `aria-live` `#summary` region the page scripts write into), a `<nav id="shell-nav">` mount and
 `<script type="module" src="/static/js/shell.js">`. The module adds the "O" badge brand, a theme
 toggle and the user name to the header, and draws the navigation from its `NAV` table plus the
-plugin entries. The user's role comes from `GET /api/session`; admin entries are left out for a
+plugin entries. The user's role comes from `GET /api/v2/session`; admin entries are left out for a
 viewer, which is tidiness only because the server enforces every admin route. The login page has
 no shell.
 

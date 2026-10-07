@@ -247,6 +247,17 @@ async def peek_session(store: Store, cfg: Config, token: str | None,
     return Session(uid, username, bool(is_admin), csrf_for(token)), float(expires), float(last_seen)
 
 
+async def revoke_dead_session(store: Store, token: str) -> None:
+    """After peek_session refused a cookie: if the session still exists and is not marked
+    revoked, mark it, so that an expired or idle session stays dead even if the clock moves back.
+    A cookie that names no session writes nothing."""
+    if not token or len(token) > 128:
+        return
+    rows = await store.fetch("SELECT revoked FROM sessions WHERE id_hash=?", (_digest(token),))
+    if rows and not rows[0][0]:
+        await store.execute("UPDATE sessions SET revoked=1 WHERE id_hash=?", (_digest(token),))
+
+
 async def touch_session(store: Store, token: str, now: float) -> None:
     await store.execute("UPDATE sessions SET last_seen=? WHERE id_hash=?", (now, _digest(token)))
 

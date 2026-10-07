@@ -33,3 +33,10 @@
 .finding-list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--o-s2); }
 .finding-list li { display: flex; flex-wrap: wrap; gap: var(--o-s2); align-items: center; }
 .admin-note { color: var(--o-text-muted); font-size: var(--o-fs-sm); margin: var(--o-s1) 0 0; }
+.settings-grid { display: grid; grid-template-columns: minmax(10rem, max-content) minmax(6rem, 12rem) 1fr; gap: var(--o-s2) var(--o-s3); align-items: center; margin: var(--o-s3) 0; }
+@media (max-width: 700px) { .settings-grid { grid-template-columns: minmax(0, 1fr); } }
+.settings-grid input, #overrides input, .override-row input, #rule-fields input, #rule-fields select {
+  border: 1px solid var(--o-border-input); border-radius: 6px; background: var(--o-surface);
+  color: var(--o-text); padding: 0 var(--o-s2); min-height: 32px; font: inherit; max-width: 100%; }
+#rule-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); }
+#rule-fields label[hidden] { display: none; }

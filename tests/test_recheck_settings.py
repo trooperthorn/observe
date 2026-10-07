@@ -23,6 +23,7 @@ from .test_recheck import Clock, Probe, mon, storage  # noqa: F401  (storage is 
 from .test_storage import _store_on
 
 URL = "/api/admin/recheck"
+READ = "/api/v2/admin/settings/recheck"
 
 
 def _admin(tmp_path):
@@ -38,7 +39,7 @@ def _audit(env, kind):
 def test_an_admin_reads_the_defaults_and_the_bounds(tmp_path):
     env, _ = _admin(tmp_path)
     try:
-        data = env.client.get(URL).json()
+        data = env.client.get(READ).json()
         assert data["settings"] == {"window": 180.0, "interval": 10.0, "good": 2}
         assert data["overrides"] == {}
         assert data["bounds"]["interval"]["min"] == 5.0
@@ -54,7 +55,7 @@ def test_an_admin_updates_the_global_values_and_the_change_is_audited(tmp_path):
         r = env.client.put(URL, headers=hdr, json={"window": 300, "interval": 15, "good": 3})
         assert r.status_code == 200
         assert r.json()["settings"] == {"window": 300.0, "interval": 15.0, "good": 3}
-        assert env.client.get(URL).json()["settings"] == {"window": 300.0, "interval": 15.0,
+        assert env.client.get(READ).json()["settings"] == {"window": 300.0, "interval": 15.0,
                                                           "good": 3}
         rows = _audit(env, "recheck_settings_changed")
         assert len(rows) == 1 and rows[0][0] == "root"
@@ -63,7 +64,7 @@ def test_an_admin_updates_the_global_values_and_the_change_is_audited(tmp_path):
         assert detail["new"]["settings"] == {"good": 3, "interval": 15.0, "window": 300.0}
         # null resets one value to the config default
         env.client.put(URL, headers=hdr, json={"window": None})
-        assert env.client.get(URL).json()["settings"]["window"] == 180.0
+        assert env.client.get(READ).json()["settings"]["window"] == 180.0
         assert len(_audit(env, "recheck_settings_changed")) == 2
     finally:
         env.client.close()
@@ -76,10 +77,10 @@ def test_an_admin_sets_and_clears_a_per_monitor_override(tmp_path):
         r = env.client.put(URL, headers=hdr, json={"overrides": {"p": {"window": 0, "good": 5}}})
         assert r.status_code == 200
         assert r.json()["overrides"] == {"p": {"good": 5, "window": 0.0}}
-        assert env.client.get(URL).json()["overrides"] == {"p": {"good": 5, "window": 0.0}}
+        assert env.client.get(READ).json()["overrides"] == {"p": {"good": 5, "window": 0.0}}
         assert len(_audit(env, "recheck_settings_changed")) == 1
         env.client.put(URL, headers=hdr, json={"overrides": {}})
-        assert env.client.get(URL).json()["overrides"] == {}
+        assert env.client.get(READ).json()["overrides"] == {}
         assert len(_audit(env, "recheck_settings_changed")) == 2
     finally:
         env.client.close()
@@ -89,12 +90,10 @@ def test_an_admin_sets_and_clears_a_per_monitor_override(tmp_path):
 def test_a_non_admin_and_a_missing_session_are_refused(tmp_path):
     env = Env(tmp_path)
     try:
-        assert env.client.get(URL).status_code == 401
-        assert env.client.get("/admin/recheck").status_code == 401
+        assert env.client.get(READ).status_code == 401
         env.user("bob")
         hdr = env.csrf(env.login("bob"))
-        assert env.client.get(URL).status_code == 403
-        assert env.client.get("/admin/recheck").status_code == 403
+        assert env.client.get(READ).status_code == 403
         assert env.client.put(URL, headers=hdr, json={"good": 3}).status_code == 403
         env.user("root", admin=True)
         root = env.csrf(env.login("root"))
@@ -110,7 +109,7 @@ def test_basic_auth_and_ingest_keys_are_refused(tmp_path):
     env = Env(tmp_path)
     try:
         env.user("root", admin=True)
-        assert env.client.get(URL, headers=BASIC).status_code == 401
+        assert env.client.get(READ, headers=BASIC).status_code == 401
         key, _ = asyncio.run(create_key(env.store, "h", "root", scope="ingest"))
         assert env.client.put(URL, headers={"Authorization": f"Bearer {key}"},
                               json={"good": 3}).status_code in (401, 403)
@@ -153,16 +152,16 @@ def test_invalid_values_are_refused_audited_and_not_saved(tmp_path, body):
         env.store.close()
 
 
-def test_the_page_carries_the_token_and_escapes_monitor_names(tmp_path):
+def test_the_page_is_static_and_the_monitor_names_come_as_json(tmp_path):
     env = Env(tmp_path)
     try:
         env.user("root", admin=True)
         token = env.login("root").json()["csrf"]
         r = env.client.get("/admin/recheck")
         assert r.status_code == 200 and "text/html" in r.headers["content-type"]
-        assert f'name="csrf" value="{token}"' in r.text
-        assert 'name="window"' in r.text and 'data-slug="p"' in r.text
-        assert "admin-recheck.js" in r.text
+        assert token not in r.text and "data-slug" not in r.text
+        assert 'src="/static/admin-recheck.js"' in r.text and 'id="recheck-form"' in r.text
+        assert env.client.get(READ).json()["monitors"] == [{"slug": "p", "name": "p"}]
     finally:
         env.client.close()
         env.store.close()

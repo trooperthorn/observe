@@ -1,8 +1,7 @@
 // Audit page: the admin-only audit log with filters. Every string came from the database, so
 // it is written with textContent only. The API is GET /api/v2/audit.
 import { el } from "/static/js/dom.js";
-import { api, whoami } from "/static/js/api.js";
-import { seconds } from "/static/js/v2.js";
+import { api, seconds, whoami } from "/static/js/api.js";
 import { statusChip, monoTag } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { notAdmin, showError } from "/static/js/admin-ui.js";

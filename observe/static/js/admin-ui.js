@@ -64,3 +64,18 @@ export function notAdmin(main, what) {
   c.append(el("h3", null, "Admin account needed"), el("p", null, `${what} needs an admin account.`));
   main.replaceChildren(c);
 }
+
+// A number input for a settings form. `value` null leaves it empty.
+export function numberInput(name, label, { min, max, step = "any", value = null, placeholder = "", required = false } = {}) {
+  const input = el("input");
+  input.name = name;
+  input.type = "number";
+  input.step = String(step);
+  if (min !== undefined) input.min = String(min);
+  if (max !== undefined) input.max = String(max);
+  if (value !== null && value !== undefined) input.value = String(value);
+  if (placeholder !== "") input.placeholder = String(placeholder);
+  input.required = required;
+  input.setAttribute("aria-label", label);
+  return input;
+}

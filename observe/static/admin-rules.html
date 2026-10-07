@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Threshold rules - Observe</title>
+<link rel="stylesheet" href="/static/css/tokens.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/shell.css">
+<link rel="stylesheet" href="/static/css/components.css">
+<link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+<header id="shell-header" class="shell-head">
+  <div id="summary" aria-live="polite"></div>
+</header>
+<nav id="shell-nav" aria-label="Main"></nav>
+<main class="admin-main" id="page">
+  <div class="admin-title">
+    <p class="crumbs muted">Admin / Threshold rules</p>
+    <h1>Threshold rules</h1>
+  </div>
+  <p id="msg" class="msg-line" role="alert"></p>
+  <section class="card notice" aria-labelledby="note-h">
+    <h3 id="note-h">Saved, not yet evaluated</h3>
+    <p>Rules are validated and stored, and every change is audited. The rule engine does not read them yet, so a saved rule does not change any monitor state until that wiring ships.</p>
+  </section>
+  <section class="card" aria-labelledby="list-h">
+    <h3 id="list-h">Saved rules</h3>
+    <p class="card-sub" id="rules-count"></p>
+    <div id="rules-list"></div>
+    <p><button type="button" class="btn primary" id="rules-save">Save rules</button></p>
+  </section>
+  <form id="rule-form" class="card" aria-labelledby="add-h">
+    <h3 id="add-h">Add a rule</h3>
+    <div id="rule-fields" class="admin-form"></div>
+    <p><button type="submit" class="btn">Add to the list</button></p>
+  </form>
+</main>
+<script type="module" src="/static/admin-rules.js"></script>
+<script type="module" src="/static/js/shell.js"></script>
+</body>
+</html>

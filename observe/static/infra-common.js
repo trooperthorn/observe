@@ -4,7 +4,7 @@ import { el } from "/static/js/dom.js";
 import { statusChip } from "/static/js/chips.js";
 
 export { el };
-export { api, whoami } from "/static/js/api.js";
+export { api, get, getAll, poller, whoami } from "/static/js/api.js";
 
 export const STATE_WORDS = {
   up: "Up", warn: "Warning", down: "Down", unreachable: "Unreachable", pending: "Pending",

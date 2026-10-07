@@ -36,11 +36,10 @@ from . import __version__
 from . import api as apimod
 from . import audit
 from . import auth as authmod
-from . import (enrol, hosttasks, layout, recheck_page, recheck_settings, retention,
-               retention_page, scripts, taskscripts, tiers)
+from . import (enrol, hosttasks, layout, recheck_settings, retention, rules, scripts, taskscripts,
+               tiers)
 from .alerts import Alerter
 from .config import Config
-from .storage import rollups
 from .infra import InfraError, InfraService
 from .infra_map import MapService
 from .infra_match import LivePort, Matcher, PortMatch
@@ -362,10 +361,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                           samesite="strict")
         return out
 
-    @app.get("/api/session", include_in_schema=False)
-    async def whoami(sess: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
-        return {"username": sess.username, "is_admin": sess.is_admin, "csrf": sess.csrf}
-
     @app.get("/api/ui/layout/{view}", include_in_schema=False)
     async def ui_layout_get(view: str,
                             sess: authmod.Session = Depends(guards.session)) -> Response:
@@ -406,10 +401,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             return JSONResponse({"detail": err.reason}, status_code=err.status)
         await layout.reset(store, sess.user_id, view)
         return JSONResponse({"view": view, "order": [], "hidden": [], "saved": False})
-
-    @app.get("/api/admin/users", include_in_schema=False)
-    async def admin_users(_: authmod.Session = Depends(guards.admin)) -> list[dict[str, Any]]:
-        return await authmod.list_users(store)
 
     @app.post("/api/admin/users", include_in_schema=False)
     async def admin_create_user(
@@ -471,6 +462,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                                method="POST", path=path, status=status, remote=remote,
                                detail={**detail, "reason": outcome})
             return JSONResponse({"detail": msg}, status_code=status)
+        runtime.auth.forget_user(uid)  # the change must show on the next v2 read
         await audit.record(store, kind_on if value else kind_off, actor=sess.username,
                            method="POST", path=path, status=200, remote=remote, detail=detail)
         return JSONResponse({"ok": True})
@@ -488,15 +480,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
         return await user_flag(request, uid, sess, "is_admin",
                                "user_promoted", "user_demoted")
-
-    @app.get("/api/admin/keys", include_in_schema=False)
-    async def admin_keys(_: authmod.Session = Depends(guards.admin)) -> list[dict[str, Any]]:
-        """Key ids, hosts and state. The secret part is never stored, so never listed."""
-        return [{"id": k.prefix, "host": k.host, "created": k.created,
-                 "created_by": k.created_by, "revoked_at": k.revoked_at,
-                 "last_used": k.last_used, "active": k.active, "scope": k.scope,
-                 "role": k.role}
-                for k in await list_keys(store)]
 
     @app.post("/api/admin/keys", include_in_schema=False)
     async def admin_create_key(
@@ -690,6 +673,31 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         # The page holds no data; hosts-new.js needs an admin session for everything it does.
         return FileResponse(STATIC / "hosts-new.html")
 
+    @app.get("/admin/tiers", include_in_schema=False)
+    async def admin_tiers_page() -> FileResponse:
+        # The page holds no data; it reads and writes through /api/v2 with an admin session.
+        return FileResponse(STATIC / "admin-tiers.html")
+
+    @app.get("/admin/retention", include_in_schema=False)
+    async def admin_retention_page() -> FileResponse:
+        # The page holds no data; it reads and writes through /api/v2 with an admin session.
+        return FileResponse(STATIC / "admin-retention.html")
+
+    @app.get("/admin/recheck", include_in_schema=False)
+    async def admin_recheck_page() -> FileResponse:
+        # The page holds no data; it reads and writes through /api/v2 with an admin session.
+        return FileResponse(STATIC / "admin-recheck.html")
+
+    @app.get("/admin/rules", include_in_schema=False)
+    async def admin_rules_page() -> FileResponse:
+        # The page holds no data; it reads and writes through /api/v2 with an admin session.
+        return FileResponse(STATIC / "admin-rules.html")
+
+    @app.get("/admin/storage", include_in_schema=False)
+    async def admin_storage_page() -> FileResponse:
+        # The page holds no data; it reads and writes through /api/v2 with an admin session.
+        return FileResponse(STATIC / "admin-storage.html")
+
     @app.get("/audit", include_in_schema=False)
     async def audit_page() -> FileResponse:
         # The page holds no data; audit.js needs an admin session for everything it shows.
@@ -739,23 +747,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                            detail={"url": url})
         return JSONResponse({"url": url, "source": "saved"})
 
-    @app.get("/api/admin/retention", include_in_schema=False)
-    async def get_retention(_: authmod.Session = Depends(guards.admin)) -> dict[str, Any]:
-        """The effective retention, compaction and rollup settings with their bounds and the
-        per-metric overrides. Admin session; an ingest key is not a session and is refused."""
-        return await retention.read_settings(store, config.server.retention_days)
-
-    @app.get("/admin/retention", include_in_schema=False)
-    async def retention_admin_page(sess: authmod.Session = Depends(guards.admin)) -> Response:
-        """The retention settings and the last compaction and rollup run, written by the server
-        so the CSRF token and the run table are in the first response. Admin session only. The
-        backend name is shown; the DSN never is."""
-        described = await retention.read_settings(store, config.server.retention_days)
-        states = await store.storage.fetchall(rollups.STATE_SQL)
-        html = retention_page.render(described, states, backend=store.storage.backend,
-                                     csrf=sess.csrf)
-        return Response(html, media_type="text/html")
-
     @app.put("/api/admin/retention", include_in_schema=False)
     async def put_retention(
             request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
@@ -774,23 +765,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                                detail={"reason": str(err)})
             return JSONResponse({"detail": str(err)}, status_code=422)
         return JSONResponse(out)
-
-    async def recheck_view() -> dict[str, Any]:
-        glob, overrides = await store.storage.read(recheck_settings.load)
-        return recheck_settings.describe(config, glob, overrides)
-
-    @app.get("/api/admin/recheck", include_in_schema=False)
-    async def get_recheck(_: authmod.Session = Depends(guards.admin)) -> dict[str, Any]:
-        """The global re-check window, interval and good-reply count, the per-monitor overrides
-        and the bounds. Admin session; an ingest key is not a session and is refused."""
-        return await recheck_view()
-
-    @app.get("/admin/recheck", include_in_schema=False)
-    async def recheck_admin_page(sess: authmod.Session = Depends(guards.admin)) -> Response:
-        """The re-check form, written by the server so the CSRF token is in the first response.
-        Admin session only."""
-        return Response(recheck_page.render(await recheck_view(), csrf=sess.csrf),
-                        media_type="text/html")
 
     @app.put("/api/admin/recheck", include_in_schema=False)
     async def put_recheck(
@@ -815,17 +789,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         scheduler.apply_recheck(glob, saved)
         return JSONResponse(recheck_settings.describe(config, glob, saved))
 
-    async def tiers_view() -> dict[str, Any]:
-        glob, hosts = await store.storage.read(tiers.load)
-        known = await store.storage.read(tiers.known_hosts)
-        return tiers.describe(glob, hosts, known)
-
-    @app.get("/api/admin/tiers", include_in_schema=False)
-    async def get_tiers(_: authmod.Session = Depends(guards.admin)) -> dict[str, Any]:
-        """The global polling rates, the per-host overrides and the bounds. Admin session; an
-        ingest key is not a session and is refused."""
-        return await tiers_view()
-
     @app.put("/api/admin/tiers", include_in_schema=False)
     async def put_tiers(
             request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
@@ -846,7 +809,29 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         await store.storage.write(lambda db: tiers.save(
             db, changes, overrides, now=auth_clock(), actor=sess.username, remote=remote),
             touches=("admin", "audit"))
-        return JSONResponse(await tiers_view())
+        glob, saved = await store.storage.read(tiers.load)
+        known = await store.storage.read(tiers.known_hosts)
+        return JSONResponse(tiers.describe(glob, saved, known))
+
+    @app.put("/api/admin/rules", include_in_schema=False)
+    async def put_rules(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Replace the whole threshold rule list. Admin session and CSRF. A refused rule answers
+        422 and is audited; a change is audited with the old and new rules. Saved rules are
+        stored for the rule engine; nothing evaluates them yet (docs/ARCHITECTURE.md)."""
+        remote = request.client.host if request.client else ""
+        body = await body_of(request)
+        try:
+            parsed = rules.validate(body)
+        except rules.RuleError as err:
+            await audit.record(store, "rules_failed", actor=sess.username, method="PUT",
+                               path=rules.PATH, status=422, remote=remote,
+                               detail={"reason": str(err)})
+            return JSONResponse({"detail": str(err)}, status_code=422)
+        await store.storage.write(lambda db: rules.save(
+            db, parsed, now=auth_clock(), actor=sess.username, remote=remote),
+            touches=("admin", "audit"))
+        return JSONResponse({"rules": [r.as_dict() for r in parsed], "max_rules": rules.MAX_RULES})
 
     @app.post("/api/hosts", include_in_schema=False)
     async def create_host(

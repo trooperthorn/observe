@@ -8,7 +8,7 @@ control (`wpc_`) keys are not accepted. Basic auth is not accepted either.
 
 A lookup is remembered for `server.api_auth_cache_s` seconds, so an unchanged page can be
 answered with a 304 without a database read. A revoked session or token therefore stops working
-within that time, and logout forgets the session at once. A session's `last_seen` is written at
+within that time, and logout forgets the session at once, as does disabling or demoting its user. A session's `last_seen` is written at
 most once a minute and never by the 304 path.
 """
 
@@ -66,6 +66,12 @@ class Authenticator:
 
     def forget_session(self, token: str) -> None:
         self._seen.pop(_digest("c", token), None)
+
+    def forget_user(self, user_id: int) -> None:
+        """Drop every remembered session of one user, so that disabling or demoting an account
+        takes effect on the next read and not after the cache time."""
+        key = f"s:{user_id}"
+        self._seen = {d: v for d, v in self._seen.items() if v[0].key != key}
 
     def _remember(self, digest: str, principal: Principal, token: str | None, expires: float,
                   touched: float) -> None:
@@ -128,6 +134,7 @@ class Authenticator:
                     touched = wall
                 self._remember(digest, principal, cookie, expires, touched)
                 return principal
+            await authmod.revoke_dead_session(self._store, cookie)
         return ANONYMOUS if self._config.server.anonymous_read else None
 
 

@@ -3,6 +3,7 @@
 // itself into its own card, so a refresh of this page never touches it.
 import { el } from "/static/js/dom.js";
 import { statusChip } from "/static/js/chips.js";
+import { get, poller, whoami } from "/static/js/api.js";
 
 const SECTIONS = [
   ["cpu", "CPU"], ["memory", "Memory"], ["power", "Power"], ["temperatures", "Temperatures"],
@@ -196,32 +197,24 @@ function render(h) {
   document.getElementById("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;
 }
 
-let refreshing = false;
-
-// A refresh never starts while the previous one is still running, so a slow server is
-// not given a growing queue of overlapping requests.
+// The poller waits for a refresh to finish before it plans the next one, and runs again when the
+// host data moves, so a slow server is never given a growing queue of overlapping requests.
 async function refresh() {
-  if (refreshing) return;
-  refreshing = true;
   try {
-    const r = await fetch(`/api/v2/hosts/${encodeURIComponent(name)}`);
-    if (r.status === 401) { location.assign("/login"); return; }
-    if (r.status === 404) { page.replaceChildren(el("p", null, "Unknown host.")); return; }
-    if (r.ok) render(await r.json());
-  } catch (_) {
+    render(await get(`/api/v2/hosts/${encodeURIComponent(name)}`));
+  } catch (e) {
+    if (e.status === 401) return;  // the client is already sending the visitor to sign in
+    if (e.status === 404) { page.replaceChildren(el("p", null, "Unknown host.")); return; }
     document.getElementById("footer").textContent = "observe unreachable, retrying";
-  } finally {
-    refreshing = false;
+    throw e;
   }
 }
 
 async function start() {
   try {
-    const r = await fetch("/api/session");
-    if (r.ok) isAdmin = !!(await r.json()).is_admin;
+    isAdmin = !!(await whoami()).is_admin;
   } catch (_) { /* a viewer view is the safe default */ }
-  refresh();
-  setInterval(refresh, 10000);
+  poller(refresh, { interval: 10000, domains: ["hosts", "ha"] });
 }
 
 start();

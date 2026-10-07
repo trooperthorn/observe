@@ -2,13 +2,14 @@
 // command history. Every string (host names, parameters, results) is written with textContent
 // only, never as markup. Changes are fetches with the session's CSRF token in X-CSRF-Token.
 // Nothing here reaches a host: a request is queued and signed, and the host's daemon pulls it.
+import { get, poller, seconds, whoami } from "/static/js/api.js";
 import { statusChip } from "/static/js/chips.js";
 import { confirmDialog, typedConfirm } from "/static/js/dialog.js";
 import { toast } from "/static/js/toast.js";
 
 const ctlBox = document.getElementById("control");
 const ctlHost = new URLSearchParams(location.search).get("name") || "";
-const BASE = "/api/plugins/control";
+const BASE = "/api/plugins/control";  // requesting and cancelling; the reads are on /api/v2/control
 const ACTION_TEXT = {
   "fan.set_floor": "Set a fan floor", "fan.set_mode": "Switch fan controller mode",
   "service.restart": "Restart a service", "host.reboot": "Reboot the host",
@@ -31,12 +32,10 @@ function cel(tag, cls, text) {
 }
 
 async function ctlApi(method, path, body) {
-  const opts = { method, headers: {} };
-  if (method !== "GET") {
-    opts.headers["X-CSRF-Token"] = ctlCsrf;
-    opts.headers["Content-Type"] = "application/json";
-    opts.body = JSON.stringify(body || {});
-  }
+  const opts = {
+    method, headers: { "X-CSRF-Token": ctlCsrf, "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  };
   const r = await fetch(path, opts);
   let data = null;
   try { data = await r.json(); } catch (_) { data = null; }
@@ -117,7 +116,7 @@ async function submit(action, params) {
   if (r.ok) {
     ctlNotice.hidden = true;
     toast(`${ACTION_TEXT[action]} queued for ${ctlHost}`, "up");
-    loadHistory();
+    loadHistoryNow();
     return;
   }
   showError((r.data && r.data.detail && String(r.data.detail)) || `refused (${r.status})`);
@@ -165,7 +164,7 @@ function historyTable(commands) {
   t.append(head);
   for (const c of commands) {
     const r = cel("tr");
-    r.append(cel("td", null, new Date(c.issued_at * 1000).toLocaleString()),
+    r.append(cel("td", null, new Date(seconds(c.issued_at) * 1000).toLocaleString()),
       cel("td", null, describe(c.action, c.params)), cel("td", null, c.requested_by));
     const st = cel("td");
     st.append(statusChip(STATE_CHIP[c.state] || "pending", c.state));
@@ -178,7 +177,7 @@ function historyTable(commands) {
         b.disabled = true;
         const res = await ctlApi("POST", `${BASE}/commands/${encodeURIComponent(c.id)}/cancel`);
         if (!res.ok) b.textContent = (res.data && res.data.detail) || `refused (${res.status})`;
-        else loadHistory();
+        else loadHistoryNow();
       });
       act.append(b);
     }
@@ -189,20 +188,23 @@ function historyTable(commands) {
   return wrap;
 }
 
+// After a request or a cancel the history is read at once; a failed read is left to the poller.
+const loadHistoryNow = () => loadHistory().catch(() => {});
+
 async function loadHistory() {
-  const r = await ctlApi("GET", `${BASE}/commands?host=${encodeURIComponent(ctlHost)}&limit=25`);
-  if (r.ok && ctlHistoryBox) ctlHistoryBox.replaceChildren(historyTable(r.data.commands));
+  const page = await get("/api/v2/control/commands", { host: ctlHost, limit: 25 });
+  if (ctlHistoryBox) ctlHistoryBox.replaceChildren(historyTable(page.items));
 }
 
 async function startControl() {
   if (!ctlBox || !ctlHost) return;
   try {
-    const me = await ctlApi("GET", "/api/session");
-    if (!me.ok || !me.data.is_admin) return;
-    ctlCsrf = me.data.csrf;
-    const caps = await ctlApi("GET", `${BASE}/capabilities?host=${encodeURIComponent(ctlHost)}`);
-    if (!caps.ok || !caps.data.known) return;
-    ctlCaps = caps.data;
+    const me = await whoami();
+    if (!me.is_admin) return;
+    ctlCsrf = me.csrf;
+    const caps = await get("/api/v2/control/capabilities", { host: ctlHost });
+    if (!caps.known) return;
+    ctlCaps = caps;
     const h = cel("h3", null, "Control");
     h.id = "control-h";
     ctlBox.replaceChildren(h);
@@ -215,8 +217,7 @@ async function startControl() {
     ctlHistoryBox = cel("div");
     ctlBox.append(ctlHistoryBox);
     ctlBox.hidden = false;
-    await loadHistory();
-    setInterval(loadHistory, 10000);
+    poller(loadHistory, { interval: 10000 });
   } catch (_) {
     ctlBox.hidden = true;
   }

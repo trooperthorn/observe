@@ -4,6 +4,7 @@
 // Admin entries are left out for viewers. That is only tidiness: the server still decides.
 import { el } from "/static/js/dom.js";
 import { applyStoredTheme, currentTheme, cycleTheme } from "/static/js/theme.js";
+import { get } from "/static/js/api.js";
 
 export const WORKSPACES = [
   ["overview", "Overview"], ["hosts", "Hosts"], ["network", "Network"],
@@ -19,8 +20,11 @@ export const NAV = [
   { workspace: "network", label: "Map admin", href: "/admin/infra", also: [], admin: true },
   { workspace: "admin", label: "Users and keys", href: "/admin", also: [], admin: true },
   { workspace: "admin", label: "Audit", href: "/audit", also: [], admin: true },
+  { workspace: "admin", label: "Polling tiers", href: "/admin/tiers", also: [], admin: true },
   { workspace: "admin", label: "Retention", href: "/admin/retention", also: [], admin: true },
   { workspace: "admin", label: "Re-check", href: "/admin/recheck", also: [], admin: true },
+  { workspace: "admin", label: "Threshold rules", href: "/admin/rules", also: [], admin: true },
+  { workspace: "admin", label: "Storage", href: "/admin/storage", also: [], admin: true },
 ];
 
 const WORKSPACE_IDS = new Set(WORKSPACES.map(([id]) => id));
@@ -98,13 +102,13 @@ function themeButton() {
   return b;
 }
 
-async function getJson(path) {
+// One read of the session or the plugin list. A 401 means the session ended (the client has
+// already sent the visitor to sign in), any other failure leaves the nav as the cached role drew it.
+async function read(path) {
   try {
-    const r = await fetch(path);
-    if (r.status === 401) return { expired: true };
-    return r.ok ? await r.json() : null;
-  } catch (_) {
-    return null;
+    return await get(path, null, { redirect: false });
+  } catch (err) {
+    return err && err.status === 401 ? { expired: true } : null;
   }
 }
 
@@ -140,7 +144,7 @@ export async function mountShell() {
   header.prepend(brand());
   header.append(themeButton());
   renderNav(nav, visibleItems(cachedAdmin(), null), window.location.pathname);
-  const [session, plugins] = await Promise.all([getJson("/api/session"), getJson("/api/v2/plugins")]);
+  const [session, plugins] = await Promise.all([read("/api/v2/session"), read("/api/v2/plugins")]);
   if (session && session.expired) { toLogin(); return; }
   const isAdmin = !!(session && session.is_admin);
   rememberAdmin(isAdmin);
