@@ -311,11 +311,11 @@ class ComponentThresholds(Thresholds):
     def _no_old_source(self) -> "ComponentThresholds":
         """A bare collector id names no series now, so the component would match nothing and
         read Good for ever. Refuse it, and say what to write instead."""
-        from .otelnames import collector_scope, legacy_source
+        from .otelnames import legacy_source, replacement_scope
         if legacy_source(self.source):
             raise ValueError(
                 f"component source '{self.source}' is an old hostwatch key; use the scope "
-                f"'{collector_scope(self.source)}' and the OpenTelemetry metric name, with "
+                f"'{replacement_scope(self.source)}' and the OpenTelemetry metric name, with "
                 "limits in the metric's unit (utilization, charge and wear are ratios 0 to 1)")
         return self
 

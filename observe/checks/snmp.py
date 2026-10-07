@@ -320,7 +320,9 @@ INTERFACE_UTILIZATION = "observe.network.interface.utilization"
 
 
 def _ratio(percent: float) -> float:
-    return round(percent / 100, 6)
+    # Rounded only to clear float noise (a percent has at most two decimals). A coarser round could
+    # lift 89.99996 percent onto the 0.9 limit and grade it differently from the percent rule.
+    return round(percent / 100, 12)
 
 
 def host_batch(host: str, mode: str, res: CheckResult, now: float) -> Batch | None:

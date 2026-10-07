@@ -37,7 +37,16 @@ def rule_metric(scope: str, metric: str) -> str:
 LEGACY_COLLECTORS = frozenset({
     "cpu", "memory", "rapl", "hwmon", "thermalctl", "linux_thermal", "rpi", "mdraid", "zfs",
     "truenas", "scrutiny", "nut", "win_cpu", "win_memory", "win_storage", "win_smartctl",
-    "win_thermalsuite"})
+    "win_thermalsuite", "snmp"})
+
+# The SNMP poller of Observe was the source `snmp` before it wrote the scope `observe.check.snmp`
+# (docs/DATA-API-DESIGN.md section 3.5), so its replacement scope is not a collector scope.
+SNMP_SCOPE = "observe.check.snmp"
+
+
+def replacement_scope(source: str) -> str:
+    """The scope that replaced an old bare source id."""
+    return SNMP_SCOPE if source == "snmp" else collector_scope(source)
 
 
 def legacy_source(source: str) -> bool:
@@ -76,6 +85,24 @@ _LEGACY_RULE_REPLACEMENTS: dict[str, tuple[str, str]] = {
     "nut.input_voltage_v": ("hw.voltage", "unit is volts, unchanged"),
     "nut.ups_load_pct": ("observe.ups.load", _RATIO),
     "win_storage.wear_pct": ("hw.physical_disk.endurance_utilization", _RATIO),
+    "snmp.cpu_pct": ("system.cpu.utilization", _RATIO),
+    "snmp.cpu_core_pct": ("system.cpu.utilization", _RATIO + "; one core has the attribute "
+                          "cpu.logical_number"),
+    "snmp.mem_used_pct": ("system.memory.utilization", _RATIO),
+    "snmp.mem_total_bytes": ("system.memory.limit", "unit is bytes, unchanged"),
+    "snmp.mem_used_bytes": ("system.memory.usage", "unit is bytes, unchanged"),
+    "snmp.disk_used_pct": ("system.filesystem.utilization", _RATIO),
+    "snmp.disk_total_bytes": ("system.filesystem.usage", "unit is bytes, unchanged; the total is "
+                              "the sum of the points with system.filesystem.state used and free"),
+    "snmp.disk_used_bytes": ("system.filesystem.usage", "unit is bytes, unchanged"),
+    "snmp.if_up": ("observe.network.interface.up", "1 for up, 0 otherwise, unchanged"),
+    "snmp.if_in_bps": ("observe.network.interface.rate", "unit is bit/s, unchanged; the receive "
+                       "direction has the attribute network.io.direction"),
+    "snmp.if_out_bps": ("observe.network.interface.rate", "unit is bit/s, unchanged; the transmit "
+                        "direction has the attribute network.io.direction"),
+    "snmp.if_speed_mbps": ("observe.network.interface.speed", "unit is now bit/s, not Mbit/s, so "
+                           "multiply limits by 1000000"),
+    "snmp.if_util_pct": ("observe.network.interface.utilization", _RATIO),
 }
 
 

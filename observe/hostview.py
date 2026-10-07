@@ -328,10 +328,16 @@ def _sources_of(section: str) -> list[str]:
     return sorted({short_source(src) for src, _ in RULES[section]})
 
 
+# The source row Observe's SNMP poller wrote before it used the scope `observe.check.snmp`.
+RETIRED_SNMP_SOURCE = "snmp"
+
+
 def source_views(sources: dict[str, dict[str, Any]], now: float,
                  stale_after: float) -> list[dict[str, Any]]:
     out = []
     for name in sorted(sources):
+        if name == RETIRED_SNMP_SOURCE:
+            continue  # kept in the store, but nothing writes it now, so it would only read stale
         info = sources[name]
         absent = not info["available"] and info["reason"] == ABSENT_REASON
         age = max(0.0, now - info["updated"])

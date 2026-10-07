@@ -660,8 +660,12 @@ under Disks, and `observe.network.interface.up`, `.rate` (with `network.io.direc
 and `.utilization` under a Network interfaces section. The grading limits are the old percent
 limits as ratios (CPU 0.90 and 0.98, memory 0.90 and 0.97, filesystem 0.85 and 0.95, interface
 0.70 and 0.90), so a host grades the same as before; one core is shown and not graded. The old
-`snmp` source and its keys (`cpu_pct`, `mem_used_pct`, `if_in_bps` and the rest) are gone, and a
-threshold rule for these series names the scope `observe.check.snmp`. Several monitors may share
+`snmp` source and its keys (`cpu_pct`, `mem_used_pct`, `if_in_bps` and the rest) are gone. A
+pushed host component or saved rule that still names the source `snmp` or one of those metrics is
+refused, or reported as invalid, with the new name and unit. The poll is stored in process and does
+not pass through the rule engine, so saved threshold rules do not evaluate these series; the host
+page grades them with the limits above. After an upgrade the old `snmp` source row and series stay in the store until
+retention removes them; the host page sources list hides that row. Several monitors may share
 one host name, because each series is keyed by scope, metric and attributes. A failed poll stores
 nothing, so the host goes stale instead of showing zeros, and a watched interface that is down is
 stored as `observe.network.interface.up` 0, a Warning.

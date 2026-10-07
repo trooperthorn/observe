@@ -13,6 +13,8 @@ from observe.checks import snmp as snmpmod
 from observe.checks.base import CheckResult
 from observe.checks.host import CRITICAL, GOOD, WARNING
 
+from .test_recheck import storage  # noqa: F401
+
 NOW = 1_700_000_000.0
 OBSERVE = pathlib.Path(__file__).resolve().parent.parent / "observe"
 
@@ -99,7 +101,78 @@ def test_no_old_snmp_key_remains():
           r"disk_total_bytes|disk_used_bytes|if_in_bps|if_out_bps|if_speed_mbps|if_util_pct|if_up"
     for path in (OBSERVE / "checks" / "snmp.py", OBSERVE / "hostview.py"):
         text = path.read_text(encoding="utf-8")
-        hits = [m for m in re.findall(old, text)
-                if not (path.name == "hostview.py" and m == "disk_used_pct")]  # hassio keeps it
+        # hassio keeps disk_used_pct, so only a line that is not a hassio key counts
+        lines = [ln for ln in text.splitlines()
+                 if not (path.name == "hostview.py" and '("hassio", "disk_used_pct")' in ln)]
+        hits = re.findall(old, "\n".join(lines))
         assert not hits, (path.name, hits)
     assert not [k for t in hostview.RULES.values() for k in t if k[0] == "snmp"]
+
+
+# ---- configuration and data written before the OpenTelemetry names must not read Good ----------
+
+OLD_SNMP = ["cpu_pct", "cpu_core_pct", "mem_used_pct", "mem_total_bytes", "mem_used_bytes",
+            "disk_used_pct", "disk_total_bytes", "disk_used_bytes", "if_up", "if_in_bps",
+            "if_out_bps", "if_speed_mbps", "if_util_pct"]
+
+
+def test_a_component_on_the_old_snmp_source_is_refused_with_the_new_scope():
+    from pydantic import ValidationError
+    from observe.config import ComponentThresholds
+    with pytest.raises(ValidationError) as err:
+        ComponentThresholds(source="snmp", metric="cpu_pct", warn=90, crit=98)
+    assert "observe.check.snmp" in str(err.value)
+    assert "hostwatch.collector.snmp" not in str(err.value)
+    ok = ComponentThresholds(source="observe.check.snmp", metric="system.cpu.utilization",
+                             warn=0.9, crit=0.98)
+    assert ok.source == "observe.check.snmp"
+
+
+@pytest.mark.parametrize("name", OLD_SNMP)
+def test_an_old_snmp_rule_metric_is_recognised_and_names_its_replacement(name):
+    from observe.otelnames import legacy_rule_advice, legacy_rule_metric
+    assert legacy_rule_metric(f"snmp.{name}")
+    advice = legacy_rule_advice(f"snmp.{name}")
+    assert advice and "section 3.2" not in advice  # a named replacement, not the generic text
+
+
+def test_the_new_snmp_rule_metric_is_not_legacy():
+    from observe.otelnames import legacy_rule_metric, rule_metric
+    name = rule_metric("observe.check.snmp", "system.cpu.utilization")
+    assert name == "observe.check.snmp.system.cpu.utilization"
+    assert not legacy_rule_metric(name)
+
+
+def test_saving_an_old_snmp_rule_is_refused():
+    from observe import rules
+    bad = [{"id": "r1", "kind": "consecutive", "metric": "snmp.cpu_pct",
+            "condition": "above", "crit": 90, "x": 1}]
+    with pytest.raises(rules.RuleError):
+        rules.validate(bad, refuse_legacy=True)
+
+
+async def test_loading_an_old_snmp_rule_warns(storage, caplog):  # noqa: F811
+    import logging
+    from observe import rules
+    from .test_recheck import Env, T0
+    env = Env(storage, [])
+    parsed = rules.validate([{"id": "r1", "kind": "consecutive", "metric": "snmp.cpu_pct",
+                              "condition": "above", "crit": 90, "x": 1}])
+    await storage.write(lambda db: rules.save(db, parsed, now=T0, actor="t", remote=""))
+    with caplog.at_level(logging.WARNING):
+        await env.sched.load_rules()
+    assert "snmp.cpu_pct" in caplog.text
+
+
+def test_the_old_snmp_source_row_is_not_listed():
+    sources = {"snmp": {"available": True, "reason": "", "updated": NOW - 9999},
+               "observe.check.snmp": {"available": True, "reason": "", "updated": NOW}}
+    views = hostview.source_views(sources, NOW, 300)
+    assert [v["source"] for v in views] == ["observe.check.snmp"]
+    assert views[0]["status"] == GOOD
+
+
+@pytest.mark.parametrize("percent", [89.99996, 69.99999, 84.999999, 97.00001])
+def test_a_percent_next_to_a_limit_does_not_round_onto_it(percent):
+    grader = hostview.RULES["cpu"][(hostview.SNMP, "system.cpu.utilization")]
+    assert grader(snmpmod._ratio(percent), {})[0] == old_grade(percent, 90, 98)
