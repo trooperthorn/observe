@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 from typing import Any
 
 from fastapi import Query, Request
@@ -40,7 +39,8 @@ AUTO_POINTS = 500
 MAX_SERIES = 50
 MAX_SCAN = 20_000  # series rows read while filtering by attribute
 MAX_ATTR_ROWS = 5000
-MAX_REGEX = 64
+MAX_GLOB = 64  # characters in a ~ pattern
+MAX_VALUE = 256  # characters of an attribute value that a ~ pattern reads
 AGGS = ("avg", "min", "max", "sum", "count", "last")
 DEFAULT_AGGS = ("avg", "min", "max")
 # step below, level, table, bucket width in seconds, retention field
@@ -50,7 +50,6 @@ TIERS = (
     (86400, "rollup_1h", "rollup_1h", rollups.WIDTH_1H, "hourly_days"),
     (math.inf, "rollup_1d", "rollup_1d", rollups.WIDTH_1D, "daily_days"),
 )
-_NESTED = re.compile(r"\)[*+?{]|\\[1-9]|\(\?")
 
 
 def _like(text: str) -> str:
@@ -92,28 +91,47 @@ class Selector:
         return all(test(attrs) for test in self.tests)
 
 
+def glob_match(pattern: str, text: str) -> bool:
+    """Whole-value match where `*` is any run of characters and `?` is one character. It keeps
+    one restart point (the last `*`), so the cost is at most len(pattern) * len(text) steps and
+    there is no exponential case."""
+    p = t = 0
+    star = mark = -1
+    while t < len(text):
+        if p < len(pattern) and pattern[p] != "*" and (pattern[p] == "?" or pattern[p] == text[t]):
+            p += 1
+            t += 1
+        elif p < len(pattern) and pattern[p] == "*":
+            star, mark = p, t
+            p += 1
+        elif star != -1:
+            mark += 1
+            p, t = star + 1, mark
+        else:
+            return False
+    while p < len(pattern) and pattern[p] == "*":
+        p += 1
+    return p == len(pattern)
+
+
 def _attr_test(key: str, value: str) -> Any:
-    """One `match` term. A key ending in ! is not-equal, a value starting with ~ is a regular
-    expression (at most 64 characters, no groups that repeat, no back references, no look
-    around, so it cannot take exponential time), anything else is equal."""
+    """One `match` term. A key ending in ! is not-equal, a value starting with ~ is a pattern
+    (`*` any run of characters, `?` one character, matched against the whole value, so `abc*` is
+    a prefix match; at most 64 characters, run by a linear-time matcher over the first 256
+    characters of the value), anything else is equal."""
     negate = key.endswith("!")
     key = key[:-1] if negate else key
     if not key or len(key) > 128 or len(value) > 1024:
         raise ApiProblem(400, "a match term is too long")
     if value.startswith("~"):
         pattern = value[1:]
-        if len(pattern) > MAX_REGEX or _NESTED.search(pattern):
-            raise ApiProblem(400, f"the regular expression for {key[:40]!r} is not allowed: "
-                                  f"at most {MAX_REGEX} characters, no repeated groups, "
-                                  "back references or look around")
-        try:
-            rx = re.compile(pattern)
-        except re.error:
-            raise ApiProblem(400, f"the regular expression for {key[:40]!r} is invalid") from None
+        if len(pattern) > MAX_GLOB:
+            raise ApiProblem(400, f"the pattern for {key[:40]!r} is not allowed: at most "
+                                  f"{MAX_GLOB} characters, with * and ? as the only wildcards")
 
         def test(attrs: dict[str, Any]) -> bool:
             have = attrs.get(key)
-            hit = have is not None and rx.search(str(have)[:1024]) is not None
+            hit = have is not None and glob_match(pattern, str(have)[:MAX_VALUE])
             return not hit if negate else hit
         return test
 
@@ -125,14 +143,18 @@ def _attr_test(key: str, value: str) -> Any:
 
 
 def _selection(db: Any, sel: Selector, want: int, after: int | None = None,
-               ) -> list[tuple[Any, ...]]:
+               ) -> tuple[list[tuple[Any, ...]], int | None]:
     """Up to `want` series rows that match, in id order, starting after series id `after`:
-    (id, scope, metric, unit, attrs, resource id, kind, name)."""
+    (id, scope, metric, unit, attrs, resource id, kind, name). The second value is None when
+    the scan reached the end or filled `want`; when the scan limit stopped it early it is the
+    last series id read, so the caller can offer it as the next cursor."""
     where, args = sel.sql()
     out: list[tuple[Any, ...]] = []
     scanned = 0
     last = after if after is not None else 0
-    while len(out) < want and scanned < MAX_SCAN:
+    while len(out) < want:
+        if scanned >= MAX_SCAN:
+            return out, last
         rows = db.execute(
             "SELECT s.id, sc.name, s.metric, s.unit, s.attrs, r.id, r.kind, r.name FROM series s "
             "JOIN resources r ON r.id = s.resource_id JOIN scopes sc ON sc.id = s.scope_id "
@@ -146,7 +168,7 @@ def _selection(db: Any, sel: Selector, want: int, after: int | None = None,
                 out.append(row)
                 if len(out) >= want:
                     break
-    return out
+    return out, None
 
 
 def _series_info(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -210,7 +232,7 @@ def list_metrics(db: Any, page: PageParams,
 
 def _match_params(request: Request) -> dict[str, str]:
     """The `match[key]=value` terms of a query string. `match[key]!=value` arrives as the name
-    `match[key]!`, and `match[key]=~regex` as the value `~regex`."""
+    `match[key]!`, and `match[key]=~pattern` as the value `~pattern`."""
     out: dict[str, str] = {}
     for name, value in request.query_params.multi_items():
         if not name.startswith("match[") or not (name.endswith("]") or name.endswith("]!")):
@@ -234,13 +256,14 @@ def latest_metrics(db: Any, request: Request, page: PageParams,
                    ) -> dict[str, Any]:
     """The newest point of each series that matches, with the one before it, so a counter's rate
     can be worked out. Attribute terms are written match[key]=value, match[key]!=value and
-    match[key]=~regex."""
+    match[key]=~pattern."""
     sel = Selector(metric, scope, resource, kind, series_id, _match_params(request))
     _need_selector(sel)
     after = page.after(int)
-    rows = _selection(db, sel, page.limit + 1, after[0] if after else None)
+    rows, resume = _selection(db, sel, page.limit + 1, after[0] if after else None)
     more = len(rows) > page.limit
     rows = rows[:page.limit]
+    next_id = rows[-1][0] if more and rows else resume
     latest = {}
     if rows:
         ids = [r[0] for r in rows]
@@ -258,7 +281,7 @@ def latest_metrics(db: Any, request: Request, page: PageParams,
                       "attrs": json.loads(row[4]), "ts": ts / 1000.0, "value": value,
                       "previous_ts": None if pts is None else pts / 1000.0,
                       "previous_value": pval})
-    return {"items": items, "next_cursor": encode([rows[-1][0]]) if more and rows else None}
+    return {"items": items, "next_cursor": encode([next_id]) if next_id is not None else None}
 
 
 # ---- query ----------------------------------------------------------------------------------
@@ -364,8 +387,8 @@ def run_query(db: Any, ctx: ApiContext, q: MetricQuery) -> dict[str, Any]:
     end = parse_time(q.to, now, "to")
     levels = rollups.load_levels(db, ctx.config.server.retention_days)
     name, table, step, _width, note = _plan(levels, now, start, end, q.step)
-    rows = _selection(db, sel, q.limit_series + 1)
-    truncated = len(rows) > q.limit_series
+    rows, resume = _selection(db, sel, q.limit_series + 1)
+    truncated = len(rows) > q.limit_series or resume is not None
     rows = rows[:q.limit_series]
     start_s = int(start // step * step)
     data = _aggregate(db, name, table, [r[0] for r in rows], step, start_s * 1000,
@@ -394,7 +417,7 @@ def query_metrics(db: Any, ctx: ApiContext, request: Request,
                                           description="Comma separated: " + ", ".join(AGGS)),
                   limit_series: int = Query(MAX_SERIES, ge=1, le=MAX_SERIES)) -> dict[str, Any]:
     """Time series for the series that match, as columnar points [time, agg...]. Attribute terms
-    are written match[key]=value, match[key]!=value and match[key]=~regex."""
+    are written match[key]=value, match[key]!=value and match[key]=~pattern."""
     q = MetricQuery.model_validate({
         "metric": metric, "scope": scope, "resource": resource, "kind": kind,
         "series_id": series_id, "match": _match_params(request) or None, "from": from_,

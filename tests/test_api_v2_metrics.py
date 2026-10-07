@@ -108,8 +108,12 @@ def test_latest_pages_and_filters_by_attribute(env):
     assert sorted(i["attrs"]["sensor"] for i in only) == ["s1", "s3", "s5"]
     other = get(env, base + "&match[chip]!=c1").json()["items"]
     assert sorted(i["attrs"]["sensor"] for i in other) == ["s0", "s2", "s4"]
-    rx = get(env, base + "&match[sensor]=~^s[45]$").json()["items"]
-    assert sorted(i["attrs"]["sensor"] for i in rx) == ["s4", "s5"]
+    rx = get(env, base + "&match[sensor]=~s?").json()["items"]
+    assert len(rx) == 6
+    rx = get(env, base + "&match[sensor]=~s[45]").json()["items"]
+    assert rx == []
+    rx = get(env, base + "&match[sensor]=~s4").json()["items"]
+    assert [i["attrs"]["sensor"] for i in rx] == ["s4"]
     assert get(env, base + "&match[missing]=x").json()["items"] == []
     assert len(get(env, base + "&match[missing]!=x").json()["items"]) == 6
     assert len(get(env, "/metrics/latest?metric=te*").json()["items"]) == 6
@@ -118,11 +122,43 @@ def test_latest_pages_and_filters_by_attribute(env):
     assert [i["series_id"] for i in by_id] == ids
 
 
-@pytest.mark.parametrize("pattern", ["(a+)+", "(a|b)*c", "(?=x)", "(a)\\1", "a" * 65])
-def test_regular_expressions_that_could_run_away_are_refused(env, pattern):
-    r = get(env, "/metrics/latest?metric=m&match[k]=~" + pattern.replace("+", "%2B"))
+def test_patterns_over_the_cap_are_refused(env):
+    r = get(env, "/metrics/latest?metric=m&match[k]=~" + "a" * 65)
     assert r.status_code == 400 and "not allowed" in r.json()["detail"]
-    assert get(env, "/metrics/latest?metric=m&match[k]=~(").status_code == 400
+
+
+@pytest.mark.parametrize("pattern", ["*" * 10 + "x", "a*" * 12 + "b", ".*" * 10 + "x", "(a+)+$"])
+def test_the_audits_catastrophic_patterns_run_in_linear_time(pattern):
+    import time
+    test = metrics._attr_test("k", "~" + pattern)
+    t0 = time.perf_counter()
+    assert test({"k": "a" * 1000}) is False
+    assert time.perf_counter() - t0 < 0.01
+
+
+def test_glob_matching_semantics():
+    g = metrics.glob_match
+    assert g("abc", "abc") and not g("abc", "abcd") and g("ab*", "abcd") and g("*", "")
+    assert g("a?c", "abc") and not g("a?c", "ac") and g("*b*d", "abcd") and not g("a*b", "abc")
+
+
+def test_filtered_latest_pages_through_all_matches_past_the_scan_limit(env, monkeypatch):
+    samples = [{"source": "hwmon", "metric": "temp", "value": 40.0, "unit": "C",
+                "labels": {"n": ("rare" if i % 5 == 0 else "x") + str(i)}, "ts": START - 5}
+               for i in range(40)]
+    env.push(host_batch("nas01", samples=samples))
+    monkeypatch.setattr(metrics, "MAX_SCAN", 7)
+    base = "/metrics/latest?metric=temp&match[n]=~rare*&limit=3"
+    seen, cursor, pages = [], None, 0
+    while True:
+        page = get(env, base + (f"&cursor={cursor}" if cursor else "")).json()
+        seen += [i["attrs"]["n"] for i in page["items"]]
+        cursor, pages = page["next_cursor"], pages + 1
+        if not cursor:
+            break
+        assert pages < 50
+    assert sorted(seen) == sorted(f"rare{i}" for i in range(0, 40, 5))
+    assert pages > 3
 
 
 # ---- the query: levels ----------------------------------------------------------------------
@@ -232,7 +268,7 @@ def test_a_query_returns_at_most_fifty_series(env):
     few = get(env, "/metrics/query?metric=temp&from=-1h&limit_series=3").json()
     assert len(few["series"]) == 3 and few["series_truncated"] is True
     assert get(env, "/metrics/query?metric=temp&limit_series=51").status_code == 400
-    all60 = get(env, "/metrics/query?metric=temp&from=-1h&match[n]=~^1.$").json()
+    all60 = get(env, "/metrics/query?metric=temp&from=-1h&match[n]=~1?").json()
     assert len(all60["series"]) == 10 and all60["series_truncated"] is False
 
 

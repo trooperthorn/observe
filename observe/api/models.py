@@ -211,7 +211,7 @@ class LatestPage(Page):
 
 class MetricQuery(BaseModel):
     """A metrics query. The same fields are the query parameters of GET /metrics/query; `match`
-    is written there as `match[key]=value`, `match[key]!=value` or `match[key]=~regex`."""
+    is written there as `match[key]=value`, `match[key]!=value` or `match[key]=~pattern`."""
 
     model_config = ConfigDict(populate_by_name=True)
     metric: str | None = None

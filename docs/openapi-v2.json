@@ -1397,7 +1397,7 @@
         "type": "object"
       },
       "MetricQuery": {
-        "description": "A metrics query. The same fields are the query parameters of GET /metrics/query; `match`\nis written there as `match[key]=value`, `match[key]!=value` or `match[key]=~regex`.",
+        "description": "A metrics query. The same fields are the query parameters of GET /metrics/query; `match`\nis written there as `match[key]=value`, `match[key]!=value` or `match[key]=~pattern`.",
         "properties": {
           "agg": {
             "anyOf": [
@@ -6595,7 +6595,7 @@
     },
     "/metrics/latest": {
       "get": {
-        "description": "The newest point of each series that matches, with the one before it, so a counter's rate\ncan be worked out. Attribute terms are written match[key]=value, match[key]!=value and\nmatch[key]=~regex.",
+        "description": "The newest point of each series that matches, with the one before it, so a counter's rate\ncan be worked out. Attribute terms are written match[key]=value, match[key]!=value and\nmatch[key]=~pattern.",
         "operationId": "latest_metrics",
         "parameters": [
           {
@@ -6835,7 +6835,7 @@
     },
     "/metrics/query": {
       "get": {
-        "description": "Time series for the series that match, as columnar points [time, agg...]. Attribute terms\nare written match[key]=value, match[key]!=value and match[key]=~regex.",
+        "description": "Time series for the series that match, as columnar points [time, agg...]. Attribute terms\nare written match[key]=value, match[key]!=value and match[key]=~pattern.",
         "operationId": "query_metrics",
         "parameters": [
           {

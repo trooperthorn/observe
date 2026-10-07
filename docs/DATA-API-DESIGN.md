@@ -516,7 +516,7 @@ Each report creates one log record and gauges on the port resource. Gauges carry
 
 `GET /api/v2/metrics/query?metric=hw.temperature&match[host.name]=nas01&match[hw.type]=physical_disk&from=-24h&to=now&step=300&agg=avg,max&limit_series=50`
 
-* Selection by metric name (exact or `prefix*`), resource attributes and point attributes (`match[key]=value`, `match[key]!=value`, `match[key]=~regex` with a 64 char cap and RE2-safe subset via Python `re` with a timeout guard), or explicit `series_id`.
+* Selection by metric name (exact or `prefix*`), resource attributes and point attributes (`match[key]=value`, `match[key]!=value`, `match[key]=~pattern`, a wildcard pattern where `*` is any run of characters and `?` one character, matched against the whole value (`~nas*` is a prefix match), at most 64 characters, run by a linear-time matcher over the first 256 characters of the value; there is no regular expression syntax), or explicit `series_id`.
 * `step` is rounded up to the best tier: raw if `step < 300` and the range is inside raw retention, `rollup_5m` if `step < 3600` and inside its retention, else `rollup_1h`. The response states the tier used. A query may span tiers; each bucket comes from the finest tier that covers it.
 * At most 1,000 points per series (`step` is raised to fit) and 50 series per response; this fixes the review's truncation bug (item 10) and its 877 KB seven-day response.
 * `agg`: `avg`, `min`, `max`, `last`, `sum`, `count`, `rate` (sums only).
@@ -620,8 +620,10 @@ What differs from the text above, and what is left:
   300 second step, then the 5 minute, hourly and daily levels, moving to a coarser level when the
   finer one no longer holds the start of the range, always with min, max and avg and never more
   than 1,000 points per series or 50 series. `match[key]=value`, `match[key]!=value` and
-  `match[key]=~regex` select by point attribute (a regular expression is limited to 64 characters
-  with no repeated groups, back references or look around, instead of a timeout).
+  `match[key]=~pattern` select by point attribute (a pattern uses only `*` and `?`, is limited to 64
+  characters and reads at most 256 characters of the value, so its cost is bounded and no regular
+  expression engine runs). A filtered `/metrics/latest` filters before it pages; when the scan limit of 20,000
+  series stops a page early, the page is short but `next_cursor` is set, so a client reaches every match.
 * **Not done.** A query uses one level for the whole range instead of the finest level that covers
   each bucket; `agg=rate` is refused because no sum series are stored yet, and `agg=last` works
   only on the raw level, because the summary levels keep no last value; a read token cannot be
