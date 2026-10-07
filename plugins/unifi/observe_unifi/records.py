@@ -8,7 +8,6 @@ a row not seen for `retention_days` is deleted. `unifi_clients` is one row per M
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -119,7 +118,8 @@ def parse_device(site_id: str, raw: Any) -> Device | None:
                   _text(raw.get("firmwareVersion")), fu if isinstance(fu, bool) else None, uplink)
 
 
-def _write(db: Conn, devices: list[Device], now: float) -> int:
+def write_devices(db: Conn, devices: list[Device], now: float) -> int:
+    """Upsert the polled devices on an open unit."""
     for d in devices:
         db.execute(
             """INSERT INTO unifi_devices (site_id, device_id, mac, name, model, state, ip,
@@ -134,12 +134,6 @@ def _write(db: Conn, devices: list[Device], now: float) -> int:
              None if d.firmware_updatable is None else int(d.firmware_updatable),
              now, now))
     return len(devices)
-
-
-async def save_devices(store: Store, devices: Iterable[Device], now: float) -> int:
-    """Upsert the polled devices in one transaction. `first_seen` is kept for a known device."""
-    items = list(devices)
-    return await store.storage.write(lambda db: _write(db, items, now), touches=("unifi",))
 
 
 async def prune_unseen(store: Store, now: float, retention_days: int) -> int:

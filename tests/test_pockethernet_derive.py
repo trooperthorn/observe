@@ -142,12 +142,12 @@ def test_cdp_neighbour_without_a_mac_uses_the_device_name(env):
 
 
 def test_a_failed_derivation_is_stored_flagged_and_not_a_clean_accept(env, monkeypatch):
-    real = derive.derive_report
+    real = derive.derive_report_tx
 
-    async def boom(*a, **k):
+    def boom(*a, **k):
         raise RuntimeError("secret detail")
-    monkeypatch.setattr("observe_pockethernet.upload.derive_report", boom)
-    monkeypatch.setattr(derive, "derive_report", boom)
+    monkeypatch.setattr("observe_pockethernet.reports.derive_report_tx", boom)
+    monkeypatch.setattr(derive, "derive_report_tx", boom)
     r = env.post(FIXTURE)
     assert r.status_code == 202
     assert r.json()["result"] == "accepted" and r.json()["derive_status"] == "failed"
@@ -165,8 +165,8 @@ def test_a_failed_derivation_is_stored_flagged_and_not_a_clean_accept(env, monke
     assert env.rows("SELECT derive_status FROM field_reports") == [("failed",)]
 
     # The cause is fixed; an admin retry derives it and the status becomes ok.
-    monkeypatch.setattr("observe_pockethernet.upload.derive_report", real)
-    monkeypatch.setattr(derive, "derive_report", real)
+    monkeypatch.setattr("observe_pockethernet.reports.derive_report_tx", real)
+    monkeypatch.setattr(derive, "derive_report_tx", real)
     r = env.client.post("/api/plugins/pockethernet/retry", headers=headers)
     assert r.status_code == 200
     assert r.json() == {"retried": 1, "derived": 1, "failed": 0}

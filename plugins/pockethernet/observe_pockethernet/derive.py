@@ -1,8 +1,11 @@
 """Turn an accepted field report into port properties and map edges, and rebuild them.
 
 The report is the evidence; everything here is derived from it and can be derived again
-(docs/FIELD-DATA.md). All writes go through the core's InfraService, so the plugin never touches
+(docs/FIELD-DATA.md). All writes go through the core's InfraTx, so the plugin never touches
 the infrastructure tables for a write; only the rebuild clears its own derived rows with SQL.
+Every function here that writes takes an open transaction connection: the upload derives in the
+same write unit that stores the report, the rebuild is one unit, and a retry is one unit per
+report (reports.py, docs/DATA-API-DESIGN.md section 1.2).
 
 What a report yields:
 
@@ -33,14 +36,14 @@ reproduces the same rows apart from their autoincrement ids.
 
 from __future__ import annotations
 
-import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from observe.infra import InfraError, InfraService
+from observe.infra import InfraError, InfraTx, write_cycle
 from observe.portkey import LLDP_SUBTYPES, lldp_port_key, mac_digits, port_key, switch_id
-from observe.storage import DB_ERRORS, Conn
+from observe.storage import DB_ERRORS, Conn, savepoint
 from observe.store import Store
 
 from .schema import Neighbor, Report, ReportError, parse_report
@@ -218,33 +221,33 @@ def _sibling_rows(db: Conn) -> list[tuple[Any, ...]]:
         "ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
 
 
-async def replay_siblings(store: Store, fp: Footprint, own: tuple[str, str]) -> Derived | None:
+def replay_siblings_tx(db: Conn, fp: Footprint, own: tuple[str, str]) -> Derived | None:
     """Derive again, in observation order, every stored report on the same port or jack as a
     retracted one, and the report `own` itself, whose stored body is the new revision.
 
     The core records an equal value only as a verification of the newest row, so a report whose
     value matched the retracted report's has no row of its own; replaying it writes the row a
     rebuild would, and replaying in rebuild order gives the same row owners. Returns what
-    deriving `own` produced."""
-    rows = await store.storage.read(_sibling_rows)
-    infra = InfraService(store)
+    deriving `own` produced. Runs on the caller's open unit."""
+    tx = InfraTx(db)
     result: Derived | None = None
-    for source, report_id, key_prefix, taken_ms, updated_at, body in rows:
+    for source, report_id, key_prefix, taken_ms, updated_at, body in _sibling_rows(db):
         mine = (source, report_id) == own
         other = footprint(body)
         if not (mine or (fp.port is not None and other.port == fp.port)
                 or (fp.jack and other.jack == fp.jack)):
             continue
-        res = await derive_report(infra, parse_report(bytes(body)), key_prefix=key_prefix,
-                                  device=source, taken_ms=taken_ms, now=updated_at)
+        res = derive_report_tx(tx, parse_report(bytes(body)), key_prefix=key_prefix,
+                               device=source, taken_ms=taken_ms, now=updated_at)
         if mine:
             result = res
     return result
 
 
-async def derive_report(infra: InfraService, report: Report, *, key_prefix: str, device: str,
-                        taken_ms: int, now: float) -> Derived:
-    """Write the switch, port, jack, link and properties one report implies. Idempotent."""
+def derive_report_tx(tx: InfraTx, report: Report, *, key_prefix: str, device: str,
+                     taken_ms: int, now: float) -> Derived:
+    """Write the switch, port, jack, link and properties one report implies, on the caller's
+    open unit. Idempotent."""
     result = Derived()
     if report.status != DERIVING_STATUS:
         result.skipped = f"report status is {report.status}"
@@ -261,24 +264,22 @@ async def derive_report(infra: InfraService, report: Report, *, key_prefix: str,
 
     # Field data never overwrites what live sources know: a switch or port that already exists
     # keeps its name, addresses, vendor, platform and role, and only has its last-seen moved.
-    if await infra.switch_exists(sid):
-        await infra.upsert_switch(sid, now=seen)
+    if tx.switch_exists(sid):
+        tx.upsert_switch(sid, now=seen)
     else:
-        await infra.upsert_switch(sid, name=name, mgmt_addresses=addrs[:16], vendor=vendor,
-                                  platform=platform, now=seen)
-    role = "unknown" if await infra.port_exists(sid, key) else "access"
-    await infra.upsert_port(sid, key, raw_port_id=raw_port, role=role, now=seen)
+        tx.upsert_switch(sid, name=name, mgmt_addresses=addrs[:16], vendor=vendor,
+                         platform=platform, now=seen)
+    role = "unknown" if tx.port_exists(sid, key) else "access"
+    tx.upsert_port(sid, key, raw_port_id=raw_port, role=role, now=seen)
     result.switch, result.port = sid, key
     if jack:
-        await infra.upsert_jack(jack, room=_clean(site.room if site else ""),
-                                site=_clean(site.site if site else ""), switch=sid, port=key,
-                                now=seen)
-        await infra.upsert_link(infra.jack_ref(jack), infra.port_ref(sid, key),
-                                source=LINK_SOURCE, confidence=LINK_CONFIDENCE[n.protocol],
-                                now=seen)
+        tx.upsert_jack(jack, room=_clean(site.room if site else ""),
+                       site=_clean(site.site if site else ""), switch=sid, port=key, now=seen)
+        tx.upsert_link(tx.jack_ref(jack), tx.port_ref(sid, key), source=LINK_SOURCE,
+                       confidence=LINK_CONFIDENCE[n.protocol], now=seen)
         result.jack = jack
     for pname, value in _properties(report, taken_ms, jack):
-        added = await infra.append_property(
+        added = tx.append_property(
             sid, key, pname, value, unit=_UNITS.get(pname, ""), source=SOURCE,
             report_id=report.report_id, observed_at=seen, recorded_by=recorded_by, now=now)
         if added:
@@ -306,24 +307,6 @@ class RebuildResult:
         return d
 
 
-class _InlineInfra(InfraService):
-    """InfraService that runs on the caller's thread inside the caller's open write unit.
-
-    The rebuild is one write unit for its whole run, so each call here must run on the unit's
-    own connection and must neither queue another unit nor commit.
-    """
-
-    def __init__(self, store: Store, db: Conn) -> None:
-        super().__init__(store)
-        self._unit_db = db
-
-    async def write(self, fn: Any) -> Any:
-        return fn(self._unit_db)
-
-    async def read(self, fn: Any) -> Any:
-        return fn(self._unit_db)
-
-
 class _KeepOld(Exception):
     """Raised inside the rebuild unit to roll it back and hand the result to the caller."""
 
@@ -332,7 +315,7 @@ class _KeepOld(Exception):
         self.result = result
 
 
-def _rebuild_unit(store: Store, db: Conn) -> RebuildResult:
+def _rebuild_unit(db: Conn) -> RebuildResult:
     out = RebuildResult()
     pruned = db.execute("SELECT COUNT(*) FROM field_reports WHERE body IS NULL").fetchone()[0]
     if pruned:
@@ -348,33 +331,29 @@ def _rebuild_unit(store: Store, db: Conn) -> RebuildResult:
     db.executemany(
         "UPDATE infra_jacks SET switch_id=NULL, port_key=NULL WHERE jack_key=?",
         [(j,) for j in jacks])
-    infra = _InlineInfra(store, db)
-
-    async def replay() -> None:
-        for source, report_id, key_prefix, taken_ms, updated_at, body in rows:
-            out.reports += 1
-            try:
-                report = parse_report(bytes(body))
-                res = await derive_report(infra, report, key_prefix=key_prefix,
-                                          device=source, taken_ms=taken_ms,
-                                          now=updated_at)
-            except (ReportError, InfraError, ValueError, *DB_ERRORS):
-                out.failed += 1
-                out.failures.append({"source": source, "report_id": report_id})
-                continue
-            if res.skipped:
-                out.skipped += 1
-            else:
-                out.derived += 1
-
-    asyncio.run(replay())
+    tx = InfraTx(db)
+    for source, report_id, key_prefix, taken_ms, updated_at, body in rows:
+        out.reports += 1
+        try:
+            report = parse_report(bytes(body))
+            with savepoint(db, "report"):
+                res = derive_report_tx(tx, report, key_prefix=key_prefix, device=source,
+                                       taken_ms=taken_ms, now=updated_at)
+        except (ReportError, InfraError, ValueError, *DB_ERRORS):
+            out.failed += 1
+            out.failures.append({"source": source, "report_id": report_id})
+            continue
+        if res.skipped:
+            out.skipped += 1
+        else:
+            out.derived += 1
     if out.failed:
         raise _KeepOld(out)  # keep the old derived data; the caller reports the failures
     db.execute("UPDATE field_reports SET derive_status='ok'")
     return out
 
 
-async def rebuild(store: Store) -> RebuildResult:
+async def rebuild(store: Store, now: float | None = None) -> RebuildResult:
     """Clear everything derived from field reports and derive it again from the stored bodies.
 
     Switches, ports and jacks stay (other sources may share them, and upserts are idempotent);
@@ -384,7 +363,8 @@ async def rebuild(store: Store) -> RebuildResult:
     Refused with a nonzero `pruned` when retention dropped any body.
     """
     try:
-        return await store.storage.write(lambda db: _rebuild_unit(store, db))
+        return await write_cycle(store, _rebuild_unit,  # type: ignore[no-any-return]
+                                 now=time.time() if now is None else now)
     except _KeepOld as kept:
         return kept.result
 
@@ -414,28 +394,32 @@ def _pending(db: Conn) -> list[tuple[Any, ...]]:
         "ORDER BY taken_at_ms, updated_at, source, report_id").fetchall()
 
 
-async def retry_failed(store: Store) -> RetryResult:
-    """Derive again every stored report whose derivation failed. A report still marked pending
-    is mid-upload and is left alone; a rebuild covers one a crash left behind."""
-    from .reports import mark_derive_status  # reports imports this module for its constants
+async def retry_failed(store: Store, now: float | None = None) -> RetryResult:
+    """Derive again every stored report whose derivation failed, one write unit per report. A
+    report still marked pending is mid-upload and is left alone; a rebuild covers one a crash
+    left behind."""
+    from .reports import mark_derive_status, set_derive_status  # reports imports this module
 
     out = RetryResult()
-    infra = InfraService(store)
     pending = await store.storage.read(_pending)
     for source, report_id, revision, key_prefix, taken_ms, updated_at, body in pending:
         out.retried += 1
-        try:
+
+        def one(db: Conn) -> Derived:
             if body is None:
                 raise ReportError("the report body was dropped by retention", 400)
             report = parse_report(bytes(body))
             # Rows a half-finished attempt left are retracted first, so the retry is idempotent.
             fp = footprint(body)
-            by = recorded_by_for(key_prefix, source)
-            await store.storage.write(lambda db: retract_rows(db, report_id, by, fp))
-            res = await replay_siblings(store, fp, (source, report_id))
+            retract_rows(db, report_id, recorded_by_for(key_prefix, source), fp)
+            res = replay_siblings_tx(db, fp, (source, report_id))
             if res is None:  # the report's own row is always replayed; guard anyway
-                res = await derive_report(infra, report, key_prefix=key_prefix, device=source,
-                                          taken_ms=taken_ms, now=updated_at)
+                res = derive_report_tx(InfraTx(db), report, key_prefix=key_prefix, device=source,
+                                       taken_ms=taken_ms, now=updated_at)
+            set_derive_status(db, source, report_id, revision, "ok")
+            return res
+        try:
+            res = await write_cycle(store, one, now=time.time() if now is None else now)
         except Exception:
             log.exception("retry of field report %s failed", report_id)
             out.failed += 1
@@ -446,5 +430,4 @@ async def retry_failed(store: Store) -> RetryResult:
             out.skipped += 1
         else:
             out.derived += 1
-        await mark_derive_status(store, source, report_id, revision, "ok")
     return out

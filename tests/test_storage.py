@@ -40,7 +40,7 @@ def _pg_dsn() -> str:
 
 
 @contextlib.contextmanager
-def live_pg(timescale: str | None = None):
+def live_pg(timescale: str | None = None, plugins=None):
     """A storage on a throwaway schema of the server in OBSERVE_TEST_PG_DSN; the case is skipped
     when there is none."""
     import psycopg
@@ -51,7 +51,7 @@ def live_pg(timescale: str | None = None):
     with psycopg.connect(dsn, autocommit=True) as admin:
         admin.execute(f"CREATE SCHEMA {schema}")
     scoped = make_conninfo(dsn, options=f"-c search_path={schema},public")
-    s = open_storage("", backend="postgres", dsn=scoped,
+    s = open_storage("", plugins, backend="postgres", dsn=scoped,
                      timescale=timescale or os.environ.get("OBSERVE_TEST_PG_TIMESCALE", "auto"))
     try:
         yield s

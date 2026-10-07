@@ -133,7 +133,10 @@ class Web:
         return r.json()
 
 
-def map_state(web: Web) -> str:
+async def map_state(web: Web) -> str:
+    """The port's state on the map. The live columns are refreshed by the map hook, which the
+    test runs here instead of waiting for the scheduler; the GET itself never rebuilds."""
+    await web.client.app.state.mapper.rebuild()
     nodes = {n["id"]: n for n in web.client.get("/api/infra/map").json()["nodes"]}
     return nodes[f"port:{SID}|gi1/0/5"]["state"]
 
@@ -164,6 +167,7 @@ async def test_findings_reach_dashboard_port_page_and_map_without_any_alert(web,
     port = web.port()
     assert {f["kind"] for f in port["findings"]} == {"speed_drop", "vlan_change"}
     assert port["state"] == "warn"  # the live check passes, the field finding turns it to warning
+    await web.client.app.state.mapper.rebuild()
     nodes = {n["id"]: n for n in web.client.get("/api/infra/map").json()["nodes"]}
     node = nodes[f"port:{SID}|gi1/0/5"]
     assert node["state"] == "warn"
@@ -176,7 +180,7 @@ async def test_an_info_finding_alone_does_not_turn_a_passing_port_to_warning(web
     await web.login()
     port = web.port()
     assert [f["kind"] for f in port["findings"]] == ["vlan_change"]
-    assert port["state"] == "up" and map_state(web) == "up"
+    assert port["state"] == "up" and await map_state(web) == "up"
 
 
 async def test_a_later_report_that_restores_the_value_clears_the_finding(web):
@@ -195,11 +199,11 @@ async def test_a_change_finding_can_be_acknowledged_and_returns_when_facts_chang
                            headers=h).status_code == 200
     port = web.port()
     assert port["findings"][0]["acknowledged"] and port["state"] == "up"
-    assert map_state(web) == "up"  # the map agrees with the port page
+    assert await map_state(web) == "up"  # the map agrees with the port page
     await web.seed([("link_speed_mbps", 10)])
     port = web.port()
     assert not port["findings"][0]["acknowledged"] and port["state"] == "warn"
-    assert map_state(web) == "warn"
+    assert await map_state(web) == "warn"
 
 
 def test_dashboard_script_lists_findings_and_the_plugin_nav_with_text_only():

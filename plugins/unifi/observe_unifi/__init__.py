@@ -44,7 +44,7 @@ from .clients import (device_index, enrich, offline_clients, parse_active_client
 from .feed import feed_classic, feed_integration
 from .client import AuthRejected, IntegrationClient, UniFiError
 from .pages import PAGE_PATH, build_pages_router, page_files
-from .records import MIGRATIONS, parse_device, prune_unseen, save_devices
+from .records import MIGRATIONS, parse_device, prune_unseen
 
 __version__ = "0.1.0"
 
@@ -256,10 +256,10 @@ class UniFiPlugin(PluginBase):
         site_id, rows = await self._site_and_rows("devices")
         devices = [d for d in (parse_device(site_id, r) for r in rows) if d is not None]
         now = self.wall()
-        stored = await save_devices(store, devices, now)
-        await feed_integration(store, devices, now)
+        # The device rows and the map feed are one cycle in one transaction.
+        await feed_integration(store, devices, now, save_devices=True)
         self.devices_ok_at = now
-        return stored
+        return len(devices)
 
     async def collect_classic(self, store: Store) -> int:
         """One classic poll: ports, port properties and links into the infrastructure map.

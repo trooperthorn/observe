@@ -744,7 +744,10 @@ plugin_settings:
 The core also keeps an infrastructure map in the same database: switches, ports, wall jacks,
 links, endpoints and port properties with history. Port names are normalised, so
 `GigabitEthernet1/0/5` and `Gi1/0/5` are one port while `Gi1/0/5` and `Gi1/0/50` stay
-apart. Plugins write to it through `observe.infra.InfraService`. A switch is matched to a
+apart. Plugins write to it through `observe.infra.InfraService`, or through `InfraTx` inside
+a feed cycle: a UniFi poll and a Pockethernet upload are each one database transaction with a
+savepoint per item, so one bad device or report skips itself and the rest is kept. The current
+map is kept in `map_nodes`, `map_edges` and `port_current` at write time. A switch is matched to a
 monitor by chassis MAC, management address or sysName, and a port to an SNMP interface monitor
 or a UniFi device port. Matching never creates a monitor, and an ambiguous match is left for
 an admin. Switches that match nothing are listed at `GET /api/admin/infra/unlinked` and an
@@ -756,7 +759,8 @@ cable verdict. Findings are computed on request, are shown on the dashboard, por
 only, and never send alerts.
 
 `GET /api/infra/map` returns nodes and edges with live state from the matched monitors and
-can be filtered by `site` and `building`. A link nobody has confirmed for `map.stale_days`
+can be filtered by `site` and `building`. It reads the stored map in two statements and never
+rebuilds it; the live state is refreshed by the scheduler once a minute. A link nobody has confirmed for `map.stale_days`
 (default 90) is stale, after twice that it is hidden, and a report that moves a jack or an
 uplink closes the old link at once. Dependencies are inferred from the links: when
 `map.auto_depends` is true (the default), an edge confirmed by LLDP or CDP within

@@ -82,14 +82,19 @@ class Store:
         self.storage: Storage = open_storage(
             path, {p.name: p.migrations for p in plugins.plugins} if plugins else None,
             backend=backend, dsn=dsn, password=password, timescale=timescale)
+        # How long an unconfirmed link stays drawn (config `map.stale_days`). The map tables are
+        # rebuilt inside write units that have no config, so the value lives here.
+        self.map_stale_days = 90
 
     @classmethod
     def from_config(cls, config: Any, plugins: LoadedPlugins | None = None) -> "Store":
         """Open the database the config names: SQLite at server.db_path, or PostgreSQL."""
         s = config.storage
-        return cls(config.server.db_path, plugins, backend=s.backend,
-                   dsn=s.dsn.get_secret_value() if s.dsn else None, password=s.password(),
-                   timescale=s.timescaledb)
+        store = cls(config.server.db_path, plugins, backend=s.backend,
+                    dsn=s.dsn.get_secret_value() if s.dsn else None, password=s.password(),
+                    timescale=s.timescaledb)
+        store.map_stale_days = config.map.stale_days
+        return store
 
     async def fetch(self, sql: str, args: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
         """One read statement on the read pool."""

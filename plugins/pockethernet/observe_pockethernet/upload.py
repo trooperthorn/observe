@@ -13,10 +13,11 @@ every upload, accepted or refused. This module adds the rest, cheapest check fir
 4. The schema (observe_pockethernet/schema.py) validates the report (400, 413 or 422).
 5. The clock is checked and corrected (see correct_clock).
 6. The report is stored by `(source, report_id)` and revision (reports.py).
-7. A new or replaced report is derived into port properties and map edges (derive.py). A
-   failure there never loses the evidence: the report is stored with derive_status `failed`,
-   the response is 202 with `derive_status: failed`, the audit row says so, and an admin retry
-   or rebuild derives it again.
+7. A new or replaced report is derived into port properties and map edges (derive.py) in the
+   same transaction as step 6, so an upload is one commit. A failure there never loses the
+   evidence: the derivation is rolled back to a savepoint, the report is stored with
+   derive_status `failed`, the response is 202 with `derive_status: failed`, the audit row says
+   so, and an admin retry or rebuild derives it again.
 
 The stored body is the exact JSON the phone sent, after inflating, never the corrected
 version. The corrected time is a column beside it.
@@ -32,10 +33,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from observe.infra import InfraService
-
-from .derive import derive_report, replay_siblings
-from .reports import NewReport, mark_derive_status, store_report
+from .reports import NewReport, store_and_derive
 from .schema import MAX_REPORT_BYTES, ReportError, parse_report
 
 log = logging.getLogger(__name__)
@@ -140,37 +138,23 @@ def build_router() -> APIRouter:
         now = clock(request)()
         taken_ms, corrected = correct_clock(report.taken_at_ms, now, sent_ms)
         site = report.site
-        outcome = await store_report(request.app.state.plugin_store, NewReport(
+        ingested = await store_and_derive(request.app.state.plugin_store, NewReport(
             source=device, report_id=report.report_id, revision=report.revision,
             taken_at_ms=taken_ms, reported_taken_at_ms=report.taken_at_ms,
             clock_corrected=corrected, tester_serial=report.device.serial,
             status=report.status, site=site.site if site else "",
             port_id=site.port_id if site else "", body=body, received_at=now,
-            key_prefix=prefix))
+            key_prefix=prefix), report, now=now)
+        outcome = ingested.outcome
         request.state.audit_detail = {
             "result": outcome.result, "report_id": report.report_id,
             "revision": report.revision, "stored_revision": outcome.revision,
             "clock_corrected": corrected, "bytes": len(body)}
-        derive_failed = False
-        if outcome.result in ("accepted", "replaced"):
-            store = request.app.state.plugin_store
-            try:
-                derived = None
-                if outcome.retracted is not None:
-                    derived = await replay_siblings(store, outcome.retracted,
-                                                    (device, report.report_id))
-                if derived is None:
-                    derived = await derive_report(
-                        InfraService(request.app.state.plugin_store), report, key_prefix=prefix,
-                        device=device, taken_ms=taken_ms, now=now)
-                request.state.audit_detail["derived"] = derived.as_detail()
-                await mark_derive_status(store, device, report.report_id, outcome.revision, "ok")
-            except Exception as err:  # the evidence is stored; only the derivation is lost
-                derive_failed = True
-                request.state.audit_detail["derive_failed"] = type(err).__name__
-                log.exception("derivation failed for field report %s", report.report_id)
-                await mark_derive_status(store, device, report.report_id, outcome.revision,
-                                         "failed")
+        derive_failed = bool(ingested.derive_error)
+        if ingested.derived is not None:
+            request.state.audit_detail["derived"] = ingested.derived.as_detail()
+        elif derive_failed:
+            request.state.audit_detail["derive_failed"] = ingested.derive_error
         payload: dict[str, Any] = {
             "result": outcome.result, "report_id": report.report_id,
             "revision": outcome.revision, "clock_corrected": corrected,

@@ -7,10 +7,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .base import (CHANGE_DOMAINS, Conn, IntegrityConflict, Storage, StorageBusy, StorageError,
-                   StorageTimeout)
+                   StorageTimeout, savepoint)
 
 __all__ = ["CHANGE_DOMAINS", "Conn", "DB_ERRORS", "IntegrityConflict", "Storage", "StorageBusy",
-           "StorageError", "StorageTimeout", "open_storage"]
+           "StorageError", "StorageTimeout", "open_storage", "savepoint"]
 
 # Every error a unit of work can meet from a driver or from the storage layer, so code that
 # tolerates a failed statement can name it without importing a driver.

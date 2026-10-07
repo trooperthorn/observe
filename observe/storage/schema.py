@@ -282,6 +282,28 @@ CHANGE_SEQ_TABLES = (
     "('unifi',0), ('ha',0), ('audit',0), ('admin',0)",
 )
 
+# The current map (docs/DATA-API-DESIGN.md section 2.6): nodes, edges and the per-port summary,
+# kept up to date inside the write unit that changes the infrastructure tables and by the
+# 60 second hook that adds live state. A GET reads these and never rebuilds them.
+MAP_TABLES = (
+    """CREATE TABLE IF NOT EXISTS map_nodes (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, label TEXT NOT NULL, site TEXT NOT NULL DEFAULT '',
+  attrs TEXT NOT NULL DEFAULT '{}', state TEXT NOT NULL DEFAULT 'unknown', seq INTEGER NOT NULL
+) WITHOUT ROWID""",
+    """CREATE TABLE IF NOT EXISTS map_edges (
+  id TEXT PRIMARY KEY, a TEXT NOT NULL, b TEXT NOT NULL, kind TEXT NOT NULL,
+  attrs TEXT NOT NULL DEFAULT '{}', state TEXT NOT NULL DEFAULT 'active', seq INTEGER NOT NULL
+) WITHOUT ROWID""",
+    """CREATE TABLE IF NOT EXISTS port_current (
+  switch_id TEXT NOT NULL, port_key TEXT NOT NULL, attrs TEXT NOT NULL DEFAULT '{}',
+  matches TEXT NOT NULL DEFAULT '[]', findings TEXT NOT NULL DEFAULT '[]',
+  seq INTEGER NOT NULL, PRIMARY KEY (switch_id, port_key)
+) WITHOUT ROWID""",
+)
+
+# The step that creates the summary levels. TimescaleDB runs its own version of it.
+ROLLUP_STEP = 17
+
 MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = {
     1: BASELINE,
     2: HOST_TABLES,
@@ -300,8 +322,9 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     15: CHANGE_SEQ_TABLES,
     16: SERIES_TABLES,
     # Summary levels, their compaction state and the read views (observe/storage/rollups.py).
-    # This step is last: TimescaleDB runs its own version of it.
+    # TimescaleDB runs its own version of this step.
     17: ROLLUP_TABLES + METRIC_VIEWS,
+    18: MAP_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

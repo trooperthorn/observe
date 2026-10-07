@@ -29,8 +29,8 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 from . import compaction, pg_timescale, rollups
 from .base import CHANGE_DOMAINS, Conn, IntegrityConflict, StorageBusy, StorageError, StorageTimeout, T
 from .pg_dialect import table_info_query, translate_sql
-from .schema import (MIGRATIONS, PLUGIN_TABLES, PluginSchemaTooNewError, SchemaTooNewError,
-                     refuse_legacy)
+from .schema import (MIGRATIONS, PLUGIN_TABLES, ROLLUP_STEP, PluginSchemaTooNewError,
+                     SchemaTooNewError, refuse_legacy)
 
 log = logging.getLogger("observe.storage.postgres")
 
@@ -240,7 +240,7 @@ class PgStorage:
                     f"supports ({latest}); upgrade Observe or restore an older database")
             for version in range(current + 1, latest + 1):
                 try:
-                    if version == latest and timescale:
+                    if version == ROLLUP_STEP and timescale:
                         self._timescale_step()
                     else:
                         for stmt in MIGRATIONS[version]:

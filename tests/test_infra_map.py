@@ -11,7 +11,8 @@ from observe import auth
 from observe.alerts import Alerter
 from observe.checks.base import CheckResult
 from observe.infra import InfraError, InfraService
-from observe.infra_map import DAY, MapService, link_state
+from observe.infra_map import MapService
+from observe.map_tables import DAY, link_state
 from observe.infra_match import Matcher
 from observe.portkey import switch_id
 from observe.scheduler import Scheduler
@@ -82,6 +83,13 @@ class World:
                                      source=source, now=now)
         return eid
 
+    async def data(self, site: str | None = None, building: str | None = None,
+                   now: float = T0) -> dict[str, Any]:
+        """The map as a reader sees it: the tables are rebuilt at `now` (the 60 second hook does
+        this in the app) and read in two statements."""
+        await self.map.rebuild(now)
+        return await self.map.map_data(site, building)
+
     async def scalar(self, sql: str, *args: Any) -> Any:
         return await self.infra.read(lambda d: d.execute(sql, args).fetchone()[0])
 
@@ -112,16 +120,16 @@ def test_link_state_boundaries():
 async def test_stale_and_hidden_ageing_with_a_fake_clock(w):
     await w.build()
     await w.uplink(now=T0)
-    m = await w.map.map_data(now=T0 + 89 * DAY)
+    m = await w.data(now=T0 + 89 * DAY)
     assert [e["state"] for e in m["edges"]] == ["active"]
-    m = await w.map.map_data(now=T0 + 91 * DAY)
+    m = await w.data(now=T0 + 91 * DAY)
     assert [e["state"] for e in m["edges"]] == ["stale"]
     assert m["edges"][0]["age_days"] == 91.0
-    assert (await w.map.map_data(now=T0 + 181 * DAY))["edges"] == []
+    assert (await w.data(now=T0 + 181 * DAY))["edges"] == []
     # The row was kept, and confirming the link brings it back.
     assert await w.scalar("SELECT COUNT(*) FROM infra_links") == 1
     await w.uplink(now=T0 + 182 * DAY)
-    m = await w.map.map_data(now=T0 + 182 * DAY)
+    m = await w.data(now=T0 + 182 * DAY)
     assert [e["state"] for e in m["edges"]] == ["active"]
 
 
@@ -130,8 +138,8 @@ async def test_stale_days_comes_from_config(tmp_path):
     try:
         await world.build()
         await world.uplink(now=T0)
-        assert (await world.map.map_data(now=T0 + 11 * DAY))["edges"][0]["state"] == "stale"
-        assert (await world.map.map_data(now=T0 + 21 * DAY))["edges"] == []
+        assert (await world.data(now=T0 + 11 * DAY))["edges"][0]["state"] == "stale"
+        assert (await world.data(now=T0 + 21 * DAY))["edges"] == []
     finally:
         world.store.close()
 
@@ -143,10 +151,10 @@ async def test_a_contradicting_report_closes_the_old_edge(w):
     jack = InfraService.jack_ref("hq/b1/r1/p1/05")
     old = await w.infra.upsert_link(jack, InfraService.port_ref(EDGE, "Gi1/0/5"),
                                     source="field_report", now=T0)
-    assert [e["id"] for e in (await w.map.map_data(now=T0))["edges"]] == [old]
+    assert [e["id"] for e in (await w.data(now=T0))["edges"]] == [old]
     new = await w.infra.upsert_link(jack, InfraService.port_ref(EDGE, "Gi1/0/6"),
                                     source="field_report", now=T0 + 60)
-    assert [e["id"] for e in (await w.map.map_data(now=T0 + 60))["edges"]] == [new]
+    assert [e["id"] for e in (await w.data(now=T0 + 60))["edges"]] == [new]
     assert await w.scalar("SELECT closed_at FROM infra_links WHERE id=?", old) == T0 + 60
     assert await w.scalar("SELECT closed_at FROM infra_links WHERE id=?", new) is None
     # An uplink seen against a different neighbour is contradicted the same way.
@@ -186,7 +194,7 @@ async def test_map_json_shape_with_live_state(w):
     w.sched.states["core-sw"].observe(CheckResult.ok("up"))
     w.sched.states["edge-sw"].observe(CheckResult.fail("no reply"))
     await w.map.refresh(T0)
-    m = await w.map.map_data(now=T0)
+    m = await w.data(now=T0)
     assert set(m) == {"nodes", "edges", "stale_days", "filter"}
     by_id = {n["id"]: n for n in m["nodes"]}
     core, edge = by_id[f"switch:{CORE}"], by_id[f"switch:{EDGE}"]
@@ -218,12 +226,12 @@ async def test_map_filters_by_site_and_building(w):
 
     def switches(m: dict[str, Any]) -> set[str]:
         return {n["id"][7:] for n in m["nodes"] if n["kind"] == "switch"}
-    assert switches(await w.map.map_data(now=T0)) == {CORE, EDGE, other}
-    hq = await w.map.map_data("hq", now=T0)
+    assert switches(await w.data(now=T0)) == {CORE, EDGE, other}
+    hq = await w.data("hq", now=T0)
     assert switches(hq) == {CORE, EDGE}  # the uplink hop stays in view
     assert [n["label"] for n in hq["nodes"] if n["kind"] == "jack"] == ["hq/b1/r1/p1/05"]
-    assert switches(await w.map.map_data("dc", "b9", now=T0)) == {other}
-    assert (await w.map.map_data("hq", "b2", now=T0))["nodes"] == []
+    assert switches(await w.data("dc", "b9", now=T0)) == {other}
+    assert (await w.data("hq", "b2", now=T0))["nodes"] == []
     assert hq["filter"] == {"site": "hq", "building": None}
 
 

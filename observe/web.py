@@ -581,7 +581,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                            status=200, remote=remote, detail=detail)
         return JSONResponse({"ok": True})
 
-    infra = InfraService(store)
+    infra = InfraService(store, map_clock)
     matcher = Matcher(config, infra)
 
     def live_port(match: PortMatch) -> LivePort | None:
@@ -600,8 +600,9 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     def state_of(slug: str) -> tuple[str, str | None] | None:
         return scheduler.rollup.effective(slug) if slug in scheduler.states else None
 
-    mapper = MapService(config, infra, matcher, state_of, map_clock)
-    scheduler.hooks.append(mapper.refresh)
+    mapper = MapService(config, infra, matcher, state_of, map_clock, live_port)
+    app.state.mapper = mapper
+    scheduler.hooks.append(mapper.tick)
 
     last_prune = [0.0]
 
@@ -621,9 +622,9 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     @app.get("/api/infra/map", include_in_schema=False)
     async def infra_map(site: str | None = None, building: str | None = None,
                         _: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
-        """Nodes and edges with live state, for a site and building when given."""
-        await mapper.refresh()
-        return await mapper.map_data(site, building, live_port)
+        """Nodes and edges with live state, for a site and building when given. Read from the
+        map tables; the infrastructure writes and the 60 second hook keep them current."""
+        return await mapper.map_data(site, building)
 
     @app.get("/api/infra/dependencies", include_in_schema=False)
     async def infra_dependencies(_: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
@@ -680,6 +681,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             await matcher.link_switch(sid, slug, sess.username, remote)
         except InfraError as err:
             return JSONResponse({"detail": str(err)}, status_code=422)
+        await mapper.rebuild()  # the switch now shows its monitor
         return JSONResponse({"ok": True})
 
     @app.get("/api/infra/findings", include_in_schema=False)
@@ -716,6 +718,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                                     remote)
         except InfraError as err:
             return JSONResponse({"detail": str(err)}, status_code=422)
+        await mapper.rebuild()  # an acknowledged finding no longer turns the port to warning
         return JSONResponse({"ok": True})
 
     @app.get("/map", include_in_schema=False)

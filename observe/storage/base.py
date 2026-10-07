@@ -10,7 +10,8 @@ placeholders; a backend whose driver differs adapts it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
 T = TypeVar("T")
@@ -36,6 +37,24 @@ class StorageBusy(StorageError):
 
 class StorageTimeout(StorageError):
     """A read ran past its deadline and was interrupted."""
+
+
+@contextmanager
+def savepoint(db: Conn, name: str = "item") -> Iterator[None]:
+    """One item of a bigger write unit. An exception rolls back to the start of the block and
+    is raised again, so the caller can count the item as skipped and carry on with the rest;
+    the transaction around it is untouched. Works on every backend, because SAVEPOINT is the
+    same statement on SQLite and PostgreSQL."""
+    if not name.isidentifier():
+        raise ValueError("a savepoint name must be an identifier")
+    db.execute(f"SAVEPOINT {name}")
+    try:
+        yield
+    except BaseException:
+        db.execute(f"ROLLBACK TO SAVEPOINT {name}")
+        db.execute(f"RELEASE SAVEPOINT {name}")
+        raise
+    db.execute(f"RELEASE SAVEPOINT {name}")
 
 
 @runtime_checkable

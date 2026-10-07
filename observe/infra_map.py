@@ -26,29 +26,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from . import audit
+from . import audit, map_tables
 from .config import Config
-from .infra import InfraError, InfraService, current_ids_sql
+from .infra import InfraError, InfraService
 from .infra_match import LiveReader, Matcher
+from .map_tables import Overlay, link_state
 
-DAY = 86400.0
 STRONG_SOURCES = ("lldp", "cdp", "snmp_lldp")
 STATE_WORDS = ("up", "warn", "down", "unreachable", "pending")
 # Returns (effective state, name of the blocking ancestor or None) for a monitor slug, or None
 # when the monitor is not running.
 StateOf = Callable[[str], tuple[str, str | None] | None]
-
-
-def link_state(last_seen: float, closed_at: float | None, now: float, stale_days: int) -> str:
-    """active, stale, hidden or closed."""
-    if closed_at is not None:
-        return "closed"
-    age = now - last_seen
-    if age > 2 * stale_days * DAY:
-        return "hidden"
-    if age > stale_days * DAY:
-        return "stale"
-    return "active"
 
 
 @dataclass(frozen=True)
@@ -92,12 +80,15 @@ def _port_parts(ref: str) -> tuple[str, str]:
 
 class MapService:
     def __init__(self, config: Config, infra: InfraService, matcher: Matcher,
-                 state_of: StateOf, clock: Callable[[], float] = time.time) -> None:
+                 state_of: StateOf, clock: Callable[[], float] = time.time,
+                 live: LiveReader | None = None) -> None:
         self._config = config
         self._infra = infra
         self._matcher = matcher
         self._state_of = state_of
         self._clock = clock
+        self._live = live  # the last polled state of a port; without it there are no findings
+        infra.set_stale_days(config.map.stale_days)
 
     # Dependencies -----------------------------------------------------------------------
 
@@ -264,6 +255,80 @@ class MapService:
             return {"state": "unknown", "blocked_by": None}
         return {"state": got[0], "blocked_by": got[1]}
 
+    async def tick(self) -> None:
+        """The 60 second hook: recompute the applied dependencies, then the live map."""
+        await self.refresh()
+        await self.rebuild()
+
+    async def _overlay(self) -> Overlay:
+        """The live part of the map: each node's monitor, state and findings, and each port's
+        matches and findings. One pass over the ports, so a map of 259 ports costs a handful of
+        statements, not one per port per request."""
+        matches = await self._matcher.effective_matches()
+        pushed = {m.host: m.slug for m in self._config.monitors
+                  if m.type == "pushed_host" and m.enabled}
+
+        def go(db: Any) -> dict[str, list[Any]]:
+            return {
+                "switches": db.execute("SELECT switch_id FROM infra_switches").fetchall(),
+                "ports": db.execute(
+                    "SELECT p.switch_id, p.port_key, s.mgmt_addresses, p.if_index, p.unifi_index "
+                    "FROM infra_ports p JOIN infra_switches s USING (switch_id)").fetchall(),
+                "endpoints": db.execute("SELECT id, kind, ref FROM infra_endpoints").fetchall(),
+                "acks": db.execute("SELECT kind, switch_id, port_key, message "
+                                   "FROM infra_finding_acks").fetchall(),
+            }
+        d = await self._infra.read(go)
+
+        findings: dict[str, list[dict[str, str]]] = {}
+        loud: set[str] = set()  # ports with an unacknowledged warning, as on the port page
+        if self._live is not None:
+            acked = {(k, s, p): m for k, s, p, m in d["acks"]}
+            for f in await self._matcher.findings(self._live):
+                ref = f"{f.switch_id}|{f.port_key}"
+                findings.setdefault(ref, []).append(
+                    {"kind": f.kind, "severity": f.severity, "message": f.message})
+                if f.severity == "warning" and acked.get((f.kind, f.switch_id, f.port_key)) \
+                        != f.message:
+                    loud.add(ref)
+
+        out = Overlay()
+        for (sid,) in d["switches"]:
+            slug = matches.get(sid)
+            out.nodes[f"switch:{sid}"] = {"monitor": slug, **self._state(slug)}
+        for sid, key, addrs, if_index, unifi_index in d["ports"]:
+            ref = f"{sid}|{key}"
+            pm = self._matcher.match_port(sid, matches.get(sid), json.loads(addrs), key,
+                                          if_index, unifi_index)
+            states = [self._state(m.monitor) for m in pm]
+            worst = max((s for s in states if s["state"] != "unknown"),
+                        key=lambda s: STATE_WORDS.index(s["state"]) if s["state"] in STATE_WORDS
+                        else -1, default=self._state(None))
+            node = {"monitor": pm[0].monitor if pm else None, **worst,
+                    "findings": [f["kind"] for f in findings.get(ref, [])]}
+            if ref in loud and node["state"] == "up":
+                node["state"] = "warn"  # a passing check does not hide a field fault
+            out.nodes[f"port:{ref}"] = node
+            out.ports[(sid, key)] = (
+                [{"kind": m.kind, "monitor": m.monitor, "detail": m.detail} for m in pm],
+                findings.get(ref, []))
+        for eid, kind, ref in d["endpoints"]:
+            slug = ref if kind == "monitor" else pushed.get(ref) if kind == "host" else None
+            out.nodes[f"endpoint:{eid}"] = {"monitor": slug, **self._state(slug)}
+        return out
+
+    async def rebuild(self, now: float | None = None) -> map_tables.Changed:
+        """Recompute the map tables with live state in one write unit. This is the only place
+        besides the infrastructure writes themselves that touches them; a GET never does."""
+        ts = self._clock() if now is None else now
+        overlay = await self._overlay()
+        stale_days = self._config.map.stale_days
+        storage = self._infra.storage
+
+        def unit(db: Any) -> map_tables.Changed:
+            return map_tables.rebuild_and_touch(db, storage, ts, stale_days, overlay)
+        return await self._infra.write(unit, rebuild=False)  # type: ignore[no-any-return]
+
     @staticmethod
     def _flag_anchors(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
         """Mark the top-level switches with `anchor`, which the graph view pulls to the centre.
@@ -287,60 +352,38 @@ class MapService:
             if n["kind"] == "switch":
                 n["anchor"] = n["id"] in linked and n["id"] not in below
 
-    async def map_data(self, site: str | None = None, building: str | None = None,
-                       live: LiveReader | None = None, now: float | None = None) -> dict[str, Any]:
+    async def map_data(self, site: str | None = None,
+                       building: str | None = None) -> dict[str, Any]:
         """Nodes and edges with live state, optionally limited to a site and building.
 
-        Switches, and the ports that carry a visible link or a patched jack, are nodes. A
-        filter keeps the jacks of that site and building, the ports they reach, the switches of
-        those ports, and the switches one uplink away, so the path toward the core stays in the
-        picture. A `site` filter also keeps ports whose newest `site` property matches.
+        Read from `map_nodes` and `map_edges` in two statements; the tables are kept by
+        `rebuild` and by the infrastructure writes, so this never recomputes anything and its
+        cost does not depend on the number of ports. Switches, and the ports that carry a
+        visible link or a patched jack, are nodes. A filter keeps the jacks of that site and
+        building, the ports they reach, the switches of those ports, and the switches one
+        uplink away, so the path toward the core stays in the picture. A `site` filter also
+        keeps ports whose newest `site` property matches.
         """
-        ts = self._clock() if now is None else now
-        stale_days = self._config.map.stale_days
-        matches = await self._matcher.effective_matches()
-        pushed = {m.host: m.slug for m in self._config.monitors
-                  if m.type == "pushed_host" and m.enabled}
-
-        def go(db: Any) -> dict[str, list[Any]]:
-            return {
-                "switches": db.execute("SELECT switch_id, name FROM infra_switches "
-                                       "ORDER BY switch_id").fetchall(),
-                "ports": db.execute("SELECT switch_id, port_key, role FROM infra_ports "
-                                    "ORDER BY switch_id, port_key").fetchall(),
-                "jacks": db.execute("SELECT jack_key, room, site, switch_id, port_key "
-                                    "FROM infra_jacks ORDER BY jack_key").fetchall(),
-                "endpoints": db.execute("SELECT id, kind, ref, address FROM infra_endpoints "
-                                        "ORDER BY id").fetchall(),
-                "links": db.execute(
-                    "SELECT id, a_kind, a_ref, b_kind, b_ref, source, confidence, first_seen, "
-                    "last_seen, closed_at FROM infra_links ORDER BY id").fetchall(),
-                "sites": db.execute(
-                    "SELECT switch_id, port_key, value FROM port_properties WHERE id IN ("
-                    + current_ids_sql("WHERE name='site'") + ")").fetchall(),
-            }
-        d = await self._infra.read(go)
+        def go(db: Any) -> tuple[list[Any], list[Any]]:
+            return (db.execute("SELECT id, kind, label, site, attrs, state FROM map_nodes "
+                               "ORDER BY id").fetchall(),
+                    db.execute("SELECT id, a, b, kind, attrs, state FROM map_edges").fetchall())
+        node_rows, edge_rows = await self._infra.read(go)
 
         edges: list[dict[str, Any]] = []
-        for lid, ak, ar, bk, br, source, conf, first, last, closed in d["links"]:
-            state = link_state(last, closed, ts, stale_days)
-            if state in ("closed", "hidden"):
-                continue
-            edges.append({"id": lid, "a": f"{ak}:{ar}", "b": f"{bk}:{br}", "source": source,
-                          "confidence": conf, "state": state, "first_seen": first,
-                          "last_seen": last, "age_days": round((ts - last) / DAY, 1)})
+        for eid, a, b, source, attrs, state in sorted(edge_rows, key=lambda r: int(r[0])):
+            edges.append({"id": int(eid), "a": a, "b": b, "source": source, "state": state,
+                          **json.loads(attrs)})
+        by_kind: dict[str, list[tuple[dict[str, Any], str]]] = {
+            "switch": [], "port": [], "jack": [], "endpoint": []}
+        for nid, kind, label, site_of, attrs, state in node_rows:
+            by_kind[kind].append(({"id": nid, "kind": kind, "label": label, **json.loads(attrs),
+                                   "state": state}, site_of))
+        by_kind["endpoint"].sort(key=lambda n: int(n[0]["id"].partition(":")[2]))
 
-        port_site = {f"{s}|{k}": json.loads(v) for s, k, v in d["sites"]}
-        jacks: dict[str, dict[str, Any]] = {}
-        for key, room, jsite, sid, pkey in d["jacks"]:
-            parts = key.split("/")
-            jacks[key] = {"room": room, "site": jsite or (parts[0] if len(parts) == 5 else ""),
-                          "building": parts[1] if len(parts) == 5 else "",
-                          "port": f"{sid}|{pkey}" if sid and pkey else None}
-
-        visible_ports = {r for e in edges for r in (e["a"], e["b"]) if r.startswith("port:")}
-        visible_ports = {r[5:] for r in visible_ports}
-        visible_ports |= {j["port"] for j in jacks.values() if j["port"]}
+        jacks = {n["id"][5:]: n for n, _ in by_kind["jack"]}
+        port_site = {n["id"][5:]: s for n, s in by_kind["port"] if s}
+        visible_ports = {n["id"][5:] for n, _ in by_kind["port"]}
 
         keep_ports: set[str] | None = None
         keep_jacks: set[str] | None = None
@@ -363,62 +406,22 @@ class MapService:
                         keep_ports |= {e["a"][5:], e["b"][5:]}
             keep_switches = {_port_parts(p)[0] for p in keep_ports}
         else:
-            keep_switches = {s for s, _ in d["switches"]}
+            keep_switches = {n["id"][7:] for n, _ in by_kind["switch"]}
 
-        findings: dict[str, list[str]] = {}
-        loud: set[str] = set()  # ports with an unacknowledged warning, as on the port page
-        if live is not None:
-            def acks(db: Any) -> dict[tuple[str, str, str], str]:
-                return {(k, s, p): m for k, s, p, m in db.execute(
-                    "SELECT kind, switch_id, port_key, message FROM infra_finding_acks")}
-            acked = await self._infra.read(acks)
-            for f in await self._matcher.findings(live):
-                ref = f"{f.switch_id}|{f.port_key}"
-                findings.setdefault(ref, []).append(f.kind)
-                said = acked.get((f.kind, f.switch_id, f.port_key))
-                if f.severity == "warning" and said != f.message:
-                    loud.add(ref)
-
-        nodes: list[dict[str, Any]] = []
-        names = dict(d["switches"])
-        for sid in sorted(keep_switches & set(names)):
-            slug = matches.get(sid)
-            nodes.append({"id": f"switch:{sid}", "kind": "switch", "label": names[sid] or sid,
-                          "monitor": slug, **self._state(slug)})
-        roles = {f"{s}|{k}": r for s, k, r in d["ports"]}
-        for pref in sorted(visible_ports if keep_ports is None else keep_ports):
-            if pref not in roles or _port_parts(pref)[0] not in keep_switches:
-                continue
-            sid, pkey = _port_parts(pref)
-            pm = await self._matcher.port_matches(sid, pkey)
-            states = [self._state(m.monitor) for m in pm]
-            worst = max((s for s in states if s["state"] != "unknown"),
-                        key=lambda s: STATE_WORDS.index(s["state"]) if s["state"] in STATE_WORDS
-                        else -1, default=self._state(None))
-            node = {"id": f"port:{pref}", "kind": "port", "label": pkey, "parent": f"switch:{sid}",
-                    "role": roles[pref], "monitor": pm[0].monitor if pm else None, **worst,
-                    "findings": findings.get(pref, [])}
-            if pref in loud and node["state"] == "up":
-                node["state"] = "warn"  # a passing check does not hide a field fault
-            nodes.append(node)
-        for key, j in jacks.items():
-            if keep_jacks is not None and key not in keep_jacks:
-                continue
-            nodes.append({"id": f"jack:{key}", "kind": "jack", "label": key, "room": j["room"],
-                          "site": j["site"], "building": j["building"], "port": j["port"],
-                          "state": "unknown", "blocked_by": None})
+        nodes: list[dict[str, Any]] = [n for n, _ in by_kind["switch"]
+                                       if n["id"][7:] in keep_switches]
+        nodes += [n for n, _ in by_kind["port"]
+                  if (keep_ports is None or n["id"][5:] in keep_ports)
+                  and _port_parts(n["id"][5:])[0] in keep_switches]
+        nodes += [n for n, _ in by_kind["jack"] if keep_jacks is None or n["id"][5:] in keep_jacks]
         shown = {n["id"] for n in nodes}
-        for eid, kind, ref, addr in d["endpoints"]:
-            slug = ref if kind == "monitor" else pushed.get(ref) if kind == "host" else None
+        for n, _ in by_kind["endpoint"]:
             if keep_ports is not None and not any(
-                    f"endpoint:{eid}" in (e["a"], e["b"]) and ({e["a"], e["b"]} & shown)
-                    for e in edges):
+                    n["id"] in (e["a"], e["b"]) and ({e["a"], e["b"]} & shown) for e in edges):
                 continue
-            nodes.append({"id": f"endpoint:{eid}", "kind": "endpoint", "label": ref,
-                          "endpoint_kind": kind, "address": addr, "monitor": slug,
-                          **self._state(slug)})
+            nodes.append(n)
         shown = {n["id"] for n in nodes}
         edges = [e for e in edges if e["a"] in shown and e["b"] in shown]
         self._flag_anchors(nodes, edges)
-        return {"nodes": nodes, "edges": edges, "stale_days": stale_days,
+        return {"nodes": nodes, "edges": edges, "stale_days": self._config.map.stale_days,
                 "filter": {"site": site, "building": building}}

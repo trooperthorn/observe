@@ -917,16 +917,22 @@ hook and the summary row stays, so a late replay is still a duplicate.
 
 ### Pockethernet derivation
 
-`derive.py` runs after an upload that is `accepted` or `replaced`. It picks the LLDP
-(else CDP) neighbour that names a switch and a port, then calls `InfraService` to upsert
+`derive.py` runs after an upload that is `accepted` or `replaced`, in the same write unit
+that stores the report (`store_and_derive` in `reports.py`), so an upload is one commit. It
+picks the LLDP (else CDP) neighbour that names a switch and a port, then calls `InfraTx` (the
+transaction-bound form of `InfraService`) to upsert
 the switch, the port (role `access`) and the jack, to link jack and port with source
 `field_report`, and to append each allowlisted property with the report id and
 `recorded_by` set to `<key prefix>:<device>`. `upsert_link` closes the jack's earlier
 link when the port changes, and `append_property` turns an unchanged value into a
 `last_verified` bump. The time passed as `now` is the report's receive time, which the
 store keeps as `updated_at`, so the live path and the rebuild write identical rows.
-A derivation error is caught in the upload route and recorded in the audit detail, and
-the upload still succeeds because the body is stored first.
+The derivation runs inside a SAVEPOINT. An error rolls back only the derivation's own rows,
+the report stays stored with `derive_status` failed, the error class goes to the audit detail,
+and the transaction still commits, so the evidence is never lost and no half-derived switch,
+port or link is left behind. On success the map tables (below) are updated before the commit.
+A retry derives one failed report per write unit, and the rebuild is one unit with a savepoint
+per report.
 
 `POST /api/plugins/pockethernet/rebuild` is an admin-only plugin router. `rebuild()`
 checks for dropped bodies, then in one transaction reads the reports and deletes the
@@ -1015,6 +1021,28 @@ capped; the port must already exist. A custom write needs `recorded_by` and writ
 `port_property_custom` audit row that names the property but not its value. This slice has no
 routes; the service is called in process.
 
+`InfraTx` holds each of those operations as a plain function of an open transaction connection
+(validation and SQL, no commit), and `InfraService` runs each as one write unit, so the
+operations are written once. A feed that needs a whole cycle in one transaction runs
+`write_cycle(store, fn, now=...)` with `InfraTx` inside `fn` and a `savepoint(db)` around each
+item (`observe.storage.savepoint`, the same `SAVEPOINT` statements on SQLite and PostgreSQL): an
+item that fails goes back to its savepoint and is counted as skipped, and the rest of the cycle
+commits once. `write_cycle` and every `InfraService` write end by bringing the map tables up to
+date in the same transaction.
+
+The current map is three tables (schema version 18, `observe/map_tables.py`): `map_nodes` and
+`map_edges` hold the unfiltered map, and `port_current` holds one row per port with its current
+property values, the monitors it matches and its findings. `map_tables.rebuild` reads the
+infrastructure tables, writes only the rows that differ, and bumps the `map` and `ports` change
+counters only when something changed, so an unchanged map keeps its counters. The live columns (a
+node's monitor, state, blocked_by and findings, a port's matches and findings) are not known to
+a write unit, because they come from the configuration and the scheduler: a write-time rebuild
+carries the previous values over, and the 60 second map hook (`MapService.tick`) computes them
+in one pass and writes them with `MapService.rebuild`. Live state on the map and in
+`port_current` is therefore at most one hook interval old, and an admin link or an
+acknowledgement rebuilds at once. Link ageing is measured at the cycle's observation time at
+write time and at the hook's clock in the hook.
+
 `observe/infra_match.py` links the map to monitors. `Matcher.match_switch` tries the chassis
 MAC (a `unifi_network` monitor whose `device` is that MAC), then the management addresses, then
 the sysName against monitor hosts and UniFi device names; the first key with candidates decides,
@@ -1047,8 +1075,13 @@ SNMP LLDP, confirmed within `stale_days`), orders admin acceptances before autom
 refuses any edge that would close a cycle with the YAML plus the edges applied so far.
 `refresh` hands the applied edges to `Config.set_applied_dependencies`; `Config.parents` then
 returns the YAML parents plus those edges, so `Rollup` and the scheduler need no change. The
-web layer refreshes on each map or dependency read and registers `refresh` as a scheduler
-hook that runs once a minute. `decide` records an admin decision and audits it. Routes:
+web layer registers `MapService.tick` (`refresh`, then `rebuild`) as a scheduler hook that runs
+once a minute; `GET /api/infra/dependencies` still computes the plan on request, and
+`GET /api/infra/map` never rebuilds anything. `map_data` reads `map_nodes` and `map_edges` in
+two statements (it took 259 per request before) and applies the `site` and `building` filter
+and the `anchor` flag in memory, so its cost does not depend on the number of ports.
+`rebuild` computes each port's matches once per pass instead of once per port per request.
+`decide` records an admin decision and audits it. Routes:
 `GET /api/infra/map` and `GET /api/infra/dependencies` (session), and
 `POST /api/admin/infra/depends/accept` and `/reject` (admin session and CSRF token).
 
@@ -1185,8 +1218,12 @@ set through a `height` attribute stand for the rest, because the static guard fo
 `vlist-core.js` holds the pure window and filter rules, tested by `tests/js/unifi.test.mjs`. Every
 value is written with `textContent`.
 
-`feed.py` writes the map feed through `InfraService` only. The devices collector calls
-`feed_integration` after it stores the snapshot: each device is a switch keyed by `switch_id` of its
+`feed.py` writes the map feed through `InfraTx` only, and each poll is one cycle in one write
+unit and so one commit, with a SAVEPOINT per device, port and link: a device or port that fails
+(a malformed row, a value the core refuses, a database error) is rolled back to its savepoint,
+counted in `skipped` and left behind, and the others are kept. The devices collector calls
+`feed_integration` with `save_devices=True`, so the `unifi_devices` rows and the feed share the
+unit, and the map tables are updated in it too: each device is a switch keyed by `switch_id` of its
 chassis MAC, with its name, address, vendor `Ubiquiti` and model. A device row that names its uplink
 device (`uplink.deviceId` or `uplinkDeviceId`, unverified on device rows) gets a `config` link
 between a port `uplink` on the child and a port `to-<child mac>` on the parent, because a link joins
@@ -1196,7 +1233,7 @@ ports. The optional `classic` collector, registered only when `classic_credentia
 `unifi`, a `config` link for the uplink port numbers, and an `lldp` link for each LLDP neighbour
 whose chassis MAC is a UniFi device of the poll or an already known switch. A neighbour that is not
 known is never created, so cameras and phones do not become switches. A real port link closes the
-device-level placeholder through `InfraService.close_link`, and the placeholder is not made again
+device-level placeholder through `InfraTx.close_link`, and the placeholder is not made again
 while a real link joins the two devices; the two placeholder ports stay. `append_property` now
 compares a value with the newest row of the same source, so the feed and a field test keep their own
 histories. `Matcher.findings` excludes source `unifi` from the field side, and fills a live value

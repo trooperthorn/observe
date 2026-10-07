@@ -48,7 +48,7 @@ def build_admin_router() -> APIRouter:
         Admin session and CSRF token are enforced by the core; the core audits the request and
         this adds the counts. Refused (409) when retention has dropped any report body.
         """
-        result = await rebuild(request.app.state.plugin_store)
+        result = await rebuild(request.app.state.plugin_store, request.app.state.plugin_clock())
         request.state.audit_detail = {"action": "rebuild", **result.as_detail()}
         if result.pruned:
             raise HTTPException(409, f"{result.pruned} report bodies were dropped by retention, "
@@ -62,7 +62,8 @@ def build_admin_router() -> APIRouter:
     @router.post("/retry")
     async def retry_derivation(request: Request) -> dict[str, Any]:
         """Derive again every stored report whose derivation failed. Admin and CSRF enforced."""
-        result = await retry_failed(request.app.state.plugin_store)
+        result = await retry_failed(request.app.state.plugin_store,
+                                    request.app.state.plugin_clock())
         request.state.audit_detail = {"action": "retry", **result.as_detail()}
         return result.as_detail()
 
