@@ -241,7 +241,7 @@ Below 700px, wide tables sit inside `.table-wrap{overflow-x:auto}` (the HA SOC r
 | `views/entity-map-view.ts` | Use as a behaviour reference only | It covers the canvas, ResizeObserver, wheel zoom (`passive:false`), drag pan and dragging state. Rewrite it in `graph/view.js`. |
 
 **Observe mapping.**
-- Entities: switches, routers, hosts, APs, jacks (optional) and endpoints (collapsed into per-switch counts by default), from `/api/infra/map`.
+- Entities: switches, routers, hosts, APs, jacks (optional) and endpoints (collapsed into per-switch counts by default), from `/api/v2/map`.
 - Group colour comes from `--cat-*` by kind. The state is shown as a **ring and a glyph inside the node** (tick, X, !, broken link), in addition to a status-coloured outline, so state is never shown by colour alone.
 - Relations are links. Stale links (the current "dashed lines are links not confirmed for a while") are drawn with `setLineDash`. Typed link kinds are uplink, LLDP and MAC-learned.
 
@@ -569,7 +569,7 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 
 ### S10 notes (done)
 
-- `/api/infra/map` switch nodes carry `anchor`: true for a switch with a switch link that is not through its own uplink port. `js/graph/infra.js` builds entities, relations and anchors from the payload and holds the default-view rule.
+- `/api/v2/map` switch nodes carry `anchor`: true for a switch with a switch link that is not through its own uplink port. `js/graph/infra.js` builds entities, relations and anchors from the payload and holds the default-view rule.
 - `map.html` and `pages/map.js` have a Graph, Tiers and Table toggle kept in the URL hash. Graph sits beside Tiers (Q1). Tiers is the default on screens up to 600px and above 300 switches, with a note when the graph is limited. The Links table is always shown.
 - The side card lists the selected switch, its state in words and its links as real links to port pages. Keyboard support comes from `view.js`, and Enter opens the first linked port page.
 - Tests: `tests/test_ui_graph.py`, `tests/test_infra_map.py` (anchor flag) and `tests/js/infra.test.mjs`.
@@ -669,7 +669,7 @@ Enrolment survives the wrong machine and explains failures. The audit of the con
 - `js/shell.js` and `css/shell.css` are loaded by every signed-in page (not the login page). Each page keeps a `<header id="shell-header">` with its `#summary` live region and any page-specific controls, plus `<nav id="shell-nav">`. Classic page scripts still find `#summary` at load time because the markup is static; the module adds the brand, the theme toggle and the user name around it.
 - The `NAV` table lists only pages that exist today: Dashboard (host pages sit under it), Map (port pages sit under it), Map admin and Users and keys. The Hosts and Reports workspaces and Audit appear when their pages are added (Add host arrived with S12); a workspace with no visible item is not drawn.
 - Deviation from section 2.3: the workspace row and the subnav are one grouped row (workspace label, then its links), because no workspace has a landing page yet. Below 700px it scrolls sideways.
-- The nav data is not a new endpoint. The shell uses `GET /api/session` for the role and `GET /api/plugins` for plugin entries, which already omits admin-only plugin entries for viewers. `NavEntry` gained an optional `workspace` field (default `network`), validated at load.
+- The nav data is not a new endpoint. The shell uses `GET /api/session` for the role and `GET /api/v2/plugins` for plugin entries, which already omits admin-only plugin entries for viewers. `NavEntry` gained an optional `workspace` field (default `network`), validated at load.
 - The header summary pill row is still written by each page's own script (dashboard and map). Making it a shared, clickable summary needs the dashboard rework in S5.
 
 ### S2 notes (done)

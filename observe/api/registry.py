@@ -137,6 +137,10 @@ class ApiRuntime:
         self.cache = ResponseCache()
         self.auth = Authenticator(config, store, auth_clock, clock)
         self.denials = DenialAggregator(clock)
+        # Set by observe.api.build and observe.web once they exist: the resources registered so
+        # far, and the infrastructure services the map and port resources read through.
+        self.resources: list[Any] = []
+        self.infra: Any = None
 
     async def denied(self, request: Request, status: int, reason: str,
                      principal: Principal | None = None) -> None:

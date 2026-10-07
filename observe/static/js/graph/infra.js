@@ -1,4 +1,4 @@
-// Turns the /api/infra/map payload into the graph engine's input. Pure functions, no DOM.
+// Turns the /api/v2/map payload into the graph engine's input. Pure functions, no DOM.
 // Switches are the graph nodes. Endpoints are collapsed into a count on the switch they hang off.
 import { FORCE_NODE_LIMIT } from "./force.js";
 

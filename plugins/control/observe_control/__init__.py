@@ -21,6 +21,7 @@ from observe import audit
 from observe.plugins import KeyScope, Migration, PluginBase, PluginError, PluginRouter
 
 from .actions import CONTROLLERS, MODES, capabilities, validate
+from .api import register as register_resources
 from .keys import SCOPE
 from .queue import (ACTIONS, MAX_HOST, MIGRATIONS, REBOOT, Limits, QueueError, cancel_command,
                     enqueue_command, list_commands, pull_commands, record_result)
@@ -215,6 +216,10 @@ class ControlPlugin(PluginBase):
         except SigningError as err:
             raise PluginError(f"plugin 'control': {err}") from err
         self.public_key = public_key_string(self.signing_key)
+
+    def register_api(self, api: Any) -> None:
+        """The /api/v2/control resources (docs/DATA-API-DESIGN.md section 4.10)."""
+        register_resources(api)
 
     def routers(self) -> list[PluginRouter]:
         return [PluginRouter(build_pull_router(), key_scope=SCOPE, public_prefix="/api/v1"),

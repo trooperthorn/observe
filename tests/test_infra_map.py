@@ -371,12 +371,12 @@ async def login(web: World, name: str, admin: bool) -> dict[str, str]:
 async def test_map_routes_need_a_session_and_decisions_need_admin_and_csrf(web):
     await web.build()
     await web.uplink(source="field_report")
-    for path in ("/api/infra/map", "/api/infra/dependencies"):
+    for path in ("/api/v2/map", "/api/infra/dependencies"):
         assert web.client.get(path).status_code == 401
     csrf = await login(web, "bob", admin=False)
-    body = web.client.get("/api/infra/map?site=nowhere").json()
+    body = web.client.get("/api/v2/map?site=nowhere").json()
     assert body["nodes"] == [] and body["filter"]["site"] == "nowhere"
-    assert len(web.client.get("/api/infra/map").json()["nodes"]) >= 2
+    assert len(web.client.get("/api/v2/map").json()["nodes"]) >= 2
     deps = web.client.get("/api/infra/dependencies").json()
     assert [(e["child"], e["parent"]) for e in deps["pending"]] == [("edge-sw", "core-sw")]
     pay = {"child": "edge-sw", "parent": "core-sw"}

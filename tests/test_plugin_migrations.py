@@ -157,11 +157,16 @@ def penv(request, tmp_path):
     e.store.close()
 
 
+def _nav(penv):
+    """The navigation entries of every plugin, as the console shell reads them."""
+    return [n for p in penv.client.get("/api/v2/plugins").json()["items"] for n in p["nav"]]
+
+
 def test_nav_and_pages_exist_only_when_the_plugin_is_enabled(penv):
     penv.user("alice")
     penv.user("root", admin=True)
     penv.login("alice")
-    nav = penv.client.get("/api/plugins").json()["nav"]
+    nav = _nav(penv)
     page = penv.client.get("/plugins/echo")
     static = penv.client.get("/plugins/echo/static/echo.js")
     if penv.enabled:
@@ -171,8 +176,7 @@ def test_nav_and_pages_exist_only_when_the_plugin_is_enabled(penv):
         assert penv.client.get("/plugins/echo/a").status_code == 403  # admin page, plain user
         penv.client.cookies.clear()
         penv.login("root")
-        assert [n["label"] for n in penv.client.get("/api/plugins").json()["nav"]] \
-            == ["Echo", "Echo admin"]
+        assert [n["label"] for n in _nav(penv)] == ["Echo", "Echo admin"]
         assert penv.client.get("/plugins/echo/a").status_code == 200
     else:
         assert nav == []

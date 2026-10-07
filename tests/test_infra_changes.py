@@ -128,7 +128,7 @@ class Web:
         self.sched.states["edge-gi5"].observe(CheckResult.ok("up", detail={"speed_mbps": 1000}))
 
     def port(self) -> dict[str, Any]:
-        r = self.client.get("/api/infra/port", params={"switch_id": SID, "port": "Gi1/0/5"})
+        r = self.client.get(f"/api/v2/ports/{SID}/Gi1/0/5")
         assert r.status_code == 200, r.text
         return r.json()
 
@@ -137,7 +137,7 @@ async def map_state(web: Web) -> str:
     """The port's state on the map. The live columns are refreshed by the map hook, which the
     test runs here instead of waiting for the scheduler; the GET itself never rebuilds."""
     await web.client.app.state.mapper.rebuild()
-    nodes = {n["id"]: n for n in web.client.get("/api/infra/map").json()["nodes"]}
+    nodes = {n["id"]: n for n in web.client.get("/api/v2/map").json()["nodes"]}
     return nodes[f"port:{SID}|gi1/0/5"]["state"]
 
 
@@ -158,17 +158,17 @@ async def test_findings_reach_dashboard_port_page_and_map_without_any_alert(web,
     monkeypatch.setattr(Alerter, "notify", no_alerts)
     await web.seed([("link_speed_mbps", 1000), ("link_speed_mbps", 100),
                     ("vlan", 20), ("vlan", 30)])
-    assert web.client.get("/api/infra/findings").status_code == 401
+    assert web.client.get("/api/v2/findings").status_code == 401
     await web.login()
 
-    listed = web.client.get("/api/infra/findings").json()["findings"]
+    listed = web.client.get("/api/v2/findings").json()["items"]
     assert {(f["kind"], f["severity"]) for f in listed} == {("speed_drop", "warning"),
                                                             ("vlan_change", "info")}
     port = web.port()
     assert {f["kind"] for f in port["findings"]} == {"speed_drop", "vlan_change"}
     assert port["state"] == "warn"  # the live check passes, the field finding turns it to warning
     await web.client.app.state.mapper.rebuild()
-    nodes = {n["id"]: n for n in web.client.get("/api/infra/map").json()["nodes"]}
+    nodes = {n["id"]: n for n in web.client.get("/api/v2/map").json()["nodes"]}
     node = nodes[f"port:{SID}|gi1/0/5"]
     assert node["state"] == "warn"
     assert set(node["findings"]) == {"speed_drop", "vlan_change"}
@@ -195,7 +195,7 @@ async def test_a_change_finding_can_be_acknowledged_and_returns_when_facts_chang
     await web.seed([("link_speed_mbps", 1000), ("link_speed_mbps", 100)])
     h = await web.login("root", admin=True)
     body = {"switch_id": SID, "port_key": "gi1/0/5", "kind": "speed_drop"}
-    assert web.client.post("/api/admin/infra/findings/ack", json=body,
+    assert web.client.post("/api/v2/findings/ack", json=body,
                            headers=h).status_code == 200
     port = web.port()
     assert port["findings"][0]["acknowledged"] and port["state"] == "up"
@@ -210,6 +210,6 @@ def test_dashboard_script_lists_findings_and_the_plugin_nav_with_text_only():
     js = (STATIC / "app.js").read_text(encoding="utf-8")
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     shell = (STATIC / "js" / "shell.js").read_text(encoding="utf-8")
-    assert "/api/infra/findings" in js and "/api/plugins" in shell
+    assert "/api/v2/findings" in js and "/api/v2/plugins" in shell
     assert 'id="findings"' in html and 'id="shell-nav"' in html
     assert not re.search(r"\.innerHTML\s*=|insertAdjacentHTML|document\.write|eval\(", js)

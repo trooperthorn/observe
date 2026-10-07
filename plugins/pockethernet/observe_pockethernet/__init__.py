@@ -17,6 +17,7 @@ from observe.plugins import (KeyScope, Migration, NavEntry, PluginBase, PluginPa
                                PluginRouter)
 from observe.store import Store
 
+from .api import register as register_resources
 from .keys import SCOPE
 from .derive import rebuild, retry_failed
 from .pages import build_pages_router
@@ -84,6 +85,10 @@ class PockethernetPlugin(PluginBase):
 
     def configure(self, settings: Any) -> None:
         self.settings = settings or PockethernetSettings()
+
+    def register_api(self, api: Any) -> None:
+        """The /api/v2/pockethernet resources (docs/DATA-API-DESIGN.md section 4.10)."""
+        register_resources(api)
 
     def routers(self) -> list[PluginRouter]:
         # Key-authenticated by the core with the wpf scope, mounted at /api/v1.

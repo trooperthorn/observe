@@ -120,11 +120,12 @@ def test_pages_ask_for_basic_auth_when_it_is_configured(tmp_path):
 
 
 def test_navigation_entry_comes_from_the_plugin_through_the_core(env):
-    assert env.client.get("/api/plugins").status_code == 401
+    assert env.client.get("/api/v2/plugins").status_code == 401
     env.login()
-    body = env.client.get("/api/plugins").json()
-    assert {"plugin": "pockethernet", "label": "Field reports",
-            "path": "/plugins/pockethernet", "workspace": "network"} in body["nav"]
+    body = env.client.get("/api/v2/plugins").json()
+    mine = next(p for p in body["items"] if p["name"] == "pockethernet")
+    assert {"label": "Field reports", "path": "/plugins/pockethernet",
+            "workspace": "network"} in mine["nav"]
     assert "shell-nav" in (Path(__file__).parent.parent / "observe" / "static"
                            / "index.html").read_text(encoding="utf-8")
 
@@ -245,14 +246,13 @@ def test_second_report_with_a_worse_value_raises_the_finding_and_no_alert(
     monkeypatch.setattr(Alerter, "notify", no_alerts)
     env.upload(report("first-report", **({"pair_fault": "none"} if kind == "cable_fault" else {})))
     env.login()
-    assert env.client.get("/api/infra/findings").json()["findings"] == []
+    assert env.client.get("/api/v2/findings").json()["items"] == []
     env.clock.now += 60
     env.upload(report("second-report", **change))
-    found = env.client.get("/api/infra/findings").json()["findings"]
+    found = env.client.get("/api/v2/findings").json()["items"]
     assert [f["kind"] for f in found] == [kind]
     assert found[0]["switch_id"].startswith("mac:") and found[0]["port_key"] == "gi1/0/5"
-    port = env.client.get("/api/infra/port", params={
-        "switch_id": found[0]["switch_id"], "port": "Gi1/0/5"}).json()
+    port = env.client.get(f"/api/v2/ports/{found[0]['switch_id']}/Gi1/0/5").json()
     assert [f["kind"] for f in port["findings"]] == [kind]
     assert env.alerter.status == {}
 
@@ -286,3 +286,73 @@ def test_report_list_carries_the_cable_verdict_for_the_fails_column(env):
     env.login()
     got = {r["report_id"]: r["verdict"] for r in env.client.get(API + "/reports").json()["reports"]}
     assert got == {FIXTURE["report_id"]: "pass", "failing-report": "fail"}
+
+
+# ---- the same data on /api/v2/pockethernet ----------------------------------------------------
+
+V2 = "/api/v2/pockethernet"
+
+
+def test_v2_resources_need_a_credential_and_belong_to_the_plugin(env):
+    for path in ("/reports", f"/reports/sean-pixel/{FIXTURE['report_id']}", "/jacks/x"):
+        assert env.client.get(V2 + path).status_code == 401, path
+    env.login()
+    owned = {r.operation_id for r in env.client.app.state.v2_runtime.resources
+             if r.owner == "pockethernet"}
+    assert owned == {"pockethernet_reports", "pockethernet_report", "pockethernet_jack"}
+
+
+def test_v2_report_list_pages_newest_first_and_shows_ports_and_verdict(env):
+    env.upload(FIXTURE)
+    env.clock.now += 60
+    env.upload(report("second-report", link_speed_mbps=100))
+    env.clock.now += 60
+    env.upload(report("third-report", link_speed_mbps=100))
+    env.login()
+    first = env.client.get(V2 + "/reports?limit=2").json()
+    assert [r["report_id"] for r in first["items"]] == ["third-report", "second-report"]
+    assert first["next_cursor"]
+    last = env.client.get(V2 + f"/reports?limit=2&cursor={first['next_cursor']}").json()
+    assert [r["report_id"] for r in last["items"]] == [FIXTURE["report_id"]]
+    assert last["next_cursor"] is None
+    old = last["items"][0]
+    assert old["source"] == "sean-pixel" and old["port_id"] == JACK
+    assert old["ports"][0]["port_key"] == "gi1/0/5" and old["body_pruned"] is False
+    assert old["taken_at"].endswith("Z") and old["received_at"].endswith("Z")
+    assert env.client.get(V2 + "/reports?site=nowhere").json()["items"] == []
+    assert env.client.get(V2 + "/reports?limit=100000").status_code == 400
+    assert env.client.get(V2 + "/reports?cursor=garbage").status_code == 400
+
+
+def test_v2_report_detail_body_and_a_pruned_report_has_none(env):
+    env.upload(FIXTURE)
+    env.login()
+    url = V2 + f"/reports/sean-pixel/{FIXTURE['report_id']}"
+    d = env.client.get(url).json()
+    assert d["revision"] == 1 and d["body"]["link"]["speed_mbps"] == 1000
+    assert d["ports"][0]["switch_id"].startswith("mac:")
+    assert env.client.get(V2 + f"/reports/other/{FIXTURE['report_id']}").status_code == 404
+    run(prune_evidence(env.store, env.clock.now + 400 * 86400, 365))
+    d = env.client.get(url).json()
+    assert d["body"] is None and d["body_pruned"] is True and d["status"] == "complete"
+
+
+def test_v2_jack_has_history_links_and_reports(env):
+    env.upload(FIXTURE)
+    env.login()
+    d = env.client.get(V2 + f"/jacks/{JACK}").json()
+    assert d["jack_key"] == JACK and d["room"] == "Room 204"
+    assert [h["port_key"] for h in d["history"]] == ["gi1/0/5"]
+    assert env.client.get(V2 + "/jacks/nope").status_code == 404
+
+
+def test_v2_report_strings_stay_json_and_an_upload_key_cannot_read(env):
+    n = json.loads(json.dumps(FIXTURE["neighbors"][0]))
+    n["system_name"] = n["lldp"]["system_name"] = HOSTILE
+    env.upload({**FIXTURE, "report_id": "hostile-report", "notes": HOSTILE, "neighbors": [n]})
+    r = env.client.get(V2 + "/reports", headers={"Authorization": f"Bearer {env.key}"})
+    assert r.status_code == 401  # a field key reads nothing
+    env.login()
+    got = env.client.get(V2 + "/reports/sean-pixel/hostile-report")
+    assert got.headers["content-type"].startswith("application/json")
+    assert HOSTILE in strings(got.json())

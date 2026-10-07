@@ -439,7 +439,7 @@ summary adapted from hostwatch's `integrations/summary.py` is the host views sec
 
 ## Host views
 
-The host page at `/host` is a static page too: `host.js` and `host-control.js` are ES modules, the Control section is a card inside `<main>`, and both use the shared chip, dialog and toast modules. The dashboard at `/` is a static page whose module script (`app.js`) builds the KPI row, availability tiles and group cards in the browser from `/api/v2/monitors`, `/api/v2/groups`, `/api/v2/status`, `/api/v2/events` and `/api/infra/findings`, using the shared chip and DOM modules. `static/js/v2.js` is the small reader the pages share (problem details as an Error with a status, `getAll` to follow `next_cursor`, and `seconds` to read an RFC 3339 time).
+The host page at `/host` is a static page too: `host.js` and `host-control.js` are ES modules, the Control section is a card inside `<main>`, and both use the shared chip, dialog and toast modules. The dashboard at `/` is a static page whose module script (`app.js`) builds the KPI row, availability tiles and group cards in the browser from `/api/v2/monitors`, `/api/v2/groups`, `/api/v2/status`, `/api/v2/events` and `/api/v2/findings`, using the shared chip and DOM modules. `static/js/v2.js` is the small reader the pages share (problem details as an Error with a status, `getAll` to follow `next_cursor`, and `seconds` to read an RFC 3339 time).
 
 Each pushed host has a page at `/host?name=HOST`, linked from the dashboard
 row of its `pushed_host` monitor. It is served by two v2 routes, `GET /api/v2/hosts`
@@ -604,7 +604,7 @@ no session), `user_create_failed` and `user_create_error`, `key_create_failed`,
 `key_revoke_failed`, `user_change_failed` and `user_change_error`, and `ingest_failed` (a valid batch the store could not
 write). Admin screen changes are recorded with the signed-in admin as actor, and
 CLI key and user changes with the actor `cli`. Host confirmation has no route
-yet, so it has no rows yet. `GET /api/audit` returns rows newest first and is admin only,
+yet, so it has no rows yet. `GET /api/v2/audit` returns rows newest first and is admin only,
 session only, so basic auth never reaches it. It takes `limit` (1 to 500),
 `kind`, and `before` (a row id, to page backwards).
 
@@ -805,7 +805,7 @@ back the host settings page (`GET /hosts/{name}/settings`, the static `host-sett
 `table.js`, `chips.js`, `dialog.js` and `toast.js` modules, plus `js/admin-ui.js` (card, button,
 copy-to-clipboard and the "admin account needed" card) and `css/admin.css` (tokens only). The audit
 log has its own static page, `/audit` (`audit.html`, `audit.js`), listed under Admin in the
-navigation for admins. It uses the same `GET /api/audit` route, loads the newest 500 rows and
+navigation for admins. It uses the same `GET /api/v2/audit` route, loads the newest 500 rows and
 filters them in the browser by actor, kind, status group and time range. The page serves no data,
 and a viewer who opens it sees an "admin account needed" notice while the API answers 403.
 
@@ -854,8 +854,33 @@ portable SQL (aggregates cast to plain types, `GROUP BY` by position), which
 with an optional `register_api(api)` hook; its registry mounts only under `/<plugin name>`, never
 allows anonymous reads, and lets `api.submit_write` bump only the change domains its resources
 declared. The legacy read routes were removed with no adapter (no migration path, section 11 of the
-design); the map, port, finding, audit, admin, plugin-list and session reads still use their own
-routes until slices O-7 and O-9 move them.
+design). Slice r6-api-v2-resources moved the map, port, finding, audit and plugin-list reads too;
+the session read, the key and user lists of the admin page and the settings reads next to their
+`PUT` still use their own routes until the admin pages move in slice O-9.
+
+Slice r6 added these modules. `network.py` serves `/map`, `/map/nodes`, `/map/edges`, `/ports`,
+`/ports/{switch_id}/{port}`, `/findings` and `POST /findings/ack`: the map and the port list are
+two statements on `map_nodes`, `map_edges` and `port_current`; one port, the findings and the
+acknowledgement call the services the console already had (`PortPages`, `Matcher`, `MapService`),
+which `observe/web.py` hands to the runtime as `runtime.infra` once they exist. `ha.py` builds
+`/ha/instances` from the host view, so an instance is a host with a Home Assistant section
+reporting. `admin.py` holds `/session`, `/plugins` (from the loaded plugins and
+`runtime.resources`, so the list names the resources each plugin really registered), `/audit`,
+`/admin/keys`, `/admin/users`, `/admin/config`, the settings documents
+(`/admin/settings/tiers`, `retention`, `recheck`, `rules`, `storage`) and `/resources`. The
+settings reads call the same `load` and `describe` functions as the admin pages. `storage` reports
+the backend, whether TimescaleDB runs the rollups, the last run of each compaction and rollup
+level and the change counters, and never a connection string. A list that no write bumps a change
+domain for (keys, users, storage status) sends no ETag.
+
+The UniFi, Pockethernet and control plugins each have an `api.py` and a `register_api` hook
+(`/unifi/devices`, `/unifi/clients`, `/unifi/cameras`; `/pockethernet/reports`, `/reports/{source}/{report_id}`,
+`/jacks/{key}`; `/control/commands`, `/control/capabilities`). They read their own tables on the
+read connection and page by primary key. The control list never writes: a command that expired
+without an answer is shown as `unknown` from the clock, where the legacy admin route also stored
+that state. The Pockethernet resources send no ETag, because a stored but not yet derived report
+changes no change domain. The page scripts `app.js`, `audit.js`, `pages/map.js`, `port.js` and
+`js/shell.js` read the v2 routes.
 
 ## Plugin host
 
@@ -908,7 +933,7 @@ Audit rows: `plugin_request` for every state-changing request from a session
 (actor, method, path, status, plugin name), `plugin_denied` for 401, 403 and 429
 answers (at most one per peer per minute, with a count), and `plugin_failed`
 when a route raises. Reads that succeed are not audited, like the core read
-routes. `GET /api/plugins` lists loaded plugins and the navigation entries the
+routes. `GET /api/v2/plugins` lists loaded plugins and the navigation entries the
 caller may see. Each entry carries a `workspace` (`overview`, `hosts`, `network`, `reports` or
 `admin`, default `network`) that says which group of the console navigation it sits under; any
 other value stops startup.
@@ -1000,7 +1025,7 @@ rows. The plugin's `pages()` hook registers three static files from `pages/` at
 `/plugins/pockethernet`, `/report` and `/jack`, `nav_entries()` registers "Field reports", and
 `static_dir()` serves `static/pockethernet.js` at `/plugins/pockethernet/static`. The script
 is loaded as a module on each page and imports its helpers from the `infra-common.js` module (which builds on `js/dom.js` and `js/api.js`). It writes every string with `textContent`.
-The shell module (`js/shell.js`) reads `GET /api/plugins` for the navigation links.
+The shell module (`js/shell.js`) reads `GET /api/v2/plugins` for the navigation links.
 
 The console shell: every signed-in page has a `<header id="shell-header">` (holding the
 `aria-live` `#summary` region the page scripts write into), a `<nav id="shell-nav">` mount and
@@ -1016,7 +1041,7 @@ goes in through `textContent`. Status is an icon and a word, never colour alone.
 sits in `js/table-core.js`, `js/chip-states.js` and `js/dialog-logic.js` so it can be tested
 without a browser. No page loads them yet.
 
-The Network map page (slice S10) offers Graph, Tiers and Table views side by side. `/api/infra/map` marks top-level switches with `anchor`, and `js/graph/infra.js` turns the payload into graph input (switches as nodes, endpoints as a count badge). The graph engine (slice S9) lives in `js/graph/`: `force.js` (a d3-free force layout, run once
+The Network map page (slice S10) offers Graph, Tiers and Table views side by side. `/api/v2/map` marks top-level switches with `anchor`, and `js/graph/infra.js` turns the payload into graph input (switches as nodes, endpoints as a count badge). The graph engine (slice S9) lives in `js/graph/`: `force.js` (a d3-free force layout, run once
 and deterministic, limited to 300 nodes), `render.js` (canvas painter reading colours from the CSS
 tokens, with a status ring and glyph on each node) and `view.js` (camera, input, resize and
 repaint scheduling), with `css/graph.css`. The code is ported from relationship-maps (commit
@@ -1112,7 +1137,7 @@ An unknown live value never produces a finding. The kinds are `speed_above_live`
 `vlan_mismatch`, `poe_no_power` (all warnings) and `repatched` (info, from a jack label that
 moved to another port). `observe/infra_changes.py` adds the field change kinds `speed_drop`, `cable_fault`, `length_change`, `poe_drop`, `dhcp_fail` and `verdict_worse` (warnings) and `vlan_change` (info). `Matcher.findings` reads the newest two rows of each tracked property in one window query and passes them to the pure function `port_changes`, so a change needs two history rows and clears when the value is restored. Findings are not stored and never reach the alerter. Routes:
 `GET /api/admin/infra/unlinked` (admin session), `POST /api/admin/infra/link` (admin session and
-CSRF token) and `GET /api/infra/findings` (session).
+CSRF token) and `GET /api/v2/findings` (session).
 
 `observe/infra_map.py` (`MapService`) builds the map and the effective dependency set.
 Schema version 7 adds `infra_dependencies` (child slug, parent slug, accepted or rejected, who
@@ -1126,15 +1151,15 @@ refuses any edge that would close a cycle with the YAML plus the edges applied s
 returns the YAML parents plus those edges, so `Rollup` and the scheduler need no change. The
 web layer registers `MapService.tick` (`refresh`, then `rebuild`) as a scheduler hook that runs
 once a minute; `GET /api/infra/dependencies` still computes the plan on request, and
-`GET /api/infra/map` never rebuilds anything. `map_data` reads `map_nodes` and `map_edges` in
+`GET /api/v2/map` never rebuilds anything. `map_data` reads `map_nodes` and `map_edges` in
 two statements (it took 259 per request before) and applies the `site` and `building` filter
 and the `anchor` flag in memory, so its cost does not depend on the number of ports.
 `rebuild` computes each port's matches once per pass instead of once per port per request.
 `decide` records an admin decision and audits it. Routes:
-`GET /api/infra/map` and `GET /api/infra/dependencies` (session), and
+`GET /api/v2/map` and `GET /api/infra/dependencies` (session), and
 `POST /api/admin/infra/depends/accept` and `/reject` (admin session and CSRF token).
 
-Map pages. `observe/infra_port.py` (`PortPages`) builds `GET /api/infra/port?switch_id=&port=`
+Map pages. `observe/infra_port.py` (`PortPages`) builds `GET /api/v2/ports/{switch_id}/{port}`
 (session): the port's switch, role, the matched monitors with their state and last polled
 speed, VLAN and PoE, the current properties, up to 50 history rows per property, and the
 findings for that port. A port is `up` only when no matched monitor is worse and no
@@ -1143,7 +1168,7 @@ acknowledgement rows, so an info finding or an acknowledged warning does not tur
 Warning there either. Schema version 8 adds `infra_finding_acks`, keyed by
 finding kind and port, which stores the message acknowledged; `acknowledge` refuses a finding
 that does not exist now, and a finding whose message changed is shown as unacknowledged. The
-route is `POST /api/admin/infra/findings/ack` (admin session and CSRF token, audited as
+route is `POST /api/v2/findings/ack` (admin session and CSRF token, audited as
 `infra_finding_acknowledged` and `infra_finding_ack_failed`). The pages `/map`, `/port` and
 `/admin/infra` are static files like `/host`: they hold no data and their scripts send a
 visitor without a session to `/login`; `infra-admin.js` also needs an admin session for all of

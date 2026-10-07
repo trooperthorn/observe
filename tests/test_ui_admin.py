@@ -79,7 +79,9 @@ def test_admin_pages_link_audit_and_nav_lists_it_for_admins_only():
 def test_viewer_is_refused_every_admin_api_the_pages_use(env):
     env.user("bob")
     assert env.login("bob").status_code == 200
-    for path in ("/api/audit", "/api/admin/keys", "/api/admin/users",
+    for path in ("/api/v2/audit", "/api/v2/admin/keys", "/api/v2/admin/users",
+                 "/api/v2/admin/config", "/api/v2/admin/settings/tiers",
+                 "/api/v2/admin/settings/storage", "/api/admin/keys", "/api/admin/users",
                  "/api/admin/infra/unlinked"):
         assert env.client.get(path).status_code == 403, path
     # The pages are static, so a viewer who opens them gets the "admin account needed" card.
@@ -89,7 +91,7 @@ def test_viewer_is_refused_every_admin_api_the_pages_use(env):
 
 
 def test_unsigned_visitor_gets_no_audit_data(env):
-    r = env.client.get("/api/audit")
+    r = env.client.get("/api/v2/audit")
     assert r.status_code in (401, 403)
 
 
@@ -98,7 +100,7 @@ def test_audit_api_returns_hostile_detail_as_json_only(env):
     resp = env.login("root")
     hdr = env.csrf(resp)
     env.client.post("/api/admin/keys", json={"host": "bad host"}, headers=hdr)
-    rows = env.client.get("/api/audit", params={"limit": 500}).json()
+    rows = env.client.get("/api/v2/audit", params={"limit": 500}).json()["items"]
     assert rows and {"ts", "actor", "kind", "status", "detail"} <= set(rows[0])
     assert HOSTILE not in env.client.get("/audit").text
 

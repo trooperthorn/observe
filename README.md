@@ -661,7 +661,7 @@ hours in all (`server.session_idle_s`, `session_absolute_s`). Set
 network. An account locks for 15 minutes after 5 failures, and logins are
 limited per peer address. Routes that change state need the session's CSRF
 token in an `X-CSRF-Token` header (`GET /api/session` returns it), and admin
-routes (everything under `/api/admin/` and `GET /api/audit`) also need an admin
+routes (everything under `/api/admin/` and `GET /api/v2/audit`) also need an admin
 user. The optional basic auth is kept for `/metrics` and the page shells and is never
 accepted for admin routes or for the `/api/v2` read API. A session or a read token opens the
 read API. No action that changes a host exists yet.
@@ -682,7 +682,7 @@ user creation, key creation and revocation, and rejected ingest. When an action
 fails partway, such as a refused user, a login that cannot create a session, a
 failed key action or a batch the store could not write, a separate `*_failed`
 or `*_error` row says so. Passwords, tokens and keys are never written, paths
-are sanitized, and `GET /api/audit` (admin session only; parameters `limit`,
+are sanitized, and `GET /api/v2/audit` (admin session only; parameters `limit`,
 `kind` and `before`) returns the rows newest first. The retention page at `/admin/retention` (Admin menu, admins only) edits the global and per-metric retention settings and shows the last compaction run with its row counts and any error, and the storage backend name but never the DSN. The audit page at `/audit` (Admin menu,
 admin only) shows the newest 500 rows in a sortable table with filters for actor, kind, status
 (OK, Refused, Failed) and time range, and pages of 25 or 100.
@@ -750,14 +750,14 @@ map is kept in `map_nodes`, `map_edges` and `port_current` at write time. A swit
 monitor by chassis MAC, management address or sysName, and a port to an SNMP interface monitor
 or a UniFi device port. Matching never creates a monitor, and an ambiguous match is left for
 an admin. Switches that match nothing are listed at `GET /api/admin/infra/unlinked` and an
-admin links one with `POST /api/admin/infra/link` (audited). `GET /api/infra/findings` lists
+admin links one with `POST /api/admin/infra/link` (audited). `GET /api/v2/findings` lists
 conflicts between field results and live state: speed above live, VLAN mismatch, PoE verified
 but no power, and re-patched. It also lists field changes between the last two reports of a
 port: speed drop, new cable fault, length change, PoE drop, VLAN change, DHCP fail and a worse
 cable verdict. Findings are computed on request, are shown on the dashboard, port page and map
 only, and never send alerts.
 
-`GET /api/infra/map` returns nodes and edges with live state from the matched monitors and
+`GET /api/v2/map` returns nodes and edges with live state from the matched monitors and
 can be filtered by `site` and `building`. It reads the stored map in two statements and never
 rebuilds it; the live state is refreshed by the scheduler once a minute. A link nobody has confirmed for `map.stale_days`
 (default 90) is stale, after twice that it is hidden, and a report that moves a jack or an
@@ -769,10 +769,10 @@ until an admin accepts or rejects them (`POST /api/admin/infra/depends/accept` a
 audited). An edge that would create a cycle is refused and listed.
 
 Three pages show this data and need a login. `/map` draws core, distribution, access, jacks
-and endpoints from `GET /api/infra/map`, spells out each node's state in words as well as
+and endpoints from `GET /api/v2/map`, spells out each node's state in words as well as
 colour, and filters by site and building. `/port?switch_id=...&port=...` shows one port: live
 state from its matched monitors, current properties, property history, findings and the
-matched monitors. An admin can acknowledge a finding there (`POST /api/admin/infra/findings/ack`,
+matched monitors. An admin can acknowledge a finding there (`POST /api/v2/findings/ack`,
 audited); an acknowledgement covers that finding's current message only, so a changed finding
 shows as new again, and it never sends an alert. `/admin/infra` lists the unlinked switch queue
 with a monitor choice for each, and the pending dependency proposals with Accept and Reject
@@ -881,8 +881,9 @@ names are unverified against a live console.
 
 Everything the console shows, and every script that reads Observe, uses `/api/v2`. The legacy read
 routes (`/api/monitors`, `/api/monitors/<slug>/history`, `/api/groups`, `/api/forecasts`,
-`/api/events`, `GET /api/hosts` and `GET /api/hosts/<host>`) were removed with no adapter and no
-deprecation period; use the table below. The schema is `docs/openapi-v2.json`, also served at
+`/api/events`, `GET /api/hosts` and `GET /api/hosts/<host>`, and since slice r6 `/api/infra/map`,
+`/api/infra/port`, `/api/infra/findings`, `/api/audit` and `/api/plugins`) were removed with no
+adapter and no deprecation period; use the table below. The schema is `docs/openapi-v2.json`, also served at
 `/api/v2/openapi.json`, and a test fails when the code and the file differ (regenerate with
 `python -m observe.api.schema`).
 
@@ -894,6 +895,16 @@ deprecation period; use the table below. The schema is `docs/openapi-v2.json`, a
 | `GET /api/v2/events` | monitor transitions and host events as log records, `resource`, `kind`, `event_name`, `severity_min`, `since`, `until` |
 | `GET /api/v2/metrics`, `/metrics/latest`, `/metrics/query` (and `POST`) | the catalogue, the newest points, and time series |
 | `GET /api/v2/changes?since=<cursor>&wait=25` | a long poll that says which change domains moved |
+| `GET /api/v2/map` (`site`, `building`), `/map/nodes`, `/map/edges` | the infrastructure map, and its nodes and edges as pages |
+| `GET /api/v2/ports`, `/ports/{switch_id}/{port}` | ports with their properties, findings and matched monitors |
+| `GET /api/v2/findings`, `POST /api/v2/findings/ack` | field findings, and an admin's acknowledgement (CSRF header, audited) |
+| `GET /api/v2/session`, `/plugins`, `/resources`, `/resources/{id}` | the caller and role, the loaded plugins with their resources and navigation, and the raw resources |
+| `GET /api/v2/ha/instances`, `/ha/instances/{name}` | hosts that report Home Assistant data, with supervisor, integration, repair and backup sections |
+| `GET /api/v2/unifi/devices`, `/unifi/clients`, `/unifi/cameras` | the UniFi plugin's devices, clients (`site`, `connected`, `q`) and Protect cameras |
+| `GET /api/v2/pockethernet/reports`, `/reports/{source}/{report_id}`, `/jacks/{key}` | the Pockethernet plugin's field reports and jacks |
+| `GET /api/v2/audit`, `/admin/keys`, `/admin/users`, `/admin/config` | admin only: the audit log, keys by prefix, users, and the effective configuration with secrets shown only as set or not set |
+| `GET /api/v2/admin/settings/tiers`, `/retention`, `/recheck`, `/rules`, `/storage` | admin only: the polling, retention, re-check and rule settings, and the storage backend status (backend, TimescaleDB, last compaction and rollup runs) |
+| `GET /api/v2/control/commands`, `/control/capabilities` | admin only: the control plugin's signed command history, and what a host can be asked to do |
 
 Credentials. A console login (cookie) reads as `admin` or `viewer`. A script uses a read token: an
 admin creates one with `POST /api/admin/keys` and `{"host": "<label>", "scope": "wpr", "role":

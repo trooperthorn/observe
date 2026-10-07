@@ -396,3 +396,65 @@ def test_new_control_files_use_lf_and_no_em_dashes_or_model_names():
         text = raw.decode("utf-8")
         assert b"\r" not in raw and "\u2014" not in text, path
         assert not any(w in text.lower() for w in ("claude", "opus", "sonnet", "haiku")), path
+
+
+# ---- /api/v2/control: admin only, and a read never writes --------------------------------
+
+def _admin(env, name="root", admin=True):
+    run(auth.create_user(env.store, env.cfg, name, PASSWORD, admin, now=env.clock()))
+    r = env.client.post("/api/login", json={"username": name, "password": PASSWORD})
+    assert r.status_code == 200
+
+
+def test_v2_control_commands_are_admin_only(env):
+    env.enqueue()
+    for path in ("/api/v2/control/commands", "/api/v2/control/capabilities?host=nas01"):
+        assert env.client.get(path).status_code == 401
+    _admin(env, "viewer1", admin=False)
+    assert env.client.get("/api/v2/control/commands").status_code == 403
+    assert env.client.get("/api/v2/control/capabilities").status_code == 403
+    # A control key and a read token are not an admin either.
+    assert env.client.get("/api/v2/control/commands",
+                          headers=bearer(env.key())).status_code == 401
+    read, _ = run(create_key(env.store, "ops", "test", scope="wpr", role="operator"))
+    assert env.client.get("/api/v2/control/commands", headers=bearer(read)).status_code == 403
+
+
+def test_v2_expired_command_reads_as_unknown_without_writing(env):
+    cmd = env.enqueue()["command"]
+    env.clock.now = cmd["expires_at"] + 5
+    _admin(env)
+    before = env.rows("SELECT state FROM control_commands")
+    got = env.client.get("/api/v2/control/commands")
+    assert got.status_code == 200 and "etag" not in got.headers
+    [item] = got.json()["items"]
+    assert item["id"] == cmd["id"] and item["state"] == "unknown" and item["result"] is None
+    assert item["issued_at"].endswith("Z") and item["params"] == FLOOR
+    assert "signature" not in item
+    assert env.rows("SELECT state FROM control_commands") == before == [("requested",)]
+    assert env.audit("control_expired") == []
+
+
+def test_v2_commands_page_newest_first_filter_host_and_show_the_result(env):
+    env.enqueue("nas01")
+    env.clock.now += 10
+    second = env.enqueue("nas02")["command"]
+    env.clock.now += 10
+    third = env.enqueue("nas01", "service.restart", {"name": "x"})["command"]
+    env.answer(env.key(), {"id": third["id"], "state": "done", "output": "ok"})
+    _admin(env, "root2")
+    first = env.client.get("/api/v2/control/commands?limit=2").json()
+    assert [c["id"] for c in first["items"]] == [third["id"], second["id"]]
+    assert first["items"][0]["result"]["state"] == "done"
+    assert first["items"][0]["result"]["output"] == "ok" and first["items"][1]["result"] is None
+    rest = env.client.get("/api/v2/control/commands?limit=2&cursor=" + first["next_cursor"]).json()
+    assert len(rest["items"]) == 1 and rest["next_cursor"] is None
+    only = env.client.get("/api/v2/control/commands?host=nas02").json()["items"]
+    assert [c["id"] for c in only] == [second["id"]]
+
+
+def test_v2_capabilities_lists_actions_for_an_unknown_and_a_known_host(env):
+    _admin(env)
+    got = env.client.get("/api/v2/control/capabilities?host=nobody").json()
+    assert got["known"] is False and "fan.set_floor" in got["actions"]
+    assert got["host"] == "nobody"

@@ -36,7 +36,7 @@ function findingsBlock(d) {
         const b = ev.currentTarget;
         b.disabled = true;
         try {
-          await api("POST", "/api/admin/infra/findings/ack", csrf,
+          await api("POST", "/api/v2/findings/ack", csrf,
             { switch_id: d.switch_id, port_key: d.port_key, kind: f.kind });
           toast("Finding acknowledged.", "up");
         } catch (e) { toast(e.message, "down"); }
@@ -102,8 +102,7 @@ function render(d) {
 
 async function refresh() {
   try {
-    const q = new URLSearchParams({ switch_id: switchId, port: portName });
-    const r = await fetch(`/api/infra/port?${q}`);
+    const r = await fetch(`/api/v2/ports/${encodeURIComponent(switchId)}/${encodeURIComponent(portName)}`);
     if (r.status === 401) { location.assign("/login"); return; }
     if (r.status === 404) {
       const c = el("section", "card notice");

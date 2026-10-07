@@ -125,8 +125,9 @@ def test_the_devices_page_marks_data_stale_after_twice_the_interval(env):
 
 def test_navigation_entry_sits_under_network(env):
     env.login()
-    body = env.client.get("/api/plugins").json()
-    assert {"plugin": "unifi", "label": "UniFi", "path": PAGE, "workspace": "network"} in body["nav"]
+    body = env.client.get("/api/v2/plugins").json()
+    mine = next(p for p in body["items"] if p["name"] == "unifi")
+    assert {"label": "UniFi", "path": PAGE, "workspace": "network"} in mine["nav"]
 
 
 def test_routes_return_devices_clients_and_cameras(env):
@@ -218,3 +219,68 @@ def test_window_and_filter_rules_in_node():
     assert got["f"] == 11 and got["k"] == 250 and got["s"] == 100
     assert got["st"] == 1  # a connected row flagged stale is not counted as connected
     assert got["both"] == 199 and got["a"] == "SW port 3" and got["b"] == "AP"
+
+
+# ---- the same data on /api/v2/unifi -------------------------------------------------------
+
+def test_v2_resources_are_mounted_by_the_plugin_and_need_a_credential(env):
+    for path in ("/devices", "/clients", "/cameras", "/devices/a/b"):
+        r = env.client.get("/api/v2/unifi" + path)
+        assert r.status_code == 401, path
+    env.login()
+    ops = {r.operation_id for r in env.client.app.state.v2_runtime.resources if r.owner == "unifi"}
+    assert ops == {"unifi_devices", "unifi_device", "unifi_clients", "unifi_cameras"}
+
+
+def test_v2_devices_page_by_cursor_and_one_device_by_id(env):
+    env.login()
+    first = env.client.get("/api/v2/unifi/devices?limit=1").json()
+    assert len(first["items"]) == 1 and first["next_cursor"]
+    rest = env.client.get(f"/api/v2/unifi/devices?limit=1&cursor={first['next_cursor']}").json()
+    assert len(rest["items"]) == 1 and rest["next_cursor"] is None
+    both = first["items"] + rest["items"]
+    assert both[0]["device_id"] != both[1]["device_id"]
+    assert both[0]["last_seen"].endswith("Z") and isinstance(both[0]["firmware_updatable"],
+                                                             (bool, type(None)))
+    one = both[0]
+    got = env.client.get(f"/api/v2/unifi/devices/{one['site_id']}/{one['device_id']}")
+    assert got.status_code == 200 and got.json() == one
+    assert env.client.get("/api/v2/unifi/devices/nope/none").status_code == 404
+    only = env.client.get(f"/api/v2/unifi/devices?site={one['site_id']}").json()["items"]
+    assert {d["site_id"] for d in only} == {one["site_id"]}
+    assert env.client.get("/api/v2/unifi/devices?site=nowhere").json()["items"] == []
+    assert env.client.get("/api/v2/unifi/devices?limit=9999").status_code == 400
+
+
+def test_v2_clients_filter_by_connection_and_text_and_keep_hostile_text_as_data(env):
+    env.login()
+    every = env.client.get("/api/v2/unifi/clients?limit=500").json()["items"]
+    assert len(every) == 7
+    on = env.client.get("/api/v2/unifi/clients?connected=true").json()["items"]
+    off = env.client.get("/api/v2/unifi/clients?connected=false").json()["items"]
+    assert on and off and len(on) + len(off) == len(every)
+    assert all(c["connected"] is True for c in on) and all(c["connected"] is not True for c in off)
+    hit = env.client.get("/api/v2/unifi/clients", params={"q": "<img"}).json()["items"]
+    assert [c["name"] for c in hit] == [HOSTILE]
+    assert env.client.get("/api/v2/unifi/clients", params={"q": "%"}).json()["items"] == []
+    paged: list[str] = []
+    cursor = None
+    while True:
+        url = "/api/v2/unifi/clients?limit=3" + (f"&cursor={cursor}" if cursor else "")
+        page = env.client.get(url).json()
+        paged += [c["client_id"] for c in page["items"]]
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+    assert paged == [c["client_id"] for c in every]
+    r = env.client.get("/api/v2/unifi/clients?limit=1")
+    assert r.headers["content-type"].startswith("application/json")
+    assert env.client.get("/api/v2/unifi/clients?limit=1",
+                          headers={"If-None-Match": r.headers["etag"]}).status_code == 304
+
+
+def test_v2_cameras(env):
+    env.login()
+    cams = env.client.get("/api/v2/unifi/cameras").json()["items"]
+    assert [c["camera_id"] for c in cams] == ["cam-1"]
+    assert cams[0]["recording"] is True and cams[0]["name"] == HOSTILE

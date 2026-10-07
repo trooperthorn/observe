@@ -126,6 +126,12 @@ export function toLogin() {
   window.location.assign(`/login?next=${encodeURIComponent(back)}`);
 }
 
+// The navigation entries of every plugin, from GET /api/v2/plugins.
+function pluginNav(plugins) {
+  if (!plugins || !Array.isArray(plugins.items)) return null;
+  return plugins.items.flatMap((p) => p.nav.map((n) => ({ plugin: p.name, ...n })));
+}
+
 export async function mountShell() {
   const header = document.getElementById("shell-header");
   const nav = document.getElementById("shell-nav");
@@ -134,14 +140,14 @@ export async function mountShell() {
   header.prepend(brand());
   header.append(themeButton());
   renderNav(nav, visibleItems(cachedAdmin(), null), window.location.pathname);
-  const [session, plugins] = await Promise.all([getJson("/api/session"), getJson("/api/plugins")]);
+  const [session, plugins] = await Promise.all([getJson("/api/session"), getJson("/api/v2/plugins")]);
   if (session && session.expired) { toLogin(); return; }
   const isAdmin = !!(session && session.is_admin);
   rememberAdmin(isAdmin);
   if (session && typeof session.username === "string") {
     header.append(el("span", "shell-user", session.username));
   }
-  renderNav(nav, visibleItems(isAdmin, plugins && plugins.nav), window.location.pathname);
+  renderNav(nav, visibleItems(isAdmin, pluginNav(plugins)), window.location.pathname);
 }
 
 mountShell();

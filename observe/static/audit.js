@@ -1,7 +1,8 @@
 // Audit page: the admin-only audit log with filters. Every string came from the database, so
-// it is written with textContent only. The API is GET /api/audit, unchanged.
+// it is written with textContent only. The API is GET /api/v2/audit.
 import { el } from "/static/js/dom.js";
 import { api, whoami } from "/static/js/api.js";
+import { seconds } from "/static/js/v2.js";
 import { statusChip, monoTag } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { notAdmin, showError } from "/static/js/admin-ui.js";
@@ -75,7 +76,7 @@ function statusToggles() {
   statusToggles();
   for (const id of ["f-actor", "f-kind", "f-range"]) document.getElementById(id).addEventListener("input", draw);
   try {
-    rows = await api("GET", "/api/audit?limit=500");
+    rows = (await api("GET", "/api/v2/audit?limit=500")).items.map((a) => ({ ...a, ts: seconds(a.ts) }));
     fillKinds();
     draw();
   } catch (e) {

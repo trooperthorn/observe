@@ -92,6 +92,7 @@ These routes need an admin session, and every POST needs the CSRF token (`X-CSRF
 | `POST /api/plugins/control/commands/{id}/cancel` | admin session and CSRF | Cancel a requested or scheduled command |
 | `GET /api/plugins/control/commands?host=` | admin session | Command history with state and result |
 | `GET /api/plugins/control/capabilities?host=` | admin session | Valid actions and reported fan headers |
+| `GET /api/v2/control/commands`, `GET /api/v2/control/capabilities?host=` | admin session | The same two reads on the v2 API. The list never writes: a command that expired without an answer is shown as `unknown` from the clock, and the legacy list also stores that state |
 
 ## Setup
 

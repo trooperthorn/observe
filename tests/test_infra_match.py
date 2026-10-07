@@ -284,10 +284,10 @@ async def test_findings_endpoint_shows_conflicts_and_calls_no_alert_target(web):
     await seed_field(web.infra, sid, "Gi1/0/5", link_speed_mbps=1000, vlan=20)
     st = web.sched.states["edge-gi5"]
     st.observe(CheckResult.ok("up", detail={"speed_mbps": 100}))
-    assert web.client.get("/api/infra/findings").status_code == 401
+    assert web.client.get("/api/v2/findings").status_code == 401
     await web.login("bob", admin=False)
-    body = web.client.get("/api/infra/findings").json()
-    assert [f["kind"] for f in body["findings"]] == ["speed_above_live"]
+    body = web.client.get("/api/v2/findings").json()
+    assert [f["kind"] for f in body["items"]] == ["speed_above_live"]
     assert web.calls == []
 
 

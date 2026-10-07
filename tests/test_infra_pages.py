@@ -61,7 +61,7 @@ class Web:
         self.sched.states["edge-gi5"].observe(CheckResult.ok("up", detail={"speed_mbps": 100}))
 
     def port(self, **extra: str) -> dict[str, Any]:
-        r = self.client.get("/api/infra/port", params={"switch_id": SID, "port": "Gi1/0/5"})
+        r = self.client.get(f"/api/v2/ports/{SID}/Gi1/0/5")
         assert r.status_code == 200, r.text
         return r.json()
 
@@ -86,10 +86,10 @@ def test_pages_are_served_with_the_csp_and_hold_no_data(web):
 
 async def test_data_behind_every_page_needs_a_login(web):
     await web.seed()
-    for path in ("/api/infra/map", "/api/infra/port?switch_id=x&port=y",
-                 "/api/infra/dependencies"):
-        r = web.client.get(path)
-        assert r.status_code == 401 and "www-authenticate" not in r.headers
+    r = web.client.get("/api/infra/dependencies")
+    assert r.status_code == 401 and "www-authenticate" not in r.headers
+    for path in ("/api/v2/map", "/api/v2/ports/x/y", "/api/v2/ports", "/api/v2/findings"):
+        assert web.client.get(path).status_code == 401, path
     for path in ("/api/admin/infra/unlinked",):
         assert web.client.get(path).status_code == 401
     # Each page script sends a visitor without a session to the login page.
@@ -98,10 +98,9 @@ async def test_data_behind_every_page_needs_a_login(web):
             STATIC / "js" / "api.js").read_text(encoding="utf-8")
         assert 'assign("/login")' in js
     await web.login("bob", admin=False)
-    assert web.client.get("/api/infra/map").status_code == 200
+    assert web.client.get("/api/v2/map").status_code == 200
     assert web.port()["port_key"] == "gi1/0/5"
-    assert web.client.get("/api/infra/port", params={"switch_id": SID,
-                                                     "port": "gi9"}).status_code == 404
+    assert web.client.get(f"/api/v2/ports/{SID}/gi9").status_code == 404
     assert web.client.get("/api/admin/infra/unlinked").status_code == 403
 
 
@@ -142,16 +141,16 @@ async def test_port_view_has_state_properties_history_findings_and_monitors(web)
 async def test_acknowledge_needs_admin_and_csrf_and_is_audited(web):
     await web.seed()
     pay = {"switch_id": SID, "port_key": "gi1/0/5", "kind": "speed_above_live"}
-    url = "/api/admin/infra/findings/ack"
+    url = "/api/v2/findings/ack"
     assert web.client.post(url, json=pay).status_code == 401
     csrf = await web.login("bob", admin=False)
     assert web.client.post(url, json=pay, headers=csrf).status_code == 403
     web.client.cookies.clear()
     csrf = await web.login("root", admin=True)
     assert web.client.post(url, json=pay).status_code == 403  # no CSRF token
-    assert web.client.post(url, json={"kind": "x"}, headers=csrf).status_code == 422
+    assert web.client.post(url, json={"kind": "x"}, headers=csrf).status_code == 400
     assert web.client.post(url, json={**pay, "kind": "vlan_mismatch"},
-                           headers=csrf).status_code == 422
+                           headers=csrf).status_code == 409
     assert web.client.post(url, json=pay, headers=csrf).status_code == 200
     f = web.port()["findings"][0]
     assert f["acknowledged"] is True and f["acked_by"] == "root"
@@ -165,7 +164,7 @@ async def test_a_changed_finding_is_new_again_after_an_acknowledgement(web):
     await web.seed()
     csrf = await web.login("root", admin=True)
     pay = {"switch_id": SID, "port_key": "gi1/0/5", "kind": "speed_above_live"}
-    assert web.client.post("/api/admin/infra/findings/ack", json=pay,
+    assert web.client.post("/api/v2/findings/ack", json=pay,
                            headers=csrf).status_code == 200
     await web.infra.append_property(SID, "Gi1/0/5", "link_speed_mbps", 10000, source="field",
                                     observed_at=20.0, now=21.0)
@@ -202,10 +201,10 @@ async def test_hostile_strings_reach_the_pages_only_as_json_data(web):
     d = web.port()
     assert d["switch"]["name"] == HOSTILE
     assert d["properties"]["custom.note"]["value"] == HOSTILE
-    r = web.client.get("/api/infra/port", params={"switch_id": SID, "port": "Gi1/0/5"})
+    r = web.client.get(f"/api/v2/ports/{SID}/Gi1/0/5")
     assert r.headers["content-type"].startswith("application/json")
     assert r.headers["x-content-type-options"] == "nosniff"
-    mapped = web.client.get("/api/infra/map")
+    mapped = web.client.get("/api/v2/map")
     assert mapped.headers["content-type"].startswith("application/json")
     assert any(n["label"] == HOSTILE for n in mapped.json()["nodes"])
     # The pages themselves are static and never contain stored strings.

@@ -168,7 +168,7 @@ def test_no_secret_reaches_the_log(env):
                     headers={"Authorization": f"Bearer {key}x"})
     assert bad.status_code == 401
     dump = json.dumps(env.rows("SELECT * FROM audit"))
-    shown = json.dumps(env.client.get("/api/audit").json())
+    shown = json.dumps(env.client.get("/api/v2/audit").json())
     for secret in (PASSWORD, "not the password", "Sup3r secret pw!", token,
                    r.json()["csrf"], key, key.split("_", 2)[2]):
         assert secret not in dump and secret not in shown
@@ -192,28 +192,30 @@ def test_admin_reads_the_log_newest_first_with_filters(env):
     env.login("root")
     for _ in range(3):
         asyncio.run(audit.record(env.store, "probe", actor="x"))
-    rows = env.client.get("/api/audit").json()
+    rows = env.client.get("/api/v2/audit").json()["items"]
     assert rows[0]["id"] > rows[-1]["id"] and rows[-1]["kind"] == "login_ok"
     assert set(rows[0]) == {"id", "ts", "actor", "kind", "method", "path", "status", "remote",
                             "detail"}
-    only = env.client.get("/api/audit", params={"kind": "probe", "limit": 2}).json()
-    assert [r["kind"] for r in only] == ["probe", "probe"]
-    older = env.client.get("/api/audit", params={"kind": "probe",
-                                                 "before": only[-1]["id"]}).json()
-    assert len(older) == 1 and older[0]["id"] < only[-1]["id"]
-    assert env.client.get("/api/audit", params={"limit": 0}).status_code == 200
-    assert len(env.client.get("/api/audit", params={"limit": 100000}).json()) <= audit.MAX_LIST
-    assert env.client.get("/api/audit", params={"limit": "x"}).status_code == 422
+    assert rows[0]["ts"].endswith("Z")
+    first = env.client.get("/api/v2/audit", params={"kind": "probe", "limit": 2}).json()
+    assert [r["kind"] for r in first["items"]] == ["probe", "probe"] and first["next_cursor"]
+    older = env.client.get("/api/v2/audit", params={"kind": "probe", "limit": 2,
+                                                    "cursor": first["next_cursor"]}).json()
+    assert len(older["items"]) == 1 and older["items"][0]["id"] < first["items"][-1]["id"]
+    assert older["next_cursor"] is None
+    assert env.client.get("/api/v2/audit", params={"limit": 0}).status_code == 400
+    assert env.client.get("/api/v2/audit", params={"limit": 100000}).status_code == 400
+    assert env.client.get("/api/v2/audit", params={"actor": "x"}).json()["items"]
 
 
 def test_non_admin_anonymous_and_basic_auth_are_denied(env):
     env.user("alice")
-    assert env.client.get("/api/audit").status_code == 401
-    assert env.client.get("/api/audit", headers=BASIC).status_code == 401
+    assert env.client.get("/api/v2/audit").status_code == 401
+    assert env.client.get("/api/v2/audit", headers=BASIC).status_code == 401
     env.login("alice")
-    denied = env.client.get("/api/audit")
+    denied = env.client.get("/api/v2/audit")
     assert denied.status_code == 403 and "kind" not in denied.text
-    assert env.client.get("/api/audit", headers=BASIC).status_code == 403
+    assert env.client.get("/api/v2/audit", headers=BASIC).status_code == 403
 
 
 

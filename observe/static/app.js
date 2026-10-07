@@ -297,9 +297,8 @@ async function renderEvents() {
 }
 
 async function renderFindings() {
-  const r = await fetch("/api/infra/findings");
-  if (!r.ok) return;
-  const list = (await r.json()).findings;
+  let list;
+  try { list = (await getJson("/api/v2/findings")).items; } catch (_) { return; }
   document.getElementById("findings-panel").hidden = list.length === 0;
   document.getElementById("findings").replaceChildren(...list.map((f) => {
     const li = el("li", `finding ${f.severity}`);

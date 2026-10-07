@@ -24,6 +24,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -159,6 +160,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     runtime = apimod.ApiRuntime(config, store, scheduler=scheduler, alerter=alerter,
                                 plugins=plugins, auth_clock=auth_clock, clock=ingest_clock)
     v2, v2_registry = apimod.build(runtime)
+    app.state.v2_runtime = runtime
     for loaded in plugins.plugins:
         register_api = getattr(loaded.plugin, "register_api", None)
         if callable(register_api):
@@ -402,13 +404,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         await layout.reset(store, sess.user_id, view)
         return JSONResponse({"view": view, "order": [], "hidden": [], "saved": False})
 
-    @app.get("/api/plugins", include_in_schema=False)
-    async def plugin_list(sess: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
-        """Loaded plugins and the navigation entries this user may see."""
-        return {"plugins": [{"name": p.name, "version": p.plugin.version}
-                            for p in plugins.plugins],
-                "nav": plugins.nav(sess.is_admin)}
-
     @app.get("/api/admin/users", include_in_schema=False)
     async def admin_users(_: authmod.Session = Depends(guards.admin)) -> list[dict[str, Any]]:
         return await authmod.list_users(store)
@@ -604,13 +599,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         scheduler.hooks.append(prune_plugins)
         scheduler.add_collectors(plugins)
 
-    @app.get("/api/infra/map", include_in_schema=False)
-    async def infra_map(site: str | None = None, building: str | None = None,
-                        _: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
-        """Nodes and edges with live state, for a site and building when given. Read from the
-        map tables; the infrastructure writes and the 60 second hook keep them current."""
-        return await mapper.map_data(site, building)
-
     @app.get("/api/infra/dependencies", include_in_schema=False)
     async def infra_dependencies(_: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
         """Applied, pending, refused and rejected dependency edges, computed now."""
@@ -669,42 +657,10 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         await mapper.rebuild()  # the switch now shows its monitor
         return JSONResponse({"ok": True})
 
-    @app.get("/api/infra/findings", include_in_schema=False)
-    async def infra_findings(_: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
-        """Field conflicts, computed now. Dashboard only; nothing here raises an alert."""
-        return {"findings": [f.as_dict() for f in await matcher.findings(live_port)]}
-
     ports = PortPages(infra, matcher, mapper, map_clock)
-
-    @app.get("/api/infra/port", include_in_schema=False)
-    async def infra_port(switch_id: str, port: str,
-                         _: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
-        """One port: live state, properties and history, findings and matched monitors."""
-        view = await ports.port_view(switch_id, port, live_port)
-        if view is None:
-            raise HTTPException(404, "unknown port")
-        return view
-
-    @app.post("/api/admin/infra/findings/ack", include_in_schema=False)
-    async def admin_finding_ack(
-            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
-        try:
-            body = await request.json()
-        except ValueError:
-            body = None
-        fields = [body.get(k) if isinstance(body, dict) else None
-                  for k in ("switch_id", "port_key", "kind")]
-        if not all(isinstance(f, str) for f in fields):
-            return JSONResponse({"detail": "switch_id, port_key and kind are required"},
-                                status_code=422)
-        remote = request.client.host if request.client else ""
-        try:
-            await ports.acknowledge(fields[0], fields[1], fields[2], live_port, sess.username,
-                                    remote)
-        except InfraError as err:
-            return JSONResponse({"detail": str(err)}, status_code=422)
-        await mapper.rebuild()  # an acknowledged finding no longer turns the port to warning
-        return JSONResponse({"ok": True})
+    # The v2 map, port and finding resources read through these services.
+    runtime.infra = SimpleNamespace(mapper=mapper, matcher=matcher, ports=ports,
+                                    live_port=live_port)
 
     @app.get("/map", include_in_schema=False)
     async def map_page() -> FileResponse:
@@ -735,12 +691,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     async def audit_page() -> FileResponse:
         # The page holds no data; audit.js needs an admin session for everything it shows.
         return FileResponse(STATIC / "audit.html")
-
-    @app.get("/api/audit", include_in_schema=False)
-    async def audit_log(limit: int = 100, kind: str | None = None, before: int | None = None,
-                        _: authmod.Session = Depends(guards.admin)) -> list[dict[str, Any]]:
-        """Admin only, session only: basic auth never reaches this route."""
-        return await audit.list_rows(store, limit, kind, before)
 
     pushed = {m.host: m for m in scheduler.monitors if m.type == "pushed_host"}
     # The address install commands carry. Never the request's Host header, which the sender

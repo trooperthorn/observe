@@ -104,7 +104,7 @@ class PortPages:
         except ValueError:
             key = ""
         detail = {"switch_id": sid[:140], "port_key": key[:140], "kind": kind[:64]}
-        path = "/api/admin/infra/findings/ack"
+        path = "/api/v2/findings/ack"
         match = None
         if key:
             match = next((f for f in await self._findings(sid, key, live)

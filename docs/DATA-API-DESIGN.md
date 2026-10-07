@@ -563,7 +563,7 @@ Token bucket per principal (session user or token) and per peer for anonymous: 2
 ### 4.9 Versioning and deprecation of /api
 
 * `/api/v2` is stable: additive changes only (new fields, new resources, new optional parameters). A breaking change means `/api/v3`.
-* *Superseded by section 11 and built in slice r5-api-v2-core:* the legacy `/api/*` read routes for monitors, groups, forecasts, events, monitor history and hosts were removed outright, with no adapter, no `Deprecation` or `Sunset` headers and no window. The remaining reads (map, ports, findings, audit, plugin list, session) keep their routes until slices O-7 and O-9 move them.
+* *Superseded by section 11 and built in slices r5-api-v2-core and r6-api-v2-resources:* the legacy `/api/*` read routes for monitors, groups, forecasts, events, monitor history and hosts were removed outright, with no adapter, no `Deprecation` or `Sunset` headers and no window. Slice r6 did the same for the map, ports, findings, audit and plugin list reads (`/api/infra/map`, `/api/infra/port`, `/api/infra/findings`, `/api/audit`, `/api/plugins`) and for the finding acknowledgement route. The reads left on legacy routes (the user and key lists the admin page draws, the session read, the settings reads next to their `PUT`) move with the admin pages in slice O-9.
 * Ingest routes (`/internal/v1/ingest`, `/api/ingest`, `/api/v1/field-reports`) and the control API (`/api/v1/control/*`) are not part of v2 and follow the producer window in section 7.
 
 ### 4.10 Plugin API resources
@@ -625,12 +625,43 @@ What differs from the text above, and what is left:
 * **Not done.** A query uses one level for the whole range instead of the finest level that covers
   each bucket; `agg=rate` is refused because no sum series are stored yet, and `agg=last` works
   only on the raw level, because the summary levels keep no last value; a read token cannot be
-  limited to resource kinds; `PATCH` on monitors and the operator-only resources, `/session`,
-  `/resources`, `/plugins`, the map, ports, findings, audit and admin resources and the plugin
-  resources of UniFi, Home Assistant, Pockethernet and control belong to slices O-7 and O-9; the
+  limited to resource kinds; `PATCH` on monitors and the operator-only resources belong to slice O-9 (the
+  session, resource, plugin, map, port, finding, audit and admin resources and the plugin
+  resources were built in slice r6, section 4.12); the
   JavaScript client of section 5 (`api.js` with ETag caching, the poller and `/changes`) is O-9, and
   the pages meanwhile use `static/js/v2.js`, which only fetches and follows cursors; plugin
   resources are not part of the committed schema, because it is built from the core alone.
+
+### 4.12 Built in slice r6-api-v2-resources (O-7)
+
+The map, port, finding, audit, session, admin, settings, resource and plugin resources, and the
+UniFi, Pockethernet and control plugin resources. Nothing here changes a section above; what
+differs or is left is listed after the table.
+
+| Path | Role | Notes |
+|---|---|---|
+| `GET /map`, `/map/nodes`, `/map/edges` | session or token | Read from `map_nodes` and `map_edges`. `/map` keeps the `site` and `building` filters. Nodes and edges page by id. |
+| `GET /ports`, `GET /ports/{switch_id}/{port}` | session or token | The list reads `port_current`. One port returns the live state, properties, history, findings and matched monitors. |
+| `GET /findings`, `POST /findings/ack` | viewer to read, admin to acknowledge | Findings are computed from the field properties and the live monitor state, so the ETag includes the scheduler fingerprint. The acknowledgement is audited, needs the CSRF header and rebuilds the map. |
+| `GET /session` | any caller | The user, the kind of caller, the role and, for a session, the CSRF token. |
+| `GET /plugins` | session or token | Each plugin with its resources, navigation entries and pages. An admin-only entry is shown to an admin only. |
+| `GET /audit` | admin | Newest first, filters `kind` and `actor`, cursor paging. |
+| `GET /admin/keys`, `/admin/users` | admin | A key is shown by its public prefix. No hash, secret or lockout counter is selected. No ETag. |
+| `GET /admin/config` | admin | The effective configuration. A secret is reported as set or not set. The database connection string is never shown. |
+| `GET /admin/settings/{tiers,retention,recheck,rules,storage}` | admin | The settings documents of sections 10.1 to 10.4, and the backend status of section 12: the backend, whether TimescaleDB runs the rollups, the last run of each compaction and rollup level, and the change counters. |
+| `GET /resources`, `/resources/{rid}` | session or token | Resources by `kind`, `name`, `seen_since` and `attr.<key>=<value>`, and one resource with a summary of its series. |
+| `GET /ha/instances`, `/ha/instances/{name}` | session or token | Hosts that report Home Assistant data, with the supervisor, container, integration, repair and backup sections of the host view. |
+| `GET /unifi/devices`, `/unifi/devices/{site_id}/{device_id}`, `/unifi/clients`, `/unifi/cameras` | session or token | Registered by the UniFi plugin through `register_api`. Clients filter by `site`, `connected` and `q`. |
+| `GET /pockethernet/reports`, `/pockethernet/reports/{source}/{report_id}`, `/pockethernet/jacks/{key}` | session or token | Registered by the Pockethernet plugin. No ETag, because a stored report that is not yet derived changes no change domain. |
+| `GET /control/commands`, `/control/capabilities` | admin | Registered by the control plugin. A read never writes: a command that expired without an answer is shown as `unknown` from the clock. |
+
+What differs from the text above, and what is left:
+
+* **Prefixes.** A plugin may mount only under its own name, so the Pockethernet reports are under `/pockethernet` (not `/field-reports`) and the control resources under `/control`. There is no Home Assistant plugin, so `/ha` is a core resource built from the host view.
+* **Finding acknowledgement** needs the admin role, as the route it replaces did, and not the operator role of section 4.7, because an acknowledgement is a change made in the name of a person and a read token has none.
+* **Settings are read only on v2.** The `PUT` routes of the tiers, retention and re-check settings stay on `/api/admin/*` beside their pages, and the rules have no write route yet. A write there bumps the `admin` domain, so the ETag of a settings document changes with it.
+* **Not done here:** `/admin/sessions`, `/admin/exporter` and `/admin/maintenance/*` (the exporter and the maintenance jobs do not exist yet), `PATCH` on monitors and host settings, writes to keys and users through v2, `/hosts/{name}/settings`, and the dependency and link routes of the infrastructure admin page. The admin page still reads its key and user lists from `/api/admin/keys` and `/api/admin/users`. The legacy plugin routes under `/api/plugins/<name>/` that the UniFi, Pockethernet and control pages read stay until those pages move in slice O-9.
+* **Schema.** The committed schema lists the core resources only, as before. The plugin resources are in the live schema of a running Observe that loaded the plugins.
 
 ---
 

@@ -1,5 +1,5 @@
 // Infrastructure map: core, distribution, access, jacks and endpoints, drawn from
-// /api/infra/map. Every node shows its state in words, so colour is never the only signal.
+// /api/v2/map. Every node shows its state in words, so colour is never the only signal.
 import { el, stateText, portHref, api, STATE_WORDS } from "/static/infra-common.js";
 import { svg as svgEl } from "/static/js/dom.js";
 import "/static/js/theme.js";
@@ -275,7 +275,7 @@ function summarize(nodes) {
 
 async function refresh() {
   try {
-    const all = await api("GET", "/api/infra/map");
+    const all = await api("GET", "/api/v2/map");
     fillOptions(all);
     const site = siteSel.value, building = buildingSel.value;
     let data = all;
@@ -283,7 +283,7 @@ async function refresh() {
       const q = new URLSearchParams();
       if (site) q.set("site", site);
       if (building) q.set("building", building);
-      data = await api("GET", `/api/infra/map?${q}`);
+      data = await api("GET", `/api/v2/map?${q}`);
     }
     lastData = data;
     msg.textContent = "";

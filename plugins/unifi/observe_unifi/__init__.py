@@ -42,6 +42,7 @@ from .classic import (ClassicClient, ClassicForbidden, parse_devices, parse_offl
 from .clients import (device_index, enrich, offline_clients, parse_active_clients,
                       parse_camera, parse_client, save_cameras, save_clients)
 from .feed import feed_classic, feed_integration
+from .api import register as register_resources
 from .client import AuthRejected, IntegrationClient, UniFiError
 from .pages import PAGE_PATH, build_pages_router, page_files
 from .records import MIGRATIONS, parse_device, prune_unseen
@@ -183,6 +184,10 @@ class UniFiPlugin(PluginBase):
 
     def migrations(self) -> list[Migration]:
         return list(MIGRATIONS)
+
+    def register_api(self, api: Any) -> None:
+        """The /api/v2/unifi resources (docs/DATA-API-DESIGN.md section 4.10)."""
+        register_resources(api)
 
     def routers(self) -> list[PluginRouter]:
         return [PluginRouter(build_pages_router(self))]  # a login session, enforced by the core

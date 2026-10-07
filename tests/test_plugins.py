@@ -234,12 +234,18 @@ def test_plugin_routes_are_rate_limited(env):
 
 
 def test_plugin_list_and_nav_need_a_session_and_respect_role(env):
-    assert env.client.get("/api/plugins").status_code == 401
+    assert env.client.get("/api/v2/plugins").status_code == 401
     env.user("alice")
     env.login("alice")
-    body = env.client.get("/api/plugins").json()
-    assert body["plugins"] == [{"name": "echo", "version": "1.2.3"}]
-    assert [n["label"] for n in body["nav"]] == ["Echo"]
+    body = env.client.get("/api/v2/plugins").json()
+    assert [(p["name"], p["version"]) for p in body["items"]] == [("echo", "1.2.3")]
+    assert [n["label"] for n in body["items"][0]["nav"]] == ["Echo"]
+    assert [g["path"] for g in body["items"][0]["pages"]] == ["/plugins/echo"]
+    env.client.cookies.clear()
+    env.user("root", admin=True)
+    env.login("root")
+    nav = env.client.get("/api/v2/plugins").json()["items"][0]["nav"]
+    assert [n["label"] for n in nav] == ["Echo", "Echo admin"]
 
 
 def test_core_routes_unchanged_without_plugins(tmp_path):
