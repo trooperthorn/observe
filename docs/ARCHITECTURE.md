@@ -17,41 +17,95 @@ action that changes a host is built in this phase.
 
 ## Ingest
 
-Hosts run the hostwatch agent, which pushes a JSON snapshot over HTTPS to
-Observe. The wire schema is the one hostwatch already defines in
-`hostwatch/schema.py`; Observe carries its own copy, adapted with an
-attribution comment, and never imports hostwatch. Each push carries a host
-identity, a boot identifier, an uptime, and hardware readings.
+Producers push OpenTelemetry data over HTTPS (OTLP/HTTP, docs/DATA-API-DESIGN.md section 6):
+metrics to `POST /v1/metrics` and logs to `POST /v1/logs`, at the server root, so a stock
+OpenTelemetry SDK needs only an endpoint and a header. hostwatch agents, ha_Int_soc and the
+Pockethernet app all use these two routes, and OTLP is the only push format. The hostwatch batch
+route (`POST /internal/v1/ingest` with its alias `POST /api/ingest`) and the Pockethernet report
+upload (`POST /api/v1/field-reports` with its ping) were removed in slice r7-otlp-ingest, as the
+owner decided in section 11 of the design (there is no migration path and no compatibility
+window). `POST /v1/traces` answers 404 problem details, because traces are out of scope.
 
-The ingest endpoint is a write path that does not use a login, so it is the
-most constrained one. A request must carry an ingest key. The body size is
-capped, the schema is validated, with unknown fields ignored as hostwatch ignores them, and a
-request that fails validation is dropped and counted, never stored in part.
+The code is in `observe/otlp`: `wire.py` (the protobuf decoder), `normalize.py` (from a decoded
+request to a `Batch`) and `api.py` (the two routes). `observe/ingest/api.py` keeps what the
+ingest routes share, the per-peer rate limit and the aggregated denial audit (`Guard`), and the
+`GET /internal/v1/agent-config` route.
 
-The models live in `observe/ingest/schema.py` (Batch, Sample, SourceStatus,
-Event). Field names and types match hostwatch, so a well-formed agent needs no
-change. Observe tightens them: unknown fields are ignored so a newer agent is not
-dead-lettered, an unknown `schema_version` is a validation error, and each batch is limited to 256 sources, 5000
-samples and 500 events, with bounded string lengths, 32 labels per sample, and
-event detail of at most 64 keys and 8192 bytes of JSON. Non-finite numbers are
-rejected. `MAX_BODY_BYTES` (1 MiB) is defined there and enforced by the
-endpoint.
+Bodies are `application/x-protobuf` or `application/json` (the OTLP JSON mapping), optionally with
+`Content-Encoding: gzip`, and the answer uses the encoding of the request. `wire.py` is a decoder
+of about 200 lines with no dependency for the messages Observe reads. It skips unknown fields by
+wire type, returns the shape of the OTLP JSON mapping so that one normalizer reads both encodings,
+and enforces its limits while it decodes: a nesting depth of 16, a budget of 400,000 fields per
+request, varints of at most 10 bytes, every length-delimited field must fit in the bytes that
+remain, strings must be UTF-8 and groups are refused. A malformed message is a 400. Decoding and
+normalizing run on a worker thread, not on the event loop.
 
-The endpoint is `POST /internal/v1/ingest`, the path unmodified hostwatch agents
-use, with `POST /api/ingest` kept as an alias, in `observe/ingest/api.py`. It checks, in
-this order: a per-peer rate limit (429), a valid unrevoked bearer key (401,
-before the body is read), the body size cap (413), a JSON nesting limit of 32 checked before parsing (400), the key's bound host against
-the host in the body (403), and the schema (422). hostwatch agents dead-letter
-400 and 422 and keep retrying every other failure, so 422 is reserved for a
-batch that is malformed or missing required fields, and the reason is logged. Nothing is stored from
-a request that fails a check. A valid batch is written in one transaction by
-`Store.ingest_batch`: the host row, samples, source status and events. A
-`batch_id` is recorded per host in `ingest_batches` (schema version 4), so an
-agent that replays its outbox gets `duplicate: true` and nothing is stored a
-second time. A batch without `batch_id` is identified by a SHA-256 of its
-content, so a resend is acknowledged the same way. Events are kept once per host and `dedup_key`. A source reported
-with `present: false` is stored as unavailable with the reason "not present on
-this host", because the version 2 table has no separate present column.
+A request is checked in this order, cheapest and least informative first: the per-peer rate limit
+(429 with `Retry-After: 60`); a valid unrevoked bearer key (401, before the body is read), where a
+valid key of the control (`wpc`) or read (`wpr`) scope is a 403; the per-key rate limit (429); the
+content type and content encoding (415); the body cap of 1 MiB on the wire (413); gzip inflation
+capped at 4 MiB while inflating (413, and a malformed, truncated or multi-member stream is 400);
+for JSON, a nesting limit of 32 checked before parsing (400); the repeat check described below;
+and then decoding (400) and normalizing. Nothing is stored from a request that fails any of these.
+The last use of a key is recorded at most once a minute.
+
+Authentication and host binding. A `wpi` key is bound to one host. Every `resource` of a request
+must carry `host.name` equal to that host (ignoring case and surrounding space), and the data is
+stored under the bound host. A resource for another host, or without `host.name`, is rejected and
+counted. The request is still a 200 with a partial success when something else in it was accepted,
+so a producer that also sends container resources of the same host is not refused, but a request
+in which nothing was accepted because of a host mismatch is a 403 and an `ingest_denied` audit row
+with the bound host and the count, so a key bound to the wrong host fails loudly. A `wpf` field key
+is accepted on both routes for field data only and never writes a host. On `/v1/metrics` every
+resource becomes a `field_tester` resource named by the key's device label (or a `port` resource
+when it carries `observe.switch` and `observe.port`), and `observe.field.device` is overwritten
+with the key's device label, so a client cannot spoof it. On `/v1/logs` each record goes to the
+plugin that registered a handler for its `event.name` through the optional `log_handlers()` plugin
+hook (a name must start with `observe.<plugin name>.` and can be taken once); a record that no
+plugin handles is rejected.
+
+What a host producer sends, and how it is stored. The instrumentation scope name is the source
+(the collector), the metric name is the metric, the point attributes are the labels (as strings)
+and the unit is the unit, so a point lands in the same series as the same reading did before and
+as the readings Observe pulls itself. Gauge and sum points store the value they carry, a histogram
+point is stored as `<name>.count` and `<name>.sum`, and a point with the no-recorded-value flag is
+an unavailable sample, never zero. Exponential histograms and summaries are rejected. The gauges
+`observe.source.available` and `observe.source.present`, with the point attribute `observe.source`
+(and `observe.source.reason`), say whether a source works, and are stored as source status. A log
+record is an event: `event.name` is its kind, the string body its title, `observe.source` its
+source, `observe.dedup_key` its dedup key, `observe.boot_id` its boot id, `severityNumber` or
+`severityText` its severity (reduced to info, warning or critical), and the other scalar
+attributes its detail. The resource attributes `os.type`, `service.version` and
+`observe.agent.sent_at` name the platform, the agent version and the send time.
+
+Limits and partial success. A request holds at most 5,000 points and 500 log records, a metric name
+must match `^[a-z][a-z0-9_.]{0,127}$`, an attribute key has at most 128 characters, a string value
+at most 1,024, a point at most 32 attributes and a resource at most 64, and a point attribute that
+is an array, a map or bytes, a non-finite value or an unusable time rejects that point. Each bad
+point, record or resource is rejected on its own and counted. The answer is a 200 whose
+`partial_success` has `rejected_data_points` (or `rejected_log_records`) and an `error_message`
+that groups the reasons with counts; an empty request is a 200 that stores nothing, which is the
+cheap probe an agent uses to check its key.
+
+The models live in `observe/ingest/schema.py` (Batch, Sample, SourceStatus, Event). They are the
+normalized form every producer is reduced to: the OTLP normalizer builds them, and so do the pull
+checks that run inside Observe (Home Assistant host mode and SNMP). They limit each batch to 256
+sources, 5000 samples and 500 events, with bounded string lengths, 32 labels per sample, and event
+detail of at most 64 keys and 8192 bytes of JSON, and they reject non-finite numbers. A valid
+request is written in one transaction by `Store.ingest_batch`: the host row, samples, source
+status and events. A source reported with `present: false` is stored as unavailable with the
+reason "not present on this host", because the version 2 table has no separate present column.
+
+Idempotency has three layers, so a producer may retry any request. A point is stored once per
+series and millisecond (`INSERT ... ON CONFLICT DO NOTHING`), and the summary levels change only
+for a point that was newly stored, so a resent point is a no-op; a point sent again with another
+value replaces it and corrects its summaries. Events are kept once per host and `dedup_key`.
+A repeated request is recognised before it is decoded: its identity is the `Idempotency-Key`
+header when the producer sent one (hashed together with the signal, so the metrics and the logs
+request of one batch may share a key) and otherwise a SHA-256 of the inflated body, remembered per
+host in `ingest_batches`, and a repeat is answered with an empty 200 and stores nothing. An
+`Idempotency-Key` must be 1 to 128 printable ASCII characters (400 otherwise).
+
 Time and order are guarded in `Store.ingest_batch`. Any sample, event or batch
 `sent_at` more than `MAX_FUTURE_SKEW_S` (300 seconds) ahead of receive time is clamped to
 receive time, so a bad agent clock can not mask later readings or freeze `boot_id` and
@@ -63,9 +117,17 @@ Denied requests are written to the audit log as `ingest_denied`, through an
 aggregator adapted from hostwatch's hub: at most one row per peer per minute,
 carrying the number of denials it covers, with at most 4096 peers tracked. The
 row holds the key's public prefix and never the key. The rate limit is a fixed
-window per peer address, set by `server.ingest_rate_per_minute`. The peer is the
-socket address; forwarded headers are not trusted. The route does not use the
-dashboard basic auth, because agents authenticate with their own key.
+window per peer address and a second one per key, both set by
+`server.ingest_rate_per_minute`. The peer is the socket address; forwarded headers are not
+trusted. The routes do not use the dashboard basic auth, because producers authenticate with
+their own key. A batch the store could not write is recorded as `ingest_failed` and is a server
+error; a database with no free read connection in time is a 503 with `Retry-After: 5`.
+
+Not built in this slice: the metric allow-list and the `legacy_key` mapping of section 3 (a series
+is named by the scope, metric and attributes the producer sends), cumulative reset tracking for
+sums (a sum is stored as the value it reports), writing points older than raw retention to the
+summary levels only, the `observe.ingest.clock_skew` counter, and returning the stored response
+for a repeat (the repeat gets an empty 200).
 
 ## Storage
 
@@ -501,14 +563,15 @@ own ingest key bound to the same host, never from an HA admin token held by Obse
 
 ### Home Assistant push contract
 
-ha_Int_soc (HA SOC, same owner) pushes a hostwatch-schema `Batch` to `POST /internal/v1/ingest`
+ha_Int_soc (HA SOC, same owner) pushes OTLP/HTTP JSON to `POST /v1/metrics` and `POST /v1/logs`
 every 60 s with `Authorization: Bearer <key>`. The key is an ordinary `wpi` ingest key created
-for the host name `homeassistant`, so it is bound to that host: a batch whose `host` is anything
-else is refused with 403, and a key bound to another host cannot push as `homeassistant`. The
-batch is the unchanged schema (`schema_version` 1, `platform` `homeassistant`), with a fresh
-`batch_id` per cycle that is reused on a resend. It must stay inside the ordinary bounds (body
-1 MiB, 5000 samples, 500 events, 256 sources, 32 labels per sample). A push needs about five
-samples per container and a handful per other source, so a 60 s cycle is far inside them. Observe
+for the host name `homeassistant`, so it is bound to that host: a resource whose `host.name` is
+anything else is rejected, a request with no resource for `homeassistant` is refused with 403, and
+a key bound to another host cannot push as `homeassistant`. A fresh `Idempotency-Key` per cycle is
+reused on a resend. Each source is the instrumentation scope name, and the repairs, crash
+forensics and watchdog breaches are log records. It must stay inside the ordinary bounds (body
+1 MiB, 5000 points, 500 records, 256 sources, 32 attributes per point). A push needs about five
+points per container and a handful per other source, so a 60 s cycle is far inside them. Observe
 never holds an HA admin token; the pull monitor (`mode: host`) keeps using the non-admin token,
 and both write to the same host, because series are keyed by source, metric and labels.
 
@@ -957,25 +1020,25 @@ keys".
 
 The Pockethernet pages load the core `components.css`, `admin.css`, the shared table and chip modules and their own `static/pockethernet.css`; the report list route also returns each report's cable verdict, read from the report's `cable_verdict` property row.
 
-### Pockethernet upload
+### Pockethernet report push
 
-`plugins/pockethernet/observe_pockethernet/upload.py` serves
-`POST /api/v1/field-reports` and `GET /api/v1/field-reports/ping` with the `wpf`
-key scope. After the core's rate limit and key checks, an upload is read under a
-256 KiB cap (413), `Content-Encoding` must be absent, `identity` or `gzip` (415),
-and a gzip body is inflated by `zlib.decompressobj` with a maximum output of the cap
-plus one byte, refused when it exceeds the cap or a ratio of 50 inflated bytes per
-compressed byte (413, the ratio is checked above 16 KiB), and refused when truncated
-or followed by more data (400). The schema then validates the report. The ping
-route checks a key and returns the server time and the limits.
+A field report is one OTLP log record sent to the core's `POST /v1/logs` with a `wpf` key
+(`plugins/pockethernet/observe_pockethernet/otlp.py` is the handler; the plugin registers it for
+the event name `observe.pockethernet.report` through `log_handlers()`). The core does everything
+that is not about reports: the rate limits and key check, the 1 MiB request cap and 4 MiB gzip
+inflation cap, decoding, the `plugin_request` audit row and the partial success of the answer. The
+record body is a string holding the report JSON exactly as the phone built it, at most 256 KiB, and
+any other body is refused. The schema then validates the report. A record the handler refuses is
+counted in the `partial_success` of the 200 answer and the phone does not retry it, because the same
+bytes would be refused again. An empty `POST /v1/logs` checks a key (it replaces the ping route).
 
 Reports are stored in the plugin's `field_reports` table (plugin schema versions 1 and 2),
 keyed by `(source, report_id)` where the source is the key's device label, so one
 phone's key cannot replace another phone's report. The row holds summary columns
 and the exact inflated body. A higher revision replaces the row, an equal revision
 is a duplicate and a lower one is ignored; the decision and write are one
-transaction under the store lock. The answer is `200` with `result` of `accepted`,
-`replaced`, `duplicate` or `ignored`.
+transaction under the store lock. The `result` is `accepted`,
+`replaced`, `duplicate` or `ignored`, and it is recorded in the audit detail of the request.
 
 Clock correction (`correct_clock`): a phone may send `X-Report-Sent-Ms`, its clock
 at send time. When that differs from the server clock by more than 300 s, the whole
@@ -991,7 +1054,7 @@ hook and the summary row stays, so a late replay is still a duplicate.
 
 ### Pockethernet derivation
 
-`derive.py` runs after an upload that is `accepted` or `replaced`, in the same write unit
+`derive.py` runs after a report that is `accepted` or `replaced`, in the same write unit
 that stores the report (`store_and_derive` in `reports.py`), so an upload is one commit. It
 picks the LLDP (else CDP) neighbour that names a switch and a port, then calls `InfraTx` (the
 transaction-bound form of `InfraService`) to upsert

@@ -33,7 +33,7 @@ import inspect
 import logging
 import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -79,6 +79,21 @@ class PluginRouter:
     admin: bool = False
     key_scope: str | None = None
     public_prefix: str | None = None
+
+
+class LogRejected(Exception):
+    """Raised by a log handler for a record it refuses. The reason is counted in the partial
+    success of the response (docs/DATA-API-DESIGN.md section 6.1) and is never a server error."""
+
+
+@dataclass(frozen=True)
+class LogContext:
+    """What a log handler is told about the request a record arrived in."""
+
+    device: str  # the device label the field key is bound to
+    key_prefix: str
+    now: float
+    sent_ms: int | None  # the sender's clock in ms when it sent (X-Report-Sent-Ms), if given
 
 
 @dataclass(frozen=True)
@@ -226,6 +241,9 @@ class LoadedPlugin:
     monitor_types: Mapping[str, Any]
     settings: BaseModel | None
     collectors: tuple[Collector, ...] = ()
+    # Handlers for OTLP log records of a field key, by event name (optional hook log_handlers).
+    log_handlers: Mapping[str, Callable[..., Awaitable[Mapping[str, Any]]]] = field(
+        default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -244,6 +262,14 @@ class LoadedPlugins:
     def scopes(self) -> list[str]:
         """Every key scope marker the listed plugins registered."""
         return [s.marker for p in self.plugins for s in p.key_scopes]
+
+    def log_handler(self, event: str) -> tuple[str, Callable[..., Awaitable[Mapping[str, Any]]]] | None:
+        """(plugin name, handler) for an OTLP log record with this event name, if any."""
+        for p in self.plugins:
+            handler = p.log_handlers.get(event)
+            if handler is not None:
+                return p.name, handler
+        return None
 
     def get(self, name: str) -> LoadedPlugin | None:
         return next((p for p in self.plugins if p.name == name), None)
@@ -392,6 +418,22 @@ def _check_collectors(name: str, collectors: list[Collector]) -> None:
                               "must be above 0 and no longer than its interval")
 
 
+def _check_log_handlers(name: str, handlers: Any, taken: set[str]) -> dict[str, Any]:
+    """Event names a plugin handles must sit under observe.<plugin>. and be taken once."""
+    if not isinstance(handlers, dict):
+        raise PluginError(f"plugin {name!r}: log_handlers() must return a dict")
+    prefix = f"observe.{name}."
+    for event, handler in handlers.items():
+        if not isinstance(event, str) or not event.startswith(prefix) or len(event) > MAX_LABEL * 2:
+            raise PluginError(f"plugin {name!r}: log event {event!r} must start with {prefix!r}")
+        if not callable(handler) or not inspect.iscoroutinefunction(handler):
+            raise PluginError(f"plugin {name!r}: the handler of {event!r} must be an async callable")
+        if event in taken:
+            raise PluginError(f"plugin {name!r}: log event {event!r} is already taken")
+        taken.add(event)
+    return dict(handlers)
+
+
 def _settings(name: str, model: type[BaseModel] | None,
               raw: Mapping[str, Any]) -> BaseModel | None:
     if model is None:
@@ -411,7 +453,9 @@ def _settings(name: str, model: type[BaseModel] | None,
 
 def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
               settings_raw: Mapping[str, Any],
-              credentials: Mapping[str, Any] | None = None) -> LoadedPlugin:
+              credentials: Mapping[str, Any] | None = None,
+              events_seen: set[str] | None = None) -> LoadedPlugin:
+    events_seen = set() if events_seen is None else events_seen
     if not isinstance(plugin, Plugin):
         raise PluginError(f"plugin {listed!r}: the entry point does not provide a Plugin")
     name = plugin.name
@@ -429,6 +473,8 @@ def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
         static_dir = plugin.static_dir()
         nav, mtypes = plugin.nav_entries(), plugin.monitor_types()
         collectors = plugin.collectors()
+        hook = getattr(plugin, "log_handlers", None)
+        handlers = hook() if callable(hook) else {}
     except PluginError:
         raise
     except Exception as err:
@@ -440,6 +486,7 @@ def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
     _check_nav_and_pages(name, nav, pages, static_dir)
     _check_monitor_types(name, mtypes)
     _check_collectors(name, collectors)
+    handlers = _check_log_handlers(name, handlers, events_seen)
     bind = getattr(plugin, "bind_credentials", None)
     if callable(bind):
         # Optional hook: the plugin gets the named credentials of the config, so its settings
@@ -452,7 +499,7 @@ def _validate(listed: str, plugin: Any, core: str, scopes_seen: set[str],
             raise PluginError(f"plugin {name!r}: a hook failed: {type(err).__name__}: "
                               f"{err}") from err
     return LoadedPlugin(plugin, tuple(routers), tuple(scopes), tuple(migrations), tuple(pages),
-                        static_dir, tuple(nav), dict(mtypes), settings, tuple(collectors))
+                        static_dir, tuple(nav), dict(mtypes), settings, tuple(collectors), handlers)
 
 
 def load_plugins(config: Config, entry_points: EntryPoints = installed_entry_points,
@@ -463,6 +510,7 @@ def load_plugins(config: Config, entry_points: EntryPoints = installed_entry_poi
         by_name.setdefault(ep.name, []).append(ep)
     out: list[LoadedPlugin] = []
     scopes_seen: set[str] = set()
+    events_seen: set[str] = set()
     for name in config.plugins:
         found = by_name.get(name, [])
         if not found:
@@ -479,5 +527,5 @@ def load_plugins(config: Config, entry_points: EntryPoints = installed_entry_poi
             raise PluginError(f"plugin {name!r} failed to import: "
                               f"{type(err).__name__}: {err}") from err
         out.append(_validate(name, obj, core_version, scopes_seen,
-                             config.plugin_settings.get(name, {}), config.credentials))
+                             config.plugin_settings.get(name, {}), config.credentials, events_seen))
     return LoadedPlugins(tuple(out))

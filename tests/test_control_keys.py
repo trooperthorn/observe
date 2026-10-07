@@ -32,6 +32,7 @@ from observe_control.signing import (SigningError, canonical_json, keygen, load_
 from observe_pockethernet.keys import create_field_key
 
 from .conftest import make_config
+from .otlp_build import logs_request, post_batch
 from .test_auth import PASSWORD, Clock
 from .test_pockethernet_keys import HOST_BATCH
 
@@ -309,11 +310,10 @@ def test_revoked_wpc_key_is_refused_on_pull(env):
 
 def test_wpc_key_is_refused_on_host_ingest(env):
     key, _ = run(create_control_key(env.store, "nas01"))  # the batch is for host nas01
-    r = env.client.post("/api/ingest", json=HOST_BATCH, headers=bearer(key))
-    assert r.status_code == 401
+    r = post_batch(env.client, HOST_BATCH, key)
+    assert r.status_code == 403  # a valid key that may not push data
     swapped = "wpi_" + key.split("_", 1)[1]
-    assert env.client.post("/api/ingest", json=HOST_BATCH,
-                           headers=bearer(swapped)).status_code == 401
+    assert post_batch(env.client, HOST_BATCH, swapped).status_code == 401
     assert env.rows("SELECT COUNT(*) FROM samples") == [(0,)]
     assert env.rows("SELECT COUNT(*) FROM hosts") == [(0,)]
     assert env.rows("SELECT last_used FROM ingest_keys") == [(None,)]
@@ -321,13 +321,12 @@ def test_wpc_key_is_refused_on_host_ingest(env):
 
 def test_wpc_key_is_refused_on_field_reports(env):
     key, _ = run(create_control_key(env.store, "sean-pixel"))
-    for method, path in (("post", "/api/v1/field-reports"), ("get", "/api/v1/field-reports/ping")):
-        r = getattr(env.client, method)(path, content=b"{}", headers=bearer(key)) \
-            if method == "post" else env.client.get(path, headers=bearer(key))
-        assert r.status_code == 401, path
+    request = logs_request(None, [])
+    for path in ("/v1/logs", "/v1/metrics"):
+        r = env.client.post(path, json=request, headers=bearer(key))
+        assert r.status_code == 403, path  # a valid control key, which may not push data
     swapped = "wpf_" + key.split("_", 1)[1]
-    assert env.client.post("/api/v1/field-reports", content=b"{}",
-                           headers=bearer(swapped)).status_code == 401
+    assert env.client.post("/v1/logs", json=request, headers=bearer(swapped)).status_code == 401
     assert env.rows("SELECT last_used FROM ingest_keys") == [(None,)]
 
 

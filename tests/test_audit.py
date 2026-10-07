@@ -13,8 +13,8 @@ from observe import audit
 from observe.__main__ import main
 from observe.ingest.keys import create_key
 
+from .otlp_build import fixture, post_batch
 from .test_auth import BASIC, PASSWORD, Env
-from .test_ingest_api import fixture
 
 
 @pytest.fixture
@@ -102,8 +102,7 @@ def test_ingest_that_fails_while_storing_is_recorded(tmp_path, monkeypatch):
 
         monkeypatch.setattr(e.store, "ingest_batch", boom)
         quiet = TestClient(e.client.app, raise_server_exceptions=False)
-        res = quiet.post("/api/ingest", json=fixture("batch_minimal"),
-                         headers={"Authorization": f"Bearer {key}"})
+        res = post_batch(quiet, fixture("batch_minimal"), key)
         assert res.status_code == 500
         rows = e.rows("SELECT actor, status, detail FROM audit WHERE kind='ingest_failed'")
         assert len(rows) == 1 and rows[0][0] == info.prefix and rows[0][1] == 500
@@ -164,8 +163,7 @@ def test_no_secret_reaches_the_log(env):
                     headers=env.csrf(r))
     env.client.post("/api/admin/users", json={"username": "eve", "password": "short"},
                     headers=env.csrf(r))
-    env.client.post("/api/ingest", json=fixture("batch_minimal"),
-                    headers={"Authorization": f"Bearer {key}x"})
+    post_batch(env.client, fixture("batch_minimal"), key + "x")
     assert bad.status_code == 401
     dump = json.dumps(env.rows("SELECT * FROM audit"))
     shown = json.dumps(env.client.get("/api/v2/audit").json())

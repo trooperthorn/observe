@@ -1,4 +1,4 @@
-"""The Pockethernet upload endpoint: auth, caps, gzip, revisions, clocks, retention and audit."""
+"""Field reports as OTLP log records: the wpf key, the plugin handler, caps, clocks and audit."""
 
 from __future__ import annotations
 
@@ -22,18 +22,18 @@ from observe.plugins import (GROUP, KeyScope, PluginBase, PluginError, PluginRou
 from observe.scheduler import Scheduler
 from observe.store import Store
 from observe.web import create_app
-from observe_pockethernet import schema
 from observe_pockethernet.keys import create_field_key
+from observe_pockethernet.otlp import EVENT, correct_clock
 from observe_pockethernet.reports import prune_evidence
-from observe_pockethernet.upload import MAX_RATIO, correct_clock, inflate
 
 from .conftest import make_config
+from .otlp_build import gauge, log_record, logs_request, metrics_request, number
 from .test_auth import Clock
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "pockethernet" / "report_v1.json")
                      .read_text(encoding="utf-8"))
 TAKEN_S = FIXTURE["taken_at_ms"] / 1000
-URL = "/api/v1/field-reports"
+URL = "/v1/logs"
 
 
 def run(coro):
@@ -44,6 +44,30 @@ def dump(body: dict[str, Any]) -> bytes:
     return json.dumps(body, separators=(",", ":")).encode("utf-8")
 
 
+def report_request(raw: bytes, ts: float = TAKEN_S) -> dict[str, Any]:
+    """The OTLP logs request a phone sends for one report: the report JSON is the record body."""
+    return logs_request(None, [log_record(EVENT, ts, raw.decode("utf-8"))], scope="pockethernet")
+
+
+class Posted:
+    """A response, with what the handler said about the report read back from the audit row, so
+    a test can ask for the result of a report as it asked the old upload route."""
+
+    def __init__(self, resp: Any, handled: dict[str, Any] | None) -> None:
+        self.resp, self.handled = resp, handled
+        self.status_code, self.headers, self.text = resp.status_code, resp.headers, resp.text
+
+    def json(self) -> Any:
+        h = self.handled
+        if h is None:
+            return self.resp.json()
+        out = {"result": h["result"], "report_id": h["report_id"], "revision": h["stored_revision"],
+               "clock_corrected": h["clock_corrected"], "taken_at_ms": h["taken_at_ms"]}
+        if h.get("derive_status"):
+            out["derive_status"] = h["derive_status"]
+        return out
+
+
 class Env:
     def __init__(self, tmp_path, rate: int = 300, settings: dict[str, Any] | None = None) -> None:
         self.path = str(tmp_path / "w.db")
@@ -51,7 +75,7 @@ class Env:
             [{"name": "p", "type": "ping", "host": "127.0.0.1"}],
             plugins=["pockethernet"],
             plugin_settings={"pockethernet": settings or {}},
-            server={"db_path": self.path, "plugin_rate_per_minute": rate})
+            server={"db_path": self.path, "ingest_rate_per_minute": rate})
         loaded = load_plugins(self.cfg, lambda: [EntryPoint(
             "pockethernet", "observe_pockethernet:plugin", GROUP)])
         self.store = Store(self.path, loaded)
@@ -64,12 +88,31 @@ class Env:
                        auth_clock=self.clock), base_url="https://testserver")
         self.key, self.info = run(create_field_key(self.store, "sean-pixel"))
 
-    def post(self, body: bytes | dict[str, Any], key: str | None = "default",
-             headers: dict[str, str] | None = None):
-        raw = dump(body) if isinstance(body, dict) else body
+    def send(self, request: Any, key: str | None = "default",
+             headers: dict[str, str] | None = None, gzipped: bool = False):
+        """Post an OTLP request (a dict, or raw bytes) to /v1/logs as JSON."""
+        raw = dump(request) if isinstance(request, dict) else request
+        h = {"Content-Type": "application/json"}
         token = self.key if key == "default" else key
-        h = {"Authorization": f"Bearer {token}"} if token else {}
+        if token:
+            h["Authorization"] = f"Bearer {token}"
+        if gzipped:
+            raw, h["Content-Encoding"] = gzip.compress(raw), "gzip"
         return self.client.post(URL, content=raw, headers={**h, **(headers or {})})
+
+    def post(self, body: bytes | dict[str, Any], key: str | None = "default",
+             headers: dict[str, str] | None = None, gzipped: bool = False):
+        """Post one report as an OTLP log record. A dict is dumped as the report JSON."""
+        raw = dump(body) if isinstance(body, dict) else body
+        before = self.rows("SELECT COUNT(*) FROM audit WHERE kind='plugin_request'")[0][0]
+        resp = self.send(report_request(raw), key, headers, gzipped)
+        handled = None
+        after = self.rows("SELECT COUNT(*) FROM audit WHERE kind='plugin_request'")[0][0]
+        if resp.status_code == 200 and after > before:
+            detail = json.loads(self.rows("SELECT detail FROM audit WHERE kind='plugin_request' "
+                                          "ORDER BY id DESC LIMIT 1")[0][0])
+            handled = detail["handled"][0] if detail.get("handled") else None
+        return Posted(resp, handled)
 
     def rows(self, sql: str, *args: Any):
         db = sqlite3.connect(self.path)
@@ -93,14 +136,18 @@ def env(tmp_path):
     e.close()
 
 
-def test_ping_checks_the_key_and_reports_the_server_clock(env):
-    r = env.client.get(URL + "/ping", headers={"Authorization": f"Bearer {env.key}"})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] and body["device"] == "sean-pixel"
-    assert body["server_time_ms"] == int(env.clock.now * 1000)
-    assert body["max_report_bytes"] == schema.MAX_REPORT_BYTES
-    assert env.client.get(URL + "/ping").status_code == 401
+def rejected(resp: Any) -> tuple[int, str]:
+    """(rejected log records, message) from a JSON partial success, (0, '') when it is empty."""
+    ps = resp.json().get("partialSuccess", {})
+    return int(ps.get("rejectedLogRecords", 0)), ps.get("errorMessage", "")
+
+
+def test_an_empty_request_checks_the_key_and_stores_nothing(env):
+    r = env.send(b'{"resourceLogs":[]}')
+    assert r.status_code == 200 and r.json() == {}
+    assert env.send(b'{"resourceLogs":[]}', key=None).status_code == 401
+    assert env.rows("SELECT * FROM field_reports") == []
+    assert env.rows("SELECT * FROM hosts") == []
 
 
 def test_accepts_a_report_and_stores_the_exact_body_as_evidence(env):
@@ -198,81 +245,95 @@ def test_correct_clock_rules():
     assert correct_clock(now_ms + 600_000, now, now_ms + 600_000) == (now_ms, True)
 
 
-def test_gzip_body_is_accepted_and_stored_inflated(env):
+def test_gzip_request_is_accepted_and_the_report_is_stored_inflated(env):
     raw = dump(FIXTURE)
-    r = env.post(gzip.compress(raw), headers={"Content-Encoding": "gzip"})
+    r = env.post(raw, gzipped=True)
     assert r.status_code == 200 and r.json()["result"] == "accepted"
     (row,) = env.rows("SELECT body FROM field_reports")
     assert bytes(row[0]) == raw
 
 
-def test_gzip_bomb_is_refused_on_size(env):
-    bomb = gzip.compress(b"0" * (4 * 1024 * 1024))
-    assert len(bomb) < schema.MAX_REPORT_BYTES  # small on the wire
-    r = env.post(bomb, headers={"Content-Encoding": "gzip"})
+def test_the_core_gzip_and_size_caps_apply_to_reports(env):
+    bomb = gzip.compress(b"0" * (5 * 1024 * 1024))
+    r = env.send(bomb, headers={"Content-Encoding": "gzip"})
     assert r.status_code == 413 and "inflated" in r.json()["detail"]
+    assert env.send(dump(FIXTURE), headers={"Content-Encoding": "br"}).status_code == 415
+    assert env.send(zlib.compress(dump(FIXTURE)),
+                    headers={"Content-Encoding": "gzip"}).status_code == 400
+    assert env.send(b"x" * (1_048_576 + 1)).status_code == 413
     assert env.rows("SELECT * FROM field_reports") == []
 
 
-def test_gzip_bomb_is_refused_on_ratio_under_the_size_cap(env):
-    inside = gzip.compress(b"0" * 200_000)  # 200 KB inflated, under the 256 KiB cap
-    assert 200_000 > MAX_RATIO * len(inside)
-    r = env.post(inside, headers={"Content-Encoding": "gzip"})
-    assert r.status_code == 413 and "ratio" in r.json()["detail"]
-
-
-def test_inflate_never_allocates_beyond_the_cap_and_refuses_bad_framing():
-    from observe_pockethernet.schema import ReportError
-    with pytest.raises(ReportError) as err:
-        inflate(gzip.compress(b"0" * (50 * 1024 * 1024)))
-    assert err.value.status == 413
-    for bad in (zlib.compress(b"{}"), b"not gzip", gzip.compress(b"{}")[:-4],
-                gzip.compress(b"{}") + gzip.compress(b"{}")):
-        with pytest.raises(ReportError) as err:
-            inflate(bad)
-        assert err.value.status == 400
-
-
-def test_unknown_encoding_and_non_gzip_body_are_refused(env):
-    assert env.post(dump(FIXTURE), headers={"Content-Encoding": "br"}).status_code == 415
-    r = env.post(zlib.compress(dump(FIXTURE)), headers={"Content-Encoding": "gzip"})
-    assert r.status_code == 400
-    assert env.post(dump(FIXTURE), headers={"Content-Encoding": "identity"}).status_code == 200
-
-
-def test_missing_wrong_revoked_and_host_keys_are_401(env):
-    assert env.post(FIXTURE, key=None).status_code == 401
-    assert env.post(FIXTURE, key="wpf_000000000000_nothing").status_code == 401
-    host_key, _ = run(create_key(env.store, "somehost"))
-    r = env.post(FIXTURE, key=host_key)
+def test_missing_wrong_and_revoked_keys_are_401(env):
+    request = report_request(dump(FIXTURE))
+    assert env.send(request, key=None).status_code == 401
+    r = env.send(request, key="wpf_000000000000_nothing")
     assert r.status_code == 401 and r.headers["www-authenticate"] == "Bearer"
     from observe.ingest.keys import revoke_key
     run(revoke_key(env.store, env.info.prefix))
-    assert env.post(FIXTURE).status_code == 401
+    assert env.send(request).status_code == 401
     assert env.rows("SELECT * FROM field_reports") == []
 
 
-def test_field_key_does_not_open_host_ingest(env):
-    r = env.client.post("/api/ingest", json={}, headers={"Authorization": f"Bearer {env.key}"})
-    assert r.status_code == 401
+def test_a_field_key_writes_no_host_data(env):
+    """A wpf key is for field reports only: host.name in its metrics does not make a host, and
+    log records that no plugin handles are refused."""
+    metrics = metrics_request("nas01", {"rapl": [gauge("package_watts", [number(1.0, TAKEN_S)])]})
+    r = env.client.post("/v1/metrics", json=metrics,
+                        headers={"Authorization": f"Bearer {env.key}"})
+    assert r.status_code == 200
+    assert env.rows("SELECT * FROM hosts") == []
+    assert [(n, k) for n, k, _ in env.rows("SELECT name, kind, attrs FROM resources")] == [
+        ("sean-pixel", "field_tester")]
+    other = logs_request("nas01", [log_record("boot.kernel_panic", TAKEN_S, "x")])
+    r = env.send(other)
+    assert rejected(r)[0] == 1 and "no plugin handles" in rejected(r)[1]
+    assert env.rows("SELECT * FROM host_events") == []
 
 
-def test_oversize_body_is_413_before_parsing(env):
-    r = env.post(b"x" * (schema.MAX_REPORT_BYTES + 1))
-    assert r.status_code == 413
-    pad = env.report(notes="n" * 4096, warnings=["w" * 1000] * 32,
+def test_the_device_label_of_a_field_resource_comes_from_the_key(env):
+    metrics = metrics_request(None, {"ph": [gauge("link_speed_mbps", [number(1000.0, TAKEN_S)])]},
+                              observe__field__device="someone-else")
+    assert env.client.post("/v1/metrics", json=metrics, headers={
+        "Authorization": f"Bearer {env.key}"}).status_code == 200
+    assert [r[0] for r in env.rows("SELECT name FROM resources")] == ["sean-pixel"]
+    assert "someone-else" not in json.dumps(env.rows("SELECT attrs FROM resources"))
+
+
+def test_an_oversize_report_is_refused_without_failing_the_request(env):
+    big = env.report(notes="n" * 4096, warnings=["w" * 1000] * 32,
                      steps=[{"step": "s", "label": "l", "status": "ok",
                              "fields": [{"name": "n", "value": "v" * 1000}] * 64}] * 8)
-    assert env.post(pad).status_code == 413
+    r = env.post(big)
+    assert r.status_code == 200
+    assert rejected(r) == (1, "report is too large (1)")
     assert env.rows("SELECT * FROM field_reports") == []
 
 
-def test_invalid_reports_use_the_schema_status(env):
-    assert env.post(b"{not json").status_code == 422
-    assert env.post(env.report(surprise=1)).status_code == 422
-    assert env.post(env.report(transcript="secret")).status_code == 422
-    assert env.post(b"[" * 40 + b"]" * 40).status_code == 400
+def test_invalid_reports_are_counted_in_the_partial_success(env):
+    for body, reason in ((b"{not json", ""), (dump(env.report(surprise=1)), ""),
+                         (dump(env.report(transcript="secret")), ""),
+                         (b"[" * 40 + b"]" * 40, "nested too deeply")):
+        r = env.post(body)
+        assert r.status_code == 200
+        count, message = rejected(r)
+        assert count == 1 and message and reason in message
     assert env.rows("SELECT * FROM field_reports") == []
+
+
+def test_a_record_that_is_not_a_string_report_is_refused(env):
+    rec = log_record(EVENT, TAKEN_S)
+    rec["body"] = {"kvlistValue": {"values": []}}
+    r = env.send(logs_request(None, [rec], scope="pockethernet"))
+    assert rejected(r)[0] == 1 and "string" in rejected(r)[1]
+
+
+def test_a_good_and_a_bad_record_in_one_request_store_the_good_one(env):
+    good = log_record(EVENT, TAKEN_S, dump(FIXTURE).decode())
+    bad = log_record(EVENT, TAKEN_S, "{nope")
+    r = env.send(logs_request(None, [bad, good], scope="pockethernet"))
+    assert r.status_code == 200 and rejected(r)[0] == 1
+    assert env.rows("SELECT report_id FROM field_reports") == [(FIXTURE["report_id"],)]
 
 
 def test_rate_limit_is_429_and_uploads_stop(tmp_path):
@@ -282,37 +343,12 @@ def test_rate_limit_is_429_and_uploads_stop(tmp_path):
         assert e.post(FIXTURE).status_code == 200
         r = e.post(FIXTURE)
         assert r.status_code == 429 and r.headers["retry-after"] == "60"
-        denied = e.rows("SELECT status, detail FROM audit WHERE kind='plugin_denied'")
-        assert denied and denied[0][0] == 429
+        assert e.rows("SELECT status FROM audit WHERE kind='ingest_denied'") == [(429,)]
     finally:
         e.close()
 
 
-def test_bad_key_flood_is_limited_but_never_blocks_a_valid_key(tmp_path):
-    e = Env(tmp_path, rate=3)
-    try:
-        codes = [e.post(FIXTURE, key="wpf_bad").status_code for _ in range(6)]
-        assert codes == [401, 401, 401, 429, 429, 429]
-        # The same peer's valid key is counted on its own and is still accepted.
-        assert [e.post(FIXTURE).status_code for _ in range(3)] == [200, 200, 200]
-        assert e.post(FIXTURE).status_code == 429  # the valid key's own limit still holds
-        # A flood from another peer does not touch the first peer's counters either way.
-        other = TestClient(e.client.app, base_url="https://testserver",
-                           client=("203.0.113.9", 5000))
-        try:
-            for _ in range(5):
-                other.post(URL, content=dump(FIXTURE), headers={"Authorization": "Bearer wpf_bad"})
-            second, _info = run(create_field_key(e.store, "other-phone"))
-            r = other.post(URL, content=dump(e.report(report_id="other-1")),
-                           headers={"Authorization": f"Bearer {second}"})
-            assert r.status_code == 200
-        finally:
-            other.close()
-    finally:
-        e.close()
-
-
-def test_valid_key_limit_is_per_key_and_per_peer(tmp_path):
+def test_a_valid_key_is_limited_across_peers(tmp_path):
     e = Env(tmp_path, rate=2)
     try:
         assert [e.post(FIXTURE).status_code for _ in range(3)] == [200, 200, 429]
@@ -320,12 +356,13 @@ def test_valid_key_limit_is_per_key_and_per_peer(tmp_path):
                            client=("203.0.113.10", 5000))
         try:
             # The first key stays limited from a new peer; a new key from a new peer is fine.
-            r = other.post(URL, content=dump(FIXTURE),
-                           headers={"Authorization": f"Bearer {e.key}"})
+            r = other.post(URL, content=dump(report_request(dump(FIXTURE))), headers={
+                "Authorization": f"Bearer {e.key}", "Content-Type": "application/json"})
             assert r.status_code == 429
             second, _info = run(create_field_key(e.store, "other-phone"))
-            r = other.post(URL, content=dump(e.report(report_id="other-2")),
-                           headers={"Authorization": f"Bearer {second}"})
+            r = other.post(URL, content=dump(report_request(dump(e.report(report_id="other-2")))),
+                           headers={"Authorization": f"Bearer {second}",
+                                    "Content-Type": "application/json"})
             assert r.status_code == 200
         finally:
             other.close()
@@ -333,37 +370,56 @@ def test_valid_key_limit_is_per_key_and_per_peer(tmp_path):
         e.close()
 
 
-def test_audit_rows_for_accepted_refused_and_denied_uploads(env):
+def test_audit_rows_for_accepted_refused_and_denied_pushes(env):
     env.post(FIXTURE)
     env.post(env.report(revision=2), headers={"X-Report-Sent-Ms": "1"})
     env.post(b"{bad")
     env.post(FIXTURE, key=None)
-    env.client.get(URL + "/ping", headers={"Authorization": f"Bearer {env.key}"})  # not audited
     rows = env.rows("SELECT actor, method, path, status, remote, detail FROM audit "
                     "WHERE kind='plugin_request' ORDER BY id")
-    assert [r[3] for r in rows] == [200, 200, 422]
+    assert [r[3] for r in rows] == [200, 200, 200]
     for actor, method, path, _, remote, _ in rows:
         assert actor == env.info.prefix and method == "POST" and path == URL
         assert remote
     first, second, third = (json.loads(r[5]) for r in rows)
-    assert first.pop("derived") == {"properties_added": 20, "properties_verified": 0,
-                                    "jack_linked": True}
-    assert first == {"plugin": "pockethernet", "device": "sean-pixel", "result": "accepted",
-                     "report_id": FIXTURE["report_id"], "revision": 1, "stored_revision": 1,
-                     "clock_corrected": False, "bytes": len(dump(FIXTURE))}
-    assert second["result"] == "replaced" and second["clock_corrected"] is True
-    assert third["reason"] and third["device"] == "sean-pixel"
-    denied = env.rows("SELECT actor, status, path, detail FROM audit WHERE kind='plugin_denied'")
-    assert denied == [("", 401, URL, json.dumps({"plugin": "pockethernet"}, sort_keys=True))]
+    handled = first["handled"][0]
+    assert handled.pop("derived") == {"properties_added": 20, "properties_verified": 0,
+                                      "jack_linked": True}
+    assert handled == {"plugin": "pockethernet", "result": "accepted",
+                       "report_id": FIXTURE["report_id"], "revision": 1, "stored_revision": 1,
+                       "clock_corrected": False, "bytes": len(dump(FIXTURE)),
+                       "taken_at_ms": FIXTURE["taken_at_ms"]}
+    assert first["device"] == "sean-pixel" and first["rejected"] == 0
+    assert second["handled"][0]["result"] == "replaced"
+    assert second["handled"][0]["clock_corrected"] is True
+    assert third["rejected"] == 1 and third["handled"] == []
+    denied = env.rows("SELECT actor, status, path FROM audit WHERE kind='ingest_denied'")
+    assert denied == [("", 401, URL)]
     # No key and no body content is ever written.
     text = json.dumps(env.rows("SELECT * FROM audit"))
     assert env.key not in text and FIXTURE["notes"] not in text
 
 
-def test_rejected_upload_audit_has_no_report_content(env):
+def test_rejected_report_audit_has_no_report_content(env):
     env.post(env.report(transcript="TOPSECRETVALUE"))
     text = json.dumps(env.rows("SELECT detail FROM audit"))
     assert "TOPSECRETVALUE" not in text
+
+
+def test_a_failing_handler_is_audited_and_is_a_server_error(env, monkeypatch):
+    async def boom(*args, **kwargs):
+        raise RuntimeError("disk gone")
+
+    monkeypatch.setattr("observe_pockethernet.otlp.store_and_derive", boom)
+    quiet = TestClient(env.client.app, base_url="https://testserver",
+                       raise_server_exceptions=False)
+    r = quiet.post(URL, content=dump(report_request(dump(FIXTURE))), headers={
+        "Authorization": f"Bearer {env.key}", "Content-Type": "application/json"})
+    assert r.status_code == 500
+    rows = env.rows("SELECT actor, status, detail FROM audit WHERE kind='plugin_failed'")
+    assert len(rows) == 1 and rows[0][0] == env.info.prefix and rows[0][1] == 500
+    assert json.loads(rows[0][2]) == {"error": "RuntimeError", "plugin": "pockethernet"}
+    quiet.close()
 
 
 def test_retention_drops_old_bodies_but_keeps_the_summary(tmp_path):
@@ -448,13 +504,17 @@ def test_core_refuses_a_router_with_a_scope_the_plugin_does_not_own():
             _load(_Keyed(pr, scopes))
 
 
-def test_unlisted_plugin_has_no_upload_route(tmp_path):
+def test_unlisted_plugin_handles_no_report(tmp_path):
     path = str(tmp_path / "w.db")
     cfg = make_config([{"name": "p", "type": "ping", "host": "127.0.0.1"}],
                       server={"db_path": path})
     store = Store(path)
     alerter = Alerter(cfg)
     app = create_app(cfg, store, Scheduler(cfg, store, alerter), alerter)
+    key, _ = run(create_key(store, "sean-pixel", scope="wpf"))
     with TestClient(app, base_url="https://testserver") as client:
-        assert client.post(URL, content=b"{}").status_code == 404
+        r = client.post(URL, json=report_request(dump(FIXTURE)),
+                        headers={"Authorization": f"Bearer {key}"})
+        assert r.status_code == 200
+        assert rejected(r)[0] == 1 and "no plugin handles" in rejected(r)[1]
     store.close()

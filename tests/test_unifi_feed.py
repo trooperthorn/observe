@@ -23,7 +23,7 @@ from observe_unifi.records import parse_device
 
 from .conftest import make_config
 from .dbq import run_sql
-from .test_pockethernet_upload import FIXTURE, TAKEN_S, Env as FieldEnv
+from .test_pockethernet_otlp import FIXTURE, TAKEN_S, Env as FieldEnv
 from .test_unifi_classic import COOKIE, CSRF, PREFIX
 from .test_unifi_plugin import BASE, SITE, Console, Env, device, run
 

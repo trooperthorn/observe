@@ -1,7 +1,7 @@
 """The Pockethernet resources of /api/v2 (docs/DATA-API-DESIGN.md sections 4.2 and 4.10).
 
-Reports are read here and uploaded through the key-authenticated route of upload.py, which is not
-part of v2. The core mounts these under /api/v2/pockethernet and gives them its sign-in, role
+Reports are read here and arrive as OTLP log records handled by otlp.py (the core's POST /v1/logs),
+which is not part of v2. The core mounts these under /api/v2/pockethernet and gives them its sign-in, role
 check, rate limit, ETag and read connection. Every string in a report came from a phone and is
 only handed over as JSON. A report body dropped by retention is `body: null` with its summary.
 """

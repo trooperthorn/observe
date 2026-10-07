@@ -86,7 +86,7 @@ except a new `scope` column on `ingest_keys`.
 
 ## Upload from the phone
 
-- **Endpoint.** `POST /api/v1/field-reports` takes a new versioned report schema, not the hostwatch Batch.
+- **Endpoint.** The report is one OTLP log record (`event.name` `observe.pockethernet.report`, the report JSON as the string body) sent to `POST /v1/logs` with the `wpf` key (slice r7-otlp-ingest; the earlier `POST /api/v1/field-reports` route is removed). The report schema is its own versioned schema.
   - **Units** are part of each field name.
   - **Idempotency:** a report uploaded again is recognised by its report id; an edited report carries a higher revision.
   - **Limit:** 256 KiB per report.
@@ -221,17 +221,17 @@ The package `observe_pockethernet` in `plugins/pockethernet` (entry point `pocke
 - **Key scope.** `wpf_<prefix>_<secret>` keys are stored in `ingest_keys` with scope `wpf`, bound to a device label in the host column. The core checks the marker and the stored scope, so `verify_key` and `key_host` for `wpi` refuse a `wpf` key and the plugin's `verify_field_key` refuses a `wpi` key. Admins issue them from the admin create route with `scope: "wpf"` or with `--ingest-key-scope wpf`, and only when the plugin is listed.
 - **Not built yet.** The plugin is not yet copied into the Docker image.
 
-### Built: upload endpoint (plugin slice 3)
+### Built: report push (plugin slice 3, moved to OTLP in slice r7-otlp-ingest)
 
-`upload.py` and `reports.py` in the plugin, and a key-authenticated router option in the core, implement the upload. Details that the sketch above left open:
+`otlp.py` and `reports.py` in the plugin, and the core's OTLP routes (`observe/otlp/api.py`), implement the push. Details that the sketch above left open:
 
-- **Core hook.** `PluginRouter(router, key_scope="wpf", public_prefix="/api/v1")`. The core applies a bearer key check for that scope and the rate limits described above before the body is read, and audits the request, so the earlier note that every plugin route needs a session no longer holds for such a router. A plugin may only name its own scope, never `admin` with it, and `public_prefix` must be `/api/v1` or below. A `prune` hook lets a plugin apply retention; the core calls it about hourly.
-- **Routes.** `POST /api/v1/field-reports` and `GET /api/v1/field-reports/ping` (returns the device label, the server time, the size cap and the accepted encodings). The mount point is the one in the sketch, not `/api/plugins/pockethernet/`.
-- **Order.** Rate limit (429), key (401), body cap 256 KiB on the wire (413), content encoding (415), gzip inflate, schema (400, 413 or 422), clock, store.
-- **Gzip.** One gzip member only. Output is capped at 256 KiB (413) and at 50 times the compressed size when above 16 KiB (413). Truncated, trailing or non-gzip data is 400. The stored body is the inflated JSON.
+- **Core hook.** The plugin registers a handler for the event name `observe.pockethernet.report` with the optional `log_handlers()` plugin hook (a name must start with `observe.<plugin>.`). The core authenticates the `wpf` key and applies the rate limits before the body is read, and audits the request. A `PluginRouter(router, key_scope=..., public_prefix="/api/v1")` is still available to other plugins, with the same rules. A `prune` hook lets a plugin apply retention; the core calls it about hourly.
+- **Routes.** `POST /v1/logs` carries the report; an empty `POST /v1/logs` checks a key and replaces the ping route. The route is the OTLP default path, not `/api/plugins/pockethernet/`.
+- **Order.** Per-peer rate limit (429), key (401), per-key rate limit (429), content type and encoding (415), request cap 1 MiB on the wire (413), gzip inflate capped at 4 MiB (413 or 400), decode (400), then for each record: size cap 256 KiB, schema, clock, store. A record that fails is counted in the `partial_success` of the 200 answer.
+- **Gzip.** One gzip member only. Output is capped at 4 MiB while inflating (413). Truncated, trailing or non-gzip data is 400. The stored body is the report JSON from the record body.
 - **Idempotency.** Table `field_reports`, keyed by `(source, report_id)`, with the source being the key's device label (a deviation from "by report id alone": another phone's key cannot replace or hide a report). Higher revision replaces (`replaced`), equal is `duplicate`, lower is `ignored`; all answer 200 so the phone's outbox drops the item.
 - **Clock.** The sketch said only "correction beyond 300 s". A phone cannot be corrected from its own report time alone, so the phone may send `X-Report-Sent-Ms` (its clock at send). A difference over 300 s from the server clock is added to the report time. A report time more than 300 s ahead of the server is set to now regardless. `clock_corrected` is returned and stored, with both times kept. A bad header value is 400.
-- **Audit.** Every state-changing request with a valid key is a `plugin_request` row (actor is the key prefix, detail has the device, result, report id, revisions, `clock_corrected` and size, or the reason for a refusal); 401 and 429 are `plugin_denied`. No key and no report content is written.
+- **Audit.** Every push with a valid key is a `plugin_request` row (actor is the key prefix, detail has the device, the number of rejected records and, per stored report, the result, report id, revisions, `clock_corrected` and size); 401, 403 and 429 are `ingest_denied`. No key and no report content is written.
 - **Retention.** `plugin_settings.pockethernet.evidence_retention_days` (default 365, 1 to 3650) drops the body of a report not updated for that long and keeps the summary row.
 
 ### Built: report to properties and edges (plugin slice 4)

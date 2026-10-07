@@ -3,7 +3,7 @@
 The dashboard and the /api/v2 read API do not change state. Adding, removing, or
 editing a monitor means editing the YAML and restarting the container, so a
 stolen session can read your inventory but can not change what is watched or
-silence an alert. The write paths are POST /api/ingest (observe/ingest/api.py,
+silence an alert. The write paths are POST /v1/metrics and /v1/logs (observe/otlp/api.py,
 host-bound ingest key, does not touch monitors) and the login surface below.
 
 Two credentials exist and they do not mix. The optional basic auth, and a
@@ -45,7 +45,8 @@ from .infra import InfraError, InfraService
 from .infra_map import MapService
 from .infra_match import LivePort, Matcher, PortMatch
 from .infra_port import PortPages
-from .ingest.api import DenialAggregator, RateLimiter, build_router
+from .ingest.api import DenialAggregator, Guard, RateLimiter, build_router
+from .otlp.api import build_router as build_otlp_router
 from .ingest.keys import (MARKER, READ_MARKER, IngestKeyError, create_key, key_host, list_keys,
                           revoke_key, verify_key)
 from .ingest.schema import MAX_NAME
@@ -112,7 +113,8 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             raise HTTPException(401, headers={"WWW-Authenticate": 'Basic realm="Observe"'})
 
     guarded = [Depends(auth)]
-    app.include_router(build_router(config, store, ingest_clock))
+    ingest_guard = Guard(config, store, ingest_clock)
+    app.include_router(build_router(config, store, ingest_guard))
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Any) -> Response:
@@ -153,6 +155,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         return JSONResponse({"detail": msg}, status_code=status, headers=headers)
 
     plugins = plugins or LoadedPlugins()
+    app.include_router(build_otlp_router(store, ingest_guard, plugins, auth_clock))
 
     # The v2 read API (observe/api): its own sub-application, mounted at /api/v2. It takes a
     # session or a read token, never basic auth, and answers with problem details. A plugin

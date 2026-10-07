@@ -1,10 +1,8 @@
-"""Agent-to-Observe wire schema (version 1).
+"""The normalized batch (version 1): what every producer is reduced to before it is stored.
 
-Copied from hostwatch/schema.py (hostwatch, same owner) and adapted. The
-field names, types and defaults are unchanged, so a batch that a hostwatch
-agent sends today parses here without modification. Differences, all
-tightening and none visible to a well-formed agent. Unknown fields are ignored,
-as hostwatch ignores them, so a newer agent is not dead-lettered:
+Producers push OTLP (observe/otlp), and the normalizer there builds these models; Observe's own
+pull checks (Home Assistant, SNMP) build them directly. The shape was copied from
+hostwatch/schema.py (hostwatch, same owner) and adapted. The limits, all tightening:
 
 - Strings, lists and mappings have size and count limits.
 - An unknown schema_version is a validation error (not a bare ValueError).

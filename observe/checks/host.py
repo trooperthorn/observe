@@ -1,7 +1,7 @@
 """Pushed hosts as monitors.
 
-Nothing is polled. The host agent pushes batches to POST /api/ingest, and this
-check reads the newest one from the store. Each component (one source and
+Nothing is polled. The host agent pushes OTLP metrics and logs to POST /v1/metrics and
+/v1/logs, and this check reads the newest data from the store. Each component (one source and
 metric, plus any required source) is Good, Warning or Critical, and the host
 is as bad as its worst component. The result then goes through the ordinary
 state machine, so `failures_to_down` confirmation, dependencies, groups,

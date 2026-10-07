@@ -17,6 +17,7 @@ from observe.state import State, Transition
 from observe.storage.base import StorageBusy
 
 from .api_env import START, ApiEnv, host_batch
+from .otlp_build import post_batch
 
 
 @pytest.fixture
@@ -92,9 +93,9 @@ def test_basic_auth_and_other_key_scopes_are_refused(env):
 def test_a_read_token_is_never_an_ingest_key(env):
     plain, _ = asyncio.run(create_key(env.store, "script", "t", scope="wpr", role="viewer"))
     batch = host_batch().model_dump(mode="json")
-    r = env.client.post("/internal/v1/ingest", json=batch,
-                        headers={"Authorization": f"Bearer {plain}"})
-    assert r.status_code in (401, 403)
+    r = post_batch(env.client, batch, plain)
+    assert r.status_code == 403
+    assert asyncio.run(env.store.host_rows()) == []
 
 
 def test_token_roles_are_viewer_or_operator_only(env):

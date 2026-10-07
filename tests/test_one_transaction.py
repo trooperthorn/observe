@@ -30,7 +30,7 @@ from observe_unifi.records import parse_device
 
 from .conftest import make_config
 from .fakes.pg_fake import PgFakeStorage
-from .test_pockethernet_upload import FIXTURE, TAKEN_S, dump
+from .test_pockethernet_otlp import FIXTURE, TAKEN_S, dump
 from .test_storage import live_pg
 from .test_unifi_feed import MAC1, NOW, SID1, SID2, classic_data, parsed
 from .test_unifi_plugin import device

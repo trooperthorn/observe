@@ -308,9 +308,9 @@ class ComponentThresholds(Thresholds):
 
 
 class PushedHostMonitor(MonitorBase):
-    """A host that pushes hostwatch batches to POST /api/ingest.
+    """A host that pushes OTLP metrics and logs to POST /v1/metrics and /v1/logs.
 
-    Nothing is polled. Each check reads the latest batch from the store and
+    Nothing is polled. Each check reads the latest data from the store and
     derives Good, Warning or Critical per component. `host` is the host name
     the agent sends, which is also the name its ingest key is bound to.
     """

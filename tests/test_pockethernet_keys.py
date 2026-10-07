@@ -22,6 +22,7 @@ from observe_pockethernet.keys import (SCOPE, create_field_key, field_key_device
                                          verify_field_key)
 
 from .conftest import make_config
+from .otlp_build import post_batch
 from .test_auth import PASSWORD, Clock
 
 HOST_BATCH = json.loads((Path(__file__).parent / "fixtures" / "hostwatch"
@@ -57,8 +58,7 @@ class Env:
         return {"X-CSRF-Token": r.json()["csrf"]}
 
     def ingest(self, key: str | None, body: dict | None = None):
-        headers = {"Authorization": f"Bearer {key}"} if key else {}
-        return self.client.post("/api/ingest", json=body or HOST_BATCH, headers=headers)
+        return post_batch(self.client, body or HOST_BATCH, key)
 
     def rows(self, sql: str, *args):
         db = sqlite3.connect(self.path)
@@ -147,12 +147,14 @@ def test_scope_must_be_well_formed(store):
     assert run(list_keys(store)) == []
 
 
-def test_wpf_key_is_refused_on_host_ingest(env):
+def test_wpf_key_never_writes_host_data(env):
     field_key, _ = run(create_field_key(env.store, "nas01"))  # even with a matching label
-    assert env.ingest(field_key).status_code == 401
-    assert env.rows("SELECT COUNT(*) FROM samples") == [(0,)]
+    # A field key is accepted by the OTLP routes, but what it sends is a field tester resource
+    # named by the key, never a host.
+    assert env.ingest(field_key).status_code == 200
     assert env.rows("SELECT COUNT(*) FROM hosts") == [(0,)]
-    assert env.rows("SELECT last_used FROM ingest_keys") == [(None,)]
+    assert env.rows("SELECT COUNT(*) FROM host_sources") == [(0,)]
+    assert env.rows("SELECT DISTINCT kind FROM resources") == [("field_tester",)]
     swapped = "wpi_" + field_key.split("_", 1)[1]
     assert env.ingest(swapped).status_code == 401
     assert env.rows("SELECT COUNT(*) FROM hosts") == [(0,)]

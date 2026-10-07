@@ -23,7 +23,7 @@ from observe_pockethernet.reports import prune_evidence
 
 from .conftest import make_config
 from .test_auth import Clock
-from .test_pockethernet_upload import FIXTURE, TAKEN_S, URL, run
+from .test_pockethernet_otlp import FIXTURE, TAKEN_S, URL, report_request, run
 
 PASSWORD = "correct horse battery"
 PKG = Path(__file__).parent.parent / "plugins" / "pockethernet" / "observe_pockethernet"
@@ -54,9 +54,10 @@ class Env:
         self.key, _ = run(create_field_key(self.store, "sean-pixel"))
 
     def upload(self, body: dict[str, Any]) -> dict[str, Any]:
-        r = self.client.post(URL, content=json.dumps(body).encode(),
+        r = self.client.post(URL, json=report_request(json.dumps(body).encode()),
                              headers={"Authorization": f"Bearer {self.key}"})
         assert r.status_code == 200, r.text
+        assert r.json() == {}, r.text  # nothing was refused
         return r.json()
 
     def login(self, name: str = "bob", admin: bool = False) -> None:

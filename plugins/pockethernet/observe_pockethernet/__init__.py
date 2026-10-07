@@ -1,6 +1,7 @@
 """The Pockethernet plugin: field reports from the Pockethernet Android app.
 
-This holds the report schema, the wpf key scope, the upload endpoint with its report store,
+This holds the report schema, the wpf key scope, the handler for report log records (reports
+arrive as OTLP logs at the core's POST /v1/logs) with its report store,
 the mapping from reports to port properties and map edges with an admin rebuild, and the report
 list, report detail and jack pages (docs/FIELD-DATA.md).
 """
@@ -22,7 +23,7 @@ from .keys import SCOPE
 from .derive import rebuild, retry_failed
 from .pages import build_pages_router
 from .reports import MIGRATIONS, prune_evidence
-from .upload import build_router
+from .otlp import EVENT, handle_report
 
 __version__ = "0.1.0"
 
@@ -91,9 +92,7 @@ class PockethernetPlugin(PluginBase):
         register_resources(api)
 
     def routers(self) -> list[PluginRouter]:
-        # Key-authenticated by the core with the wpf scope, mounted at /api/v1.
-        return [PluginRouter(build_router(), key_scope=SCOPE, public_prefix="/api/v1"),
-                PluginRouter(build_pages_router()),  # a login session, enforced by the core
+        return [PluginRouter(build_pages_router()),  # a login session, enforced by the core
                 PluginRouter(build_admin_router(), admin=True)]
 
     def pages(self) -> list[PluginPage]:
@@ -114,8 +113,12 @@ class PockethernetPlugin(PluginBase):
     async def prune(self, store: Store, now: float) -> int:
         return await prune_evidence(store, now, self.settings.evidence_retention_days)
 
+    def log_handlers(self) -> dict[str, Any]:
+        """A field report is the OTLP log record named observe.pockethernet.report."""
+        return {EVENT: handle_report}
+
     def key_scopes(self) -> list[KeyScope]:
-        return [KeyScope(SCOPE, "Pockethernet field report upload, bound to a device label")]
+        return [KeyScope(SCOPE, "Pockethernet field report push (OTLP), bound to a device label")]
 
 
 plugin = PockethernetPlugin()

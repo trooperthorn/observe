@@ -1,4 +1,4 @@
-"""The ha_Int_soc push contract: a recorded batch replayed through POST /internal/v1/ingest, graded
+"""The ha_Int_soc push contract: a recorded batch sent as OTLP to /v1/metrics and /v1/logs, graded
 on the host page, bound to its host by the key, and merged with the non-admin token reading.
 The fixture is shaped from the ha_Int_soc code and docs; the metric names and the label values
 are unverified against a live push (see docs/ARCHITECTURE.md)."""
@@ -24,10 +24,10 @@ from observe.store import Store
 from observe.web import create_app
 
 from .conftest import make_config
+from .otlp_build import post_batch
 
 FIXTURE = Path(__file__).parent / "fixtures" / "ha_soc" / "push_batch.json"
 PASSWORD = "correct horse battery"
-PATH = "/internal/v1/ingest"
 
 
 def load() -> dict:
@@ -53,7 +53,7 @@ class Env:
         return asyncio.run(create_key(self.store, host))[0]
 
     def push(self, body: dict, key: str):
-        return self.client.post(PATH, json=body, headers={"Authorization": f"Bearer {key}"})
+        return post_batch(self.client, body, key)
 
     def login(self) -> None:
         asyncio.run(auth.create_user(self.store, self.cfg, "alice", PASSWORD, False, now=self.now))
@@ -86,7 +86,8 @@ def test_push_fixture_is_accepted_and_graded(env):
     key = env.key("homeassistant")
     r = env.push(load(), key)
     assert r.status_code == 200, r.text
-    assert r.json() == {"stored": len(load()["samples"]), "events_stored": 2}
+    assert r.json() == {}  # nothing refused
+    assert len(asyncio.run(env.store.host_events("homeassistant"))) == 2
     env.login()
     d = env.view()
     assert d["heard"] and not d["stale"]
@@ -149,8 +150,14 @@ def test_key_bound_to_homeassistant_cannot_push_as_another_host(env):
 def test_resend_of_the_push_is_acknowledged_once(env):
     key = env.key("homeassistant")
     assert env.push(load(), key).status_code == 200
+    before = env.store.storage.read_sync(lambda db: db.execute(
+        "SELECT (SELECT COUNT(*) FROM samples), (SELECT COUNT(*) FROM host_events), "
+        "(SELECT COUNT(*) FROM ingest_batches)").fetchone())
     again = env.push(load(), key)
-    assert again.json() == {"stored": 0, "events_stored": 0, "duplicate": True}
+    assert again.status_code == 200 and again.json() == {}
+    assert env.store.storage.read_sync(lambda db: db.execute(
+        "SELECT (SELECT COUNT(*) FROM samples), (SELECT COUNT(*) FROM host_events), "
+        "(SELECT COUNT(*) FROM ingest_batches)").fetchone()) == before
 
 
 def test_push_stays_inside_the_size_bounds():

@@ -20,7 +20,7 @@ server:
   retention_days: 30
   # The audit log has its own retention, separate from polls and host samples.
   audit_retention_days: 365
-  ingest_rate_per_minute: 120  # POST /api/ingest requests per peer per minute
+  ingest_rate_per_minute: 120  # POST /v1/metrics and /v1/logs requests per peer and per key per minute
   # plugin_rate_per_minute: 300  # requests per peer to /api/plugins/* routes
   # The address install commands tell hosts to call, http(s)://host[:port] with no path and never
   # localhost. When unset, an admin confirms one in the Add host wizard. The request's Host
@@ -550,7 +550,7 @@ monitors:
     expect: online
 
   # ------------------------------------------------- Pushed hosts (hostwatch)
-  # The agent pushes to POST /api/ingest with a key from
+  # The agent pushes OTLP to POST /v1/metrics and /v1/logs with a key from
   # --ingest-key-create nas01. Listing the host here is what makes it a
   # monitor. No batch within stale_after seconds (default three intervals)
   # counts as a failure.

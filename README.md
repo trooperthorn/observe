@@ -152,8 +152,8 @@ monitor (default `homeassistant`); the Probe reports the filesystems mounted int
 container.
 
 Richer Home Assistant detail (containers, integration health, repairs, backups, Supervisor health,
-watchdog breaches and crash classifications) arrives when ha_Int_soc pushes a hostwatch-schema batch
-every 60 s to `/internal/v1/ingest` with a `wpi` key created for the host `homeassistant`. The key
+watchdog breaches and crash classifications) arrives when ha_Int_soc pushes OTLP/HTTP JSON
+every 60 s to `/v1/metrics` and `/v1/logs` with a `wpi` key created for the host `homeassistant`. The key
 cannot push any other host. The contract is in `docs/ARCHITECTURE.md` under "Home Assistant push
 contract", and the metric names are unverified against a live push.
 
@@ -551,23 +551,26 @@ values and as an override per monitor. A saved per-monitor override beats the va
 config entry, which beats the saved global value, which beats `defaults` in the config file. A change
 applies at the next result of each monitor and is audited with its old and new values.
 
-The hostwatch wire schema models exist in `observe/ingest/schema.py`, with
-size and count limits, ignoring of unknown fields, and rejection of unknown schema
-versions. `POST /internal/v1/ingest` (the path hostwatch agents use; `/api/ingest`
-is an alias) in `observe/ingest/api.py` receives batches. A batch without
-`batch_id` is deduplicated by a content hash.
-It takes `Authorization: Bearer <ingest key>`, rejects a body over 1 MiB, and
-stores samples, source status and events only when the key is valid and bound
-to the host named in the body. The answers are 401 for a missing, wrong or
-revoked key, 403 for a valid key bound to another host, 413 for an oversized
-body, 400 for a body nested deeper than 32 levels (checked before parsing, and
-recorded as a denial), 422 for a body that fails the schema, and 429 over the per-peer rate
-limit (`server.ingest_rate_per_minute`, default 120). A batch that repeats a
-`batch_id` is acknowledged with `"duplicate": true` and stored once, so an
-agent can replay its outbox safely. Denials are written to the audit table at
-most once per peer per minute, with a count of the denials the row covers. The
-endpoint does not use the optional dashboard basic auth, because agents carry
-their own key.
+Producers push OpenTelemetry (OTLP/HTTP) and nothing else: metrics to `POST /v1/metrics` and logs to
+`POST /v1/logs`, as `application/x-protobuf` or `application/json`, optionally gzip. The old hostwatch
+batch route (`/internal/v1/ingest`, `/api/ingest`) and the old Pockethernet upload
+(`/api/v1/field-reports`) are gone, and `/v1/traces` answers 404. The routes are in `observe/otlp/api.py`
+and the decoder, which needs no protobuf library, is in `observe/otlp/wire.py`. A request takes
+`Authorization: Bearer <ingest key>`, rejects a body over 1 MiB (4 MiB once inflated), and stores data
+only when the key is valid and every resource names the host the key is bound to in `host.name`. The
+instrumentation scope name is the source, the metric name is the metric and the point attributes are the
+labels; a log record is an event (`event.name` is its kind, see `docs/ARCHITECTURE.md` "Ingest"). The
+answers are 401 for a missing, wrong or revoked key, 403 for a valid control or read key and for a
+request in which nothing matched the key's host, 415 for an unknown content type or encoding, 413 for an
+oversized body, 400 for a body that does not decode or is nested deeper than 32 levels in JSON (checked
+before parsing, and recorded as a denial), and 429 over the per-peer and per-key rate limit
+(`server.ingest_rate_per_minute`, default 120). A resource for another host, a point that is not finite or
+has no usable time, a bad metric name and similar faults are rejected one by one and counted in the
+`partial_success` of a 200 answer, and the rest of the request is stored. Sending the same request
+again is safe: a point is stored once per series and millisecond, an event once per `observe.dedup_key`,
+and a request that repeats an `Idempotency-Key` (or the same bytes) is acknowledged without being decoded.
+Denials are written to the audit table at most once per peer per minute, with a count of the denials the
+row covers. The routes do not use the optional dashboard basic auth, because producers carry their own key.
 
 Boot events from the agent are classified as clean, crash or unknown. The
 classification is stored in the event detail, and the host row records the
@@ -621,11 +624,11 @@ the wizard.
 new key once and stores only a hash; the key works for ingest and only for
 that host name. `--ingest-key-list` shows each key's id, host, state and last
 use, and `--ingest-key-revoke ID` revokes one. The keys are accepted only
-by `POST /api/ingest`.
+by `POST /v1/metrics` and `POST /v1/logs`.
 
 A key has a scope, shown by its marker. `wpi` is host ingest. A listed plugin
 may register another scope; the Pockethernet plugin registers `wpf`, for field
-report uploads. Create one with `--ingest-key-scope wpf` (HOST is then the
+report pushes. Create one with `--ingest-key-scope wpf` (HOST is then the
 device label, for example the phone's name) or with the `scope` field on the
 admin screen's create call. Only `wpi` and the scopes of listed plugins can be
 issued. A `wpf` key is refused by host ingest and a `wpi` key is refused for
@@ -715,16 +718,17 @@ stopped. A plugin's navigation entry may name the console `workspace` it belongs
 (`overview`, `hosts`, `network`, `reports` or `admin`; the default is `network`). Plugin pages live under `/plugins/<name>/` and need a login. A plugin may also declare periodic collectors: async jobs with an interval of at least 30 seconds and a timeout no longer than the interval. The scheduler runs each in its own task, once at startup and then on its interval. A failure or timeout is logged once per streak and never stops other collectors or the scheduler, and a plugin with a shorter interval is refused at startup. Plugins run in the same process with full trust, so install only
 plugins you trust. The design is in `docs/FIELD-DATA.md`.
 
-The Pockethernet plugin accepts field reports from the phone at
-`POST /api/v1/field-reports` with a `wpf` key (`Authorization: Bearer wpf_...`), and
-`GET /api/v1/field-reports/ping` checks a key and returns the server time. A body is
-JSON, at most 256 KiB, and may be gzip with `Content-Encoding: gzip` if it inflates to
-no more than 256 KiB at no more than 50 times its compressed size. A report is kept by
+The Pockethernet plugin accepts field reports from the phone as OTLP log records: the phone sends
+`POST /v1/logs` with a `wpf` key (`Authorization: Bearer wpf_...`), and one record with the `event.name`
+`observe.pockethernet.report` whose string body is the report JSON. An empty request to `POST /v1/logs`
+checks a key. The report is JSON, at most 256 KiB, and the request may be gzip with
+`Content-Encoding: gzip` (1 MiB on the wire, 4 MiB inflated). A record that does not validate is counted
+in the `partial_success` of the 200 answer. A report is kept by
 its `report_id` and `revision` per phone: a higher revision replaces it, the same one
 is a duplicate and a lower one is ignored. A phone whose clock is more than 5 minutes
 off is corrected, using the optional `X-Report-Sent-Ms` header, and the report is
-flagged `clock_corrected`. Each upload counts against `server.plugin_rate_per_minute`
-and is audited (valid keys are counted per key and per peer, failed keys per peer separately). The raw report is evidence and is kept for
+flagged `clock_corrected`. Each push counts against `server.ingest_rate_per_minute`
+and is audited (valid keys are counted per key and per peer). The raw report is evidence and is kept for
 `plugin_settings.pockethernet.evidence_retention_days` (default 365) before the body
 is dropped. Each accepted report is also turned into map data: the LLDP or CDP neighbour
 gives a switch and port, the site port id gives a jack patched to that port, and the

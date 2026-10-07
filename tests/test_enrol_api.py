@@ -15,6 +15,7 @@ import pytest
 from observe import enrol
 from observe.ingest.keys import verify_key
 
+from .otlp_build import post_batch
 from .test_auth import BASIC, Env
 
 FIXTURES = Path(__file__).parent / "fixtures" / "hostwatch"
@@ -74,7 +75,7 @@ def run_install(env, token, params=None):
 def ingest_for(env, host, key):
     body = json.loads((FIXTURES / "batch_minimal.json").read_text(encoding="utf-8"))
     body["host"] = host
-    return env.client.post("/api/ingest", json=body, headers={"Authorization": f"Bearer {key}"})
+    return post_batch(env.client, body, key)
 
 
 def test_create_returns_headed_command_and_stores_only_a_digest(env):

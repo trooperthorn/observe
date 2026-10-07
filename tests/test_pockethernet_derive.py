@@ -13,7 +13,7 @@ from observe import auth
 from observe_pockethernet import derive
 from observe.portkey import switch_id
 
-from .test_pockethernet_upload import FIXTURE, Env, run
+from .test_pockethernet_otlp import FIXTURE, Env, run
 
 SID = switch_id("00:11:22:33:44:55")
 JACK = FIXTURE["site"]["port_id"]
@@ -69,8 +69,8 @@ def test_report_creates_switch_port_jack_link_and_properties(env):
     names = {r[0] for r in env.rows("SELECT name FROM port_properties")}
     assert names == {n for n, v in FIXTURE["properties"].items() if v is not None
                      and n != "last_tested_at_ms"} | {"last_tested_at"}
-    (audit,) = env.rows("SELECT detail FROM audit WHERE path=?", "/api/v1/field-reports")
-    assert json.loads(audit[0])["derived"]["jack_linked"] is True
+    (audit,) = env.rows("SELECT detail FROM audit WHERE kind='plugin_request'")
+    assert json.loads(audit[0])["handled"][0]["derived"]["jack_linked"] is True
 
 
 def test_second_report_on_another_port_repatches_the_jack(env):
@@ -125,8 +125,8 @@ def test_report_without_a_neighbour_is_stored_but_derives_nothing(env):
     assert env.rows("SELECT 1 FROM field_reports") != []
     assert env.rows("SELECT 1 FROM infra_switches") == []
     assert env.rows("SELECT 1 FROM port_properties") == []
-    (a,) = env.rows("SELECT detail FROM audit WHERE path=?", "/api/v1/field-reports")
-    assert "skipped" in json.loads(a[0])["derived"]
+    (a,) = env.rows("SELECT detail FROM audit WHERE kind='plugin_request'")
+    assert "skipped" in json.loads(a[0])["handled"][0]["derived"]
 
 
 def test_cdp_neighbour_without_a_mac_uses_the_device_name(env):
@@ -149,12 +149,12 @@ def test_a_failed_derivation_is_stored_flagged_and_not_a_clean_accept(env, monke
     monkeypatch.setattr("observe_pockethernet.reports.derive_report_tx", boom)
     monkeypatch.setattr(derive, "derive_report_tx", boom)
     r = env.post(FIXTURE)
-    assert r.status_code == 202
+    assert r.status_code == 200  # stored; derive_status in the audit row says it is not derived
     assert r.json()["result"] == "accepted" and r.json()["derive_status"] == "failed"
     assert "secret" not in r.text
     assert env.rows("SELECT derive_status FROM field_reports") == [("failed",)]
-    (a,) = env.rows("SELECT detail FROM audit WHERE path=?", "/api/v1/field-reports")
-    detail = json.loads(a[0])
+    (a,) = env.rows("SELECT detail FROM audit WHERE kind='plugin_request'")
+    detail = json.loads(a[0])["handled"][0]
     assert detail["derive_failed"] == "RuntimeError" and "secret" not in a[0]
     assert env.rows("SELECT 1 FROM port_properties") == []
 
