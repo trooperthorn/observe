@@ -81,6 +81,14 @@ class RateLimiter:
         return entry[1] <= self.limit
 
 
+    def charge(self, peer: str, extra: int) -> None:
+        """Count `extra` more requests against a peer's current window, for a request that cost
+        more than one (a body refused only after it was inflated or decoded)."""
+        entry = self._state.get(peer)
+        if entry is not None and self._clock() - entry[0] < self.WINDOW_S:
+            entry[1] += extra
+
+
 def bearer(request: Request) -> str | None:
     header = request.headers.get("authorization", "")
     if header[:7].lower() != "bearer ":

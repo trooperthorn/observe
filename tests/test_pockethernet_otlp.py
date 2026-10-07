@@ -518,3 +518,22 @@ def test_unlisted_plugin_handles_no_report(tmp_path):
         assert r.status_code == 200
         assert rejected(r)[0] == 1 and "no plugin handles" in rejected(r)[1]
     store.close()
+
+
+def test_a_field_key_may_not_write_port_metrics(env):
+    """A port belongs to the collectors that own its identity. A wpf key naming a switch and a
+    port is refused and counted, and no port resource is created; the plugin derives port
+    properties from a report through its own validated path."""
+    metrics = metrics_request(None, {"ph": [gauge("link_speed_mbps", [number(1000.0, TAKEN_S)])]},
+                              observe__switch="core-sw", observe__port="1")
+    r = env.client.post("/v1/metrics", json=metrics,
+                        headers={"Authorization": f"Bearer {env.key}"})
+    assert r.status_code == 200
+    assert r.json()["partialSuccess"]["rejectedDataPoints"] == "1"
+    assert "may not write port metrics" in r.json()["partialSuccess"]["errorMessage"]
+    assert env.rows("SELECT * FROM resources WHERE kind = 'port'") == []
+    assert env.rows("SELECT COUNT(*) FROM samples") == [(0,)]
+    own = metrics_request(None, {"ph": [gauge("link_speed_mbps", [number(1000.0, TAKEN_S)])]})
+    assert env.client.post("/v1/metrics", json=own, headers={
+        "Authorization": f"Bearer {env.key}"}).json() == {}
+    assert env.rows("SELECT COUNT(*) FROM samples") == [(1,)]

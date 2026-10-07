@@ -600,7 +600,7 @@ def test_a_version_11_database_with_enrolments_migrates_to_14(tmp_path):
     db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
     db.commit()
     newer = {v: m for v, m in MIGRATIONS.items() if v > 11}
-    assert newer and SCHEMA_VERSION == 20
+    assert newer and SCHEMA_VERSION == 21
     for v in newer:
         del MIGRATIONS[v]
     try:
@@ -634,7 +634,7 @@ def test_a_version_18_database_keeps_its_ingest_keys_with_an_empty_role(tmp_path
     db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
     db.commit()
     newer = {v: m for v, m in MIGRATIONS.items() if v > 18}
-    assert newer and SCHEMA_VERSION == 20
+    assert newer and SCHEMA_VERSION == 21
     for v in newer:
         del MIGRATIONS[v]
     try:

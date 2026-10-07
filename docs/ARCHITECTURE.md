@@ -35,8 +35,9 @@ Bodies are `application/x-protobuf` or `application/json` (the OTLP JSON mapping
 `Content-Encoding: gzip`, and the answer uses the encoding of the request. `wire.py` is a decoder
 of about 200 lines with no dependency for the messages Observe reads. It skips unknown fields by
 wire type, returns the shape of the OTLP JSON mapping so that one normalizer reads both encodings,
-and enforces its limits while it decodes: a nesting depth of 16, a budget of 400,000 fields per
-request, varints of at most 10 bytes, every length-delimited field must fit in the bytes that
+and enforces its limits while it decodes: a nesting depth of 16, a work budget of 200,000 units per
+request (a field costs one, a sub message costs four more, because building a message is what
+dominates the time of a body of empty messages), varints of at most 10 bytes, every length-delimited field must fit in the bytes that
 remain, strings must be UTF-8 and groups are refused. A malformed message is a 400. Decoding and
 normalizing run on a worker thread, not on the event loop.
 
@@ -44,10 +45,16 @@ A request is checked in this order, cheapest and least informative first: the pe
 (429 with `Retry-After: 60`); a valid unrevoked bearer key (401, before the body is read), where a
 valid key of the control (`wpc`) or read (`wpr`) scope is a 403; the per-key rate limit (429); the
 content type and content encoding (415); the body cap of 1 MiB on the wire (413); gzip inflation
-capped at 4 MiB while inflating (413, and a malformed, truncated or multi-member stream is 400);
+capped at 4 MiB while inflating (413, and a malformed, truncated or multi-member stream is 400),
+and a body that inflates to more than 100 times its compressed size (at least 64 KiB are always
+allowed) is a 400 before any decoding work, so a tiny gzip can not buy a large decode;
 for JSON, a nesting limit of 32 checked before parsing (400); the repeat check described below;
 and then decoding (400) and normalizing. Nothing is stored from a request that fails any of these.
-The last use of a key is recorded at most once a minute.
+A body refused after it was inflated or decoded is charged four extra requests to the key's rate
+limit, so repeated expensive refusals run out of the allowance sooner than cheap requests. The
+worst body that passes the size checks (1 MB of empty messages) is stopped by the work budget in
+about 0.05 s of decoder time, measured in `tests/test_ingest_integrity.py`. The last use of a key is
+recorded at most once a minute.
 
 Authentication and host binding. A `wpi` key is bound to one host. Every `resource` of a request
 must carry `host.name` equal to that host (ignoring case and surrounding space), and the data is
@@ -57,9 +64,11 @@ so a producer that also sends container resources of the same host is not refuse
 in which nothing was accepted because of a host mismatch is a 403 and an `ingest_denied` audit row
 with the bound host and the count, so a key bound to the wrong host fails loudly. A `wpf` field key
 is accepted on both routes for field data only and never writes a host. On `/v1/metrics` every
-resource becomes a `field_tester` resource named by the key's device label (or a `port` resource
-when it carries `observe.switch` and `observe.port`), and `observe.field.device` is overwritten
-with the key's device label, so a client cannot spoof it. On `/v1/logs` each record goes to the
+resource becomes a `field_tester` resource named by the key's device label, and
+`observe.field.device` is overwritten with the key's device label, so a client cannot spoof it.
+A resource that carries `observe.switch` or `observe.port` is refused and counted, because a port
+is owned by the collectors that name it: the Pockethernet plugin derives port properties from a
+report through its own validated path, and a field key never writes port metrics. On `/v1/logs` each record goes to the
 plugin that registered a handler for its `event.name` through the optional `log_handlers()` plugin
 hook (a name must start with `observe.<plugin name>.` and can be taken once); a record that no
 plugin handles is rejected.
@@ -96,20 +105,31 @@ request is written in one transaction by `Store.ingest_batch`: the host row, sam
 status and events. A source reported with `present: false` is stored as unavailable with the
 reason "not present on this host", because the version 2 table has no separate present column.
 
-Idempotency has three layers, so a producer may retry any request. A point is stored once per
+Idempotency has three layers, so a producer may retry any request that carries a key. A point is stored once per
 series and millisecond (`INSERT ... ON CONFLICT DO NOTHING`), and the summary levels change only
 for a point that was newly stored, so a resent point is a no-op; a point sent again with another
 value replaces it and corrects its summaries. Events are kept once per host and `dedup_key`.
-A repeated request is recognised before it is decoded: its identity is the `Idempotency-Key`
-header when the producer sent one (hashed together with the signal, so the metrics and the logs
-request of one batch may share a key) and otherwise a SHA-256 of the inflated body, remembered per
-host in `ingest_batches`, and a repeat is answered with an empty 200 and stores nothing. An
+A repeated request is recognised before it is decoded by its `Idempotency-Key` header (hashed
+together with the signal, so the metrics and the logs request of one batch may share a key),
+remembered per host in `ingest_batches` together with a SHA-256 of the inflated body. A repeat with
+the same body is answered with an empty 200 and stores nothing; a repeat with a different body is a
+409 and an `ingest_denied` audit row, never a silent drop (the check also runs inside the write
+unit, so two concurrent requests can not slip past it). A request without a key is not recognised
+by its body: a body whose points carry no `timeUnixNano` repeats legitimately, every such point
+takes the receive time, and points are deduplicated by series and timestamp alone. An
 `Idempotency-Key` must be 1 to 128 printable ASCII characters (400 otherwise).
 
+A point older than the raw retention boundary of its metric (`cuts_for(...).raw`, the time before
+which raw rows are trimmed) is late: it is not stored and not folded into any level, and it is
+counted in the partial success. Storing it would re-create a raw row and a 5 minute row past their
+retention and count it a second time in the hourly and daily rows, which compaction can not detect
+because the coarse count still covers the raw count. The same holds for the field key's metrics.
+
 Time and order are guarded in `Store.ingest_batch`. Any sample, event or batch
-`sent_at` more than `MAX_FUTURE_SKEW_S` (300 seconds) ahead of receive time is clamped to
-receive time, so a bad agent clock can not mask later readings or freeze `boot_id` and
-`clean_shutdown`. The host row's platform, agent version and heartbeat, and each source's
+`sent_at` more than `MAX_FUTURE_SKEW_S` (5 seconds) ahead of receive time is clamped to
+receive time, so a bad agent clock can not mask later readings, hold the latest value of a series
+(the latest row only moves forward in time) or freeze `boot_id` and `clean_shutdown`. A field
+key's points are clamped the same way. The host row's platform, agent version and heartbeat, and each source's
 status, are only replaced by a batch whose `sent_at` is not older than the stored one, so a
 replayed older batch leaves newer state alone.
 

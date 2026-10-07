@@ -31,6 +31,7 @@ import hashlib
 import json
 import logging
 import time
+import uuid
 import zlib
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -45,12 +46,20 @@ from ..ingest.keys import key_host, verify_key
 from ..ingest.schema import MAX_BODY_BYTES, MAX_JSON_DEPTH
 from ..plugins import LoadedPlugins, LogContext, LogRejected
 from ..storage import StorageBusy, series
-from ..store import Store
+from ..store import IdempotencyConflict, MAX_FUTURE_SKEW_S, Store
 from . import normalize, wire
 
 log = logging.getLogger("observe.otlp")
 
 MAX_INFLATED_BYTES = 4 * 1024 * 1024
+# A body may inflate to at most this many times its compressed size (always up to
+# MIN_INFLATED_ALLOWANCE). Telemetry compresses about ten to one; a body that expands a hundred
+# times or more is a decompression bomb, refused before any decoding work is spent on it.
+MAX_INFLATE_RATIO = 100
+MIN_INFLATED_ALLOWANCE = 64 * 1024
+# Extra requests charged to the key's rate limit for a body refused only after it was inflated
+# or decoded, so a hostile key can not repeat expensive refusals at the full request rate.
+REFUSAL_COST = 4
 HOST_SCOPE, FIELD_SCOPE = "wpi", "wpf"
 REFUSED_SCOPES = ("wpc", "wpr")  # control and read keys never write data
 LAST_USED_EVERY_S = 60.0
@@ -91,6 +100,8 @@ def inflate(data: bytes) -> bytes:
         raise BadRequest(400, "body is not valid gzip") from err
     if len(out) > MAX_INFLATED_BYTES:
         raise BadRequest(413, "body is too large once inflated")
+    if len(out) > max(MIN_INFLATED_ALLOWANCE, MAX_INFLATE_RATIO * len(data)):
+        raise BadRequest(400, "body expands too much when inflated")
     if not d.eof:
         raise BadRequest(400, "gzip body is truncated")
     if d.unused_data:
@@ -138,14 +149,21 @@ def decode_body(body: bytes, content_type: str, signal: str) -> Any:
         raise BadRequest(400, "body is not valid JSON") from err
 
 
-def _batch_id(signal: str, idem: str | None, body: bytes) -> str:
-    """The id a batch is remembered by: the Idempotency-Key when the producer sent one, else a
-    hash of the (inflated) body, so a byte-identical resend is recognised either way. The signal
-    is part of it, because one key may legitimately be used for the metrics and the logs request
-    of the same batch."""
+def _batch_id(signal: str, idem: str | None) -> str:
+    """The id a batch is remembered by: the Idempotency-Key when the producer sent one. The
+    signal is part of it, because one key may legitimately be used for the metrics and the logs
+    request of the same batch. A request without a key is not recognised by its body, because a
+    body without timestamps repeats legitimately (every point takes the receive time); its points
+    are deduplicated by series and timestamp and its log records by their dedup key instead, so
+    it gets a fresh id."""
     if idem is not None:
         return "idem:" + hashlib.sha256(f"{signal}\0{idem}".encode()).hexdigest()[:40]
-    return "otlp:" + hashlib.sha256(signal.encode() + b"\0" + body).hexdigest()[:40]
+    return "otlp:" + uuid.uuid4().hex
+
+
+def _body_hash(signal: str, body: bytes) -> str:
+    """The hash of the (inflated) body an idempotency record is made from."""
+    return hashlib.sha256(signal.encode() + b"\0" + body).hexdigest()[:40]
 
 
 def _reply(content_type: str, signal: str, rejected: int, message: str) -> Response:
@@ -215,6 +233,7 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
             try:
                 body = inflate(body)
             except BadRequest as err:
+                guard.key_limiter.charge(prefix, REFUSAL_COST)
                 return await guard.deny(request, err.status, err.reason, prefix)
         return body, ctype
 
@@ -240,22 +259,32 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
         if idem is not None and not (0 < len(idem) <= MAX_IDEMPOTENCY_KEY and idem.isascii()
                                      and idem.isprintable()):
             return await guard.deny(request, 400, "Idempotency-Key is not valid", prefix)
-        batch_id = _batch_id(signal, idem, body)
-        if scope == HOST_SCOPE:
-            seen = await store.fetch("SELECT 1 FROM ingest_batches WHERE host = ? "
+        batch_id = _batch_id(signal, idem)
+        body_hash = _body_hash(signal, body)
+        if scope == HOST_SCOPE and idem is not None:
+            seen = await store.fetch("SELECT body_hash FROM ingest_batches WHERE host = ? "
                                      "AND batch_id = ?", (bound, batch_id))
             if seen:
+                if seen[0][0] and seen[0][0] != body_hash:
+                    return await conflict(request, prefix, bound)
                 return _reply(ctype, signal, 0, "")  # a resend: stored, nothing to do
         try:
             req = await asyncio.to_thread(decode_body, body, ctype, signal)
         except BadRequest as err:
+            guard.key_limiter.charge(prefix, REFUSAL_COST)
             return await guard.deny(request, err.status, err.reason, prefix)
         if scope == FIELD_SCOPE:
             return await field_push(request, signal, req, ctype, prefix, bound, now)
-        return await host_push(request, signal, req, ctype, prefix, bound, batch_id, now, peer)
+        return await host_push(request, signal, req, ctype, prefix, bound, batch_id, body_hash,
+                               now, peer)
+
+    async def conflict(request: Request, prefix: str, bound: str) -> JSONResponse:
+        return await guard.deny(request, 409, "Idempotency-Key was already used for a different "
+                                "body", prefix, {"host": bound})
 
     async def host_push(request: Request, signal: str, req: Any, ctype: str, prefix: str,
-                        bound: str, batch_id: str, now: float, peer: str) -> Response:
+                        bound: str, batch_id: str, body_hash: str, now: float,
+                        peer: str) -> Response:
         fn = normalize.normalize_metrics if signal == "metrics" else normalize.normalize_logs
         result = await asyncio.to_thread(fn, req, bound, now)
         rejects = result.rejects
@@ -269,7 +298,9 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
             batch.batch_id = batch_id
             try:
                 stored, _events, duplicate = await store.ingest_batch(
-                    batch, classify_events(batch.events), now=now)
+                    batch, classify_events(batch.events), now=now, body_hash=body_hash)
+            except IdempotencyConflict:
+                return await conflict(request, prefix, bound)
             except Exception as err:
                 # Nothing was stored, so record that the batch failed partway.
                 await audit.record(store, "ingest_failed", actor=prefix, method=request.method,
@@ -291,7 +322,8 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
             points, rejects = await asyncio.to_thread(normalize.normalize_field_metrics,
                                                       req, device, now)
             dropped = await store.storage.write(
-                lambda db: _write_field_points(db, points, now, store.storage.incremental_rollups),
+                lambda db: _write_field_points(db, points, now, store.storage.incremental_rollups,
+                                               store.raw_cut(db, now)),
                 touches=("metrics",)) if points else 0
             detail.update(points=len(points) - dropped)
             rejected = rejects.count + dropped
@@ -350,16 +382,19 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
 
 
 def _write_field_points(db: Any, points: list[normalize.FieldPoint], now: float,
-                        rollups: bool) -> int:
+                        rollups: bool, raw_cut: Callable[[str], int] | None = None) -> int:
     """Store the points of a field key's request, one resource at a time. Returns the number
-    refused by the series cardinality guard."""
+    refused by the series cardinality guard or ignored as older than the raw retention."""
     groups: dict[tuple[str, str], tuple[dict[str, Any], list[series.Point]]] = {}
+    now_ms = series.to_ms(now)
+    ahead = now_ms + series.to_ms(MAX_FUTURE_SKEW_S)
     for p in points:
         attrs, pts = groups.setdefault((p.kind, p.name), (p.attrs, []))
-        pts.append(series.Point(p.scope, p.metric, p.unit, p.labels, p.ts_ms, p.value))
+        ts_ms = now_ms if p.ts_ms > ahead else p.ts_ms  # a clock far ahead is stored at receipt
+        pts.append(series.Point(p.scope, p.metric, p.unit, p.labels, ts_ms, p.value))
     dropped = 0
     for (kind, name), (attrs, pts) in groups.items():
         rec = series.record_points(db, kind=kind, name=name, points=pts, now=now,
-                                   rollups=rollups, attrs=attrs)
-        dropped += rec.dropped
+                                   rollups=rollups, attrs=attrs, raw_cut=raw_cut)
+        dropped += rec.dropped + rec.late
     return dropped

@@ -152,9 +152,9 @@ async def test_recording_reports_new_duplicate_and_replaced_points(storage):
             db, kind="host", name="h", now=1.0, rollups=storage.incremental_rollups,
             points=[series.Point("cpu", "m", "C", "{}", ts, v) for ts, v in points]))
 
-    assert dataclasses.astuple(await record([(1000, 1.0), (2000, 2.0)])) == (2, 0, 0, 0)
-    assert dataclasses.astuple(await record([(1000, 1.0), (3000, 3.0)])) == (1, 0, 1, 0)
-    assert dataclasses.astuple(await record([(2000, 9.0)])) == (0, 1, 0, 0)
+    assert dataclasses.astuple(await record([(1000, 1.0), (2000, 2.0)])) == (2, 0, 0, 0, 0)
+    assert dataclasses.astuple(await record([(1000, 1.0), (3000, 3.0)])) == (1, 0, 1, 0, 0)
+    assert dataclasses.astuple(await record([(2000, 9.0)])) == (0, 1, 0, 0, 0)
     assert await storage.fetchall("SELECT ts, value FROM samples ORDER BY ts") == [
         (1000, 1.0), (2000, 9.0), (3000, 3.0)]
 

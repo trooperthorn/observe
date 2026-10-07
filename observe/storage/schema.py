@@ -320,6 +320,17 @@ def _add_key_role(db: sqlite3.Connection) -> None:
 
 KEY_ROLE_TABLES = (_add_key_role,)
 
+# The hash of the body an idempotency record was made from, so a reused Idempotency-Key with a
+# different body is refused instead of being taken for a resend. Empty for older rows and for
+# batches from the agent route, which are not compared.
+def _add_body_hash(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(ingest_batches)")}
+    if "body_hash" not in columns:
+        db.execute("ALTER TABLE ingest_batches ADD COLUMN body_hash TEXT NOT NULL DEFAULT ''")
+
+
+BATCH_BODY_HASH = (_add_body_hash,)
+
 # The step that creates the summary levels. TimescaleDB runs its own version of it.
 ROLLUP_STEP = 17
 
@@ -346,6 +357,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     18: MAP_TABLES,
     19: KEY_ROLE_TABLES,
     20: EXPORT_TABLES,
+    21: BATCH_BODY_HASH,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

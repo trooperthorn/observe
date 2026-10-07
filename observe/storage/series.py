@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -87,6 +87,7 @@ class Recorded:
     replaced: int  # points that replaced a stored value
     duplicate: int  # points already stored with the same value
     dropped: int  # points refused by the cardinality guard
+    late: int = 0  # points older than the raw retention boundary, ignored
 
 
 # ---- identity -------------------------------------------------------------------------------
@@ -265,10 +266,30 @@ def _replace(db: Conn, sid: int, ts_ms: int, old: float | None, new: float | Non
 def record_points(db: Conn, *, kind: str, name: str, points: Iterable[Point], now: float,
                   rollups: bool, attrs: Mapping[str, Any] | None = None,
                   max_per_resource: int = MAX_SERIES_PER_RESOURCE,
-                  max_total: int = MAX_SERIES_TOTAL) -> Recorded:
+                  max_total: int = MAX_SERIES_TOTAL,
+                  raw_cut: Callable[[str], int] | None = None) -> Recorded:
     """Store the points of one resource inside a write unit. `rollups` says whether the summary
-    levels are maintained here (False on TimescaleDB, where continuous aggregates build them)."""
+    levels are maintained here (False on TimescaleDB, where continuous aggregates build them).
+
+    `raw_cut` gives, for a metric name, the millisecond time before which its raw rows are
+    trimmed. A point older than that is late: its raw row would be trimmed at once and its
+    summary rows may already be compacted away, so storing it would count it a second time in
+    the levels above (or re-create a row past its retention). It is ignored and counted in
+    `late`. Writers of live data pass it; the backfill of old poll rows does not."""
     pts = list(points)
+    late = 0
+    if raw_cut is not None:
+        cuts: dict[str, int] = {}
+        kept = []
+        for p in pts:
+            cut = cuts.get(p.metric)
+            if cut is None:
+                cut = cuts[p.metric] = raw_cut(p.metric)
+            if p.ts_ms < cut:
+                late += 1
+            else:
+                kept.append(p)
+        pts = kept
     rid = resource_id(db, kind, name, now, attrs)
     ids = _series_ids(db, rid, pts, now, max_per_resource, max_total)
     new = replaced = duplicate = dropped = 0
@@ -293,7 +314,7 @@ def record_points(db: Conn, *, kind: str, name: str, points: Iterable[Point], no
         else:
             replaced += 1
             _replace(db, sid, p.ts_ms, old, p.value, rollups)
-    return Recorded(new, replaced, duplicate, dropped)
+    return Recorded(new, replaced, duplicate, dropped, late)
 
 
 # ---- removing a resource --------------------------------------------------------------------

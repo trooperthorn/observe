@@ -388,8 +388,9 @@ def normalize_metrics(req: Any, bound_host: str, now: float) -> Normalized:
 
 
 def normalize_field_metrics(req: Any, device: str, now: float) -> tuple[list[FieldPoint], Rejects]:
-    """A field key's metrics request. Every resource is a field tester or a port, and the
-    `observe.field.device` attribute is set to the key's device label whatever the client sent."""
+    """A field key's metrics request. Every resource is the field tester named by the key's
+    device label, and the `observe.field.device` attribute is set to that label whatever the
+    client sent. A resource that names a switch or a port is refused and counted."""
     rejects = Rejects()
 
     def want(res: dict[str, Any]) -> str:
@@ -401,13 +402,16 @@ def normalize_field_metrics(req: Any, device: str, now: float) -> tuple[list[Fie
         if problem:
             rejects.add(problem)
             continue
-        switch, port = res.get("observe.switch"), res.get("observe.port")
+        # A field key owns one resource, the tester named by its device label. A port is shared
+        # with the SNMP and UniFi collectors that own its identity, so a field key never writes
+        # port metrics: the Pockethernet plugin derives port properties from a report through
+        # its own validated path (observe_pockethernet/derive.py).
         keep = {k: v for k, v in res.items() if isinstance(v, (str, int, float, bool))
                 and not k.startswith("observe.field.")}
-        if isinstance(switch, str) and isinstance(port, (str, int)) and not isinstance(port, bool):
-            rkind, rname = "port", f"{switch}/{port}"
-        else:
-            rkind, rname = "field_tester", device
+        if "observe.switch" in res or "observe.port" in res:
+            rejects.add("a field key may not write port metrics")
+            continue
+        rkind, rname = "field_tester", device
         keep["observe.field.device"] = device
         labels = json.dumps({k: _label(v) for k, v in sorted(attrs.items())},
                             separators=(",", ":"), sort_keys=True)

@@ -137,9 +137,10 @@ class SnmpCheck(Check):
         host = self.monitor.host_name
         if not host or self.store is None:
             return
-        batch = host_batch(host, self.monitor.mode, res, self.clock())
+        now = self.clock()
+        batch = host_batch(host, self.monitor.mode, res, now)
         if batch is not None:
-            await self.store.ingest_batch(batch, {})
+            await self.store.ingest_batch(batch, {}, now=now)
 
     async def _mode_oid(self) -> CheckResult:
         oid = self.monitor.oid if self.monitor.oid.startswith(".") else "." + self.monitor.oid

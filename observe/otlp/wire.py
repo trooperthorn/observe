@@ -14,7 +14,13 @@ import struct
 from typing import Any
 
 MAX_DEPTH = 16
-MAX_FIELDS = 400_000  # decoded fields in one request, a bound on memory for a hostile body
+# The work one request may cost the decoder. Every decoded field costs one unit and every
+# sub message costs MESSAGE_COST more, because building a message (a dict and a list append) is
+# what dominates the time of a hostile body made of empty messages. A real request of the
+# largest accepted size (5000 points with attributes) stays far below the cap, while the worst
+# hostile body is stopped after a bounded, small amount of work (see tests/test_ingest_integrity).
+MESSAGE_COST = 4
+MAX_FIELDS = 200_000
 
 VARINT, FIXED64, LEN, SGROUP, EGROUP, FIXED32 = 0, 1, 2, 3, 4, 5
 
@@ -135,6 +141,7 @@ def _decode(buf: bytes, start: int, end: int, name: str, depth: int,
             raise WireError(f"field {field} has the wrong wire type")
         value: Any
         if kind == "msg":
+            budget.left -= MESSAGE_COST
             value = _decode(buf, raw[0], raw[1], sub or "Skipped", depth + 1, budget)
         elif kind == "str":
             try:

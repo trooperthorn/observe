@@ -36,6 +36,7 @@ from .test_pockethernet_otlp import _load
 
 PROTO, JSON = "application/x-protobuf", "application/json"
 T0 = 1_760_000_000.0
+WALL_AFTER_T0 = 10_000.0
 
 
 class Clock:
@@ -53,10 +54,14 @@ class Env:
         self.cfg = make_config([{"name": "p", "type": "ping", "host": "127.0.0.1"}],
                                server={"db_path": self.path, "ingest_rate_per_minute": rate})
         self.clock = Clock()
+        # The receive time of the pushes. The fixtures carry fixed times near T0, and a point
+        # older than the raw retention is ignored, so the clock sits just after them.
+        self.wall = Clock()
+        self.wall.now = T0 + WALL_AFTER_T0
         alerter = Alerter(self.cfg)
         sched = Scheduler(self.cfg, self.store, alerter)
         self.client = TestClient(create_app(self.cfg, self.store, sched, alerter,
-                                            ingest_clock=self.clock))
+                                            ingest_clock=self.clock, auth_clock=self.wall))
 
     def key(self, host: str) -> str:
         return asyncio.run(create_key(self.store, host))[0]
@@ -149,7 +154,7 @@ def test_the_same_data_through_the_old_store_path_and_otlp_is_the_same_series(en
     direct["host"] = "nas02"
     batch = Batch.model_validate(direct)
     from observe.ingest.boot import classify_events
-    asyncio.run(env.store.ingest_batch(batch, classify_events(batch.events)))
+    asyncio.run(env.store.ingest_batch(batch, classify_events(batch.events), now=env.wall.now))
     via_otlp = [r[1:] for r in env.stored() if r[0] == "nas01"]
     via_store = [r[1:] for r in env.stored() if r[0] == "nas02"]
     assert via_otlp and via_otlp == via_store
@@ -179,11 +184,10 @@ def test_point_attributes_become_string_labels_and_a_missing_time_is_now(env):
     dp = number(1.0, 0, {"n": 5, "ok": True, "f": 1.5, "s": "x"})
     del dp["timeUnixNano"]
     req = metrics_request("nas01", {"s": [gauge("m", [dp])]})
-    before = time.time()
     assert env.push(req, key).status_code == 200
     (row,) = env.rows(f"SELECT labels, ts FROM {SAMPLE_ROWS}")
     assert json.loads(row[0]) == {"n": "5", "ok": "true", "f": "1.5", "s": "x"}
-    assert before * 1000 - 1 <= row[1] <= time.time() * 1000 + 1
+    assert row[1] == round(env.wall.now * 1000)
 
 
 def test_a_source_is_unavailable_or_absent_from_the_status_gauges(env):
@@ -562,22 +566,20 @@ def test_an_identical_resend_is_acknowledged_and_changes_nothing(env):
     key = env.key("nas01")
     req = simple()
     assert env.push(req, key).status_code == 200
-    batches = env.rows("SELECT COUNT(*) FROM ingest_batches")
     before = env.stored()
     again = env.push(req, key)
     assert again.status_code == 200 and again.json() == {}
-    assert env.stored() == before and env.rows("SELECT COUNT(*) FROM ingest_batches") == batches
+    assert env.stored() == before  # the point is recognised by its series and time, not its body
 
 
 def test_a_resend_with_an_idempotency_key_skips_decoding(env, monkeypatch):
     key = env.key("nas01")
     headers = {"Idempotency-Key": "8f14e45f-ceea-467f-a0e6-6c1f3a1c2b11"}
-    assert env.push(simple(), key, headers=headers).status_code == 200
+    assert env.push(simple(), key, headers=headers, encoding="proto").status_code == 200
     calls = []
     real = wire.decode
     monkeypatch.setattr(wire, "decode", lambda *a: calls.append(a) or real(*a))
-    changed = simple(value=99.0, ts=T0 + 60)  # the producer resends under the same key
-    r = env.push(changed, key, headers=headers, encoding="proto")
+    r = env.push(simple(), key, headers=headers, encoding="proto")  # the same bytes again
     assert r.status_code == 200 and calls == []
     assert [x[4] for x in env.stored()] == [12.5]  # nothing new was stored
 

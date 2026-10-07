@@ -12,12 +12,13 @@ import hashlib
 import json
 import logging
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .checks.base import CheckResult, Result
 from .ingest.schema import Batch, normalize_severity
 from .state import Transition
-from .storage import Conn, Storage, open_storage, rollups, series
+from .storage import Conn, Storage, compaction, open_storage, rollups, series
 
 if TYPE_CHECKING:
     from .plugins import LoadedPlugins
@@ -26,9 +27,14 @@ if TYPE_CHECKING:
 ABSENT_REASON = "not present on this host"
 
 # Agent clocks may run a little ahead. A timestamp further ahead of receive time
-# than this is clamped to receive time, so it can not mask later readings or
-# freeze boot state.
-MAX_FUTURE_SKEW_S = 300.0
+# than this is clamped to receive time, so it can not mask later readings, freeze the latest
+# value of a series or freeze boot state. The allowance is small because the latest row only
+# moves forward in time: a point stamped further ahead would hold it for that long.
+MAX_FUTURE_SKEW_S = 5.0
+
+
+class IdempotencyConflict(Exception):
+    """An idempotency record exists for the batch id but was made from a different body."""
 
 
 def content_key(batch: Batch) -> str:
@@ -76,6 +82,10 @@ log = logging.getLogger(__name__)
 BACKFILL_KEY = "monitor_series_backfill_done"
 
 class Store:
+    # server.retention_days, the raw level when no retention setting exists; it decides which
+    # points are too old to record (see raw_cut). Set by from_config.
+    retention_fallback: int | None = None
+
     def __init__(self, path: str, plugins: LoadedPlugins | None = None, *,
                  backend: str = "sqlite", dsn: str | None = None, password: str | None = None,
                  timescale: str = "auto") -> None:
@@ -95,6 +105,7 @@ class Store:
                     dsn=s.dsn.get_secret_value() if s.dsn else None, password=s.password(),
                     timescale=s.timescaledb)
         store.map_stale_days = config.map.stale_days
+        store.retention_fallback = config.server.retention_days
         return store
 
     async def fetch(self, sql: str, args: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
@@ -259,8 +270,13 @@ class Store:
         total, ok = rows[0]
         return None if not total else round(float(ok) / int(total) * 100, 3)
 
+    def raw_cut(self, db: Conn, now: float) -> Callable[[str], int]:
+        """For a metric name, the millisecond time before which its raw rows are trimmed now."""
+        levels = rollups.load_levels(db, self.retention_fallback)
+        return lambda metric: compaction.cuts_for(levels, metric, now).raw
+
     def _ingest_unit(self, db: Conn, batch: Batch, boots: dict[int, tuple[str, int | None]],
-                     now: float) -> tuple[int, int, bool]:
+                     now: float, body_hash: str = "") -> tuple[int, int, bool]:
         # Adapted from hostwatch's Store.ingest_batch (hostwatch, same owner): one
         # transaction for the batch id, host row, sources, samples and events.
         # A batch without batch_id is identified by a hash of its content, so a
@@ -271,9 +287,14 @@ class Store:
         sent = clamp(batch.sent_at)
         batch_key = batch.batch_id if batch.batch_id is not None else content_key(batch)
         cur = db.execute(
-            "INSERT INTO ingest_batches (host, batch_id, ts) VALUES (?,?,?) "
-            "ON CONFLICT(host, batch_id) DO NOTHING", (batch.host, batch_key, now))
+            "INSERT INTO ingest_batches (host, batch_id, ts, body_hash) VALUES (?,?,?,?) "
+            "ON CONFLICT(host, batch_id) DO NOTHING", (batch.host, batch_key, now, body_hash))
         if cur.rowcount == 0:
+            if body_hash:
+                row = db.execute("SELECT body_hash FROM ingest_batches WHERE host = ? "
+                                 "AND batch_id = ?", (batch.host, batch_key)).fetchone()
+                if row is not None and row[0] and row[0] != body_hash:
+                    raise IdempotencyConflict(batch_key)
             return 0, 0, True
         # A resend changes nothing, so only a stored batch bumps the change counters.
         self.storage.write_sync(lambda _db: None, touches=("metrics", "hosts", "events"))
@@ -291,6 +312,7 @@ class Store:
         # from and its labels are the point attributes (docs/DATA-API-DESIGN.md section 3.2).
         recorded = series.record_points(
             db, kind="host", name=batch.host, now=now, rollups=self.storage.incremental_rollups,
+            raw_cut=self.raw_cut(db, now),
             points=[series.Point(s.source, s.metric, s.unit, series.canonical(s.labels),
                                  series.to_ms(clamp(s.ts)), s.value) for s in batch.samples])
         db.executemany(
@@ -325,16 +347,19 @@ class Store:
                     "UPDATE hosts SET boot_id=?, boot_ts=?, clean_shutdown=? "
                     "WHERE host=? AND (boot_ts IS NULL OR boot_ts <= ?)",
                     (ev.boot_id, ev_ts, clean, batch.host, ev_ts))
-        return len(batch.samples) - recorded.dropped, stored, False
+        return len(batch.samples) - recorded.dropped - recorded.late, stored, False
 
     async def ingest_batch(self, batch: Batch, boots: dict[int, tuple[str, int | None]],
-                           now: float | None = None) -> tuple[int, int, bool]:
+                           now: float | None = None, body_hash: str = ""
+                           ) -> tuple[int, int, bool]:
         """Store a pushed batch. boots maps an event index to (classification,
         clean_shutdown flag). Returns (samples stored, events stored, duplicate).
         A batch_id already recorded for the host is acknowledged and nothing is
-        stored again."""
+        stored again, unless both records carry a body hash and the hashes differ: the id was
+        reused for another body and IdempotencyConflict is raised (nothing is stored)."""
         at = time.time() if now is None else now
-        return await self.storage.write(lambda db: self._ingest_unit(db, batch, boots, at))
+        return await self.storage.write(
+            lambda db: self._ingest_unit(db, batch, boots, at, body_hash))
 
     @staticmethod
     def _latest_host_unit(db: Conn, host: str, since: float, newest_fallback: bool,
