@@ -278,6 +278,7 @@ class MonitorBase(Strict):
     recheck_interval: float | None = Field(default=None, ge=MIN_RECHECK_INTERVAL)
     recheck_window: float | None = Field(default=None, ge=0)
     recheck_good: int | None = Field(default=None, ge=1)
+    degraded_cooldown: float | None = Field(default=None, ge=0)
     thresholds: Thresholds | None = None
     alerts: list[str] | None = None  # alert target names; None means all
     enabled: bool = True
@@ -974,6 +975,11 @@ class Defaults(Strict):
     recheck_interval: float = Field(default=10.0, ge=MIN_RECHECK_INTERVAL)
     recheck_window: float = Field(default=180.0, ge=0)
     recheck_good: int = Field(default=2, ge=1)
+    # The least time between the end of one Degraded episode (a recovery) and the start of the
+    # next. A host that alternates between answering and not answering is not given a Degraded
+    # and Up notice pair every cycle: inside the cooldown a missed reply is judged by the
+    # ordinary failure counts. 0 turns the cooldown off.
+    degraded_cooldown: float = Field(default=120.0, ge=0)
 
 
 class Config(Strict):

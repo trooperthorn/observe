@@ -14,6 +14,13 @@ Alert decisions live here because they need the whole picture:
   is Warning, "Degraded: not responding", and is polled every `recheck_interval` seconds. While a
   parent is Down the child starts no re-check of its own. While a parent is in its own re-check
   window the child's alert is held, and sent when the parent recovers if the child still fails.
+* Saved threshold rules (observe/rules.py) are evaluated here for pulled data (the value and the
+  latency of every poll) and by `observe_pushed` for pushed data (every stored sample). A rule
+  that holds Warning or Critical on a host raises that poll's result to Warn or Fail, so the
+  state machine's confirmation counts, the group status, the dashboard and the alerts follow the
+  ordinary path.
+* A storage error in a poll or a state write is logged once per streak and the monitor is polled
+  again next cycle; it never ends the loop.
 * An UP alert is sent only if the matching problem alert was sent.
 * When a parent recovers, any descendant that is still DOWN or WARN on its
   own is alerted then, because it is now a real, separate problem.
@@ -22,6 +29,7 @@ Alert decisions live here because they need the whole picture:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import random
 import time
@@ -32,11 +40,12 @@ from .alerts import Alerter
 from .checks import build_check
 from .checks.base import CheckResult, Result
 from .config import Config
-from . import recheck_settings
+from . import recheck_settings, rules
 from .forecast import Forecast, project
 from .rollup import Rollup
 from .state import MonitorState, State, Transition
-from .store import Store
+from .storage import series
+from .store import MONITOR_SCOPE, Store
 
 log = logging.getLogger("observe.scheduler")
 
@@ -58,6 +67,7 @@ class Scheduler:
                                  config.effective(m, "recoveries_to_up"),
                                  recheck_window=config.effective(m, "recheck_window"),
                                  recheck_good=config.effective(m, "recheck_good"),
+                                 degraded_cooldown=config.effective(m, "degraded_cooldown"),
                                  since=clock())
             for m in self.monitors
         }
@@ -66,6 +76,10 @@ class Scheduler:
         self._recheck_global: dict[str, Any] = {}
         self._recheck_overrides: dict[str, dict[str, Any]] = {}
         self._recheck_loaded = False
+        # The threshold rule engine (docs/DATA-API-DESIGN.md section 10.4) and whether the saved
+        # rules have been read yet.
+        self.rules = rules.RuleEngine(clock=clock)
+        self._rules_loaded = False
         self.forecasts: dict[str, Forecast] = {}
         self.forecast_rev = 0  # counts forecast refreshes, so the API can tell they changed
         self._locks = {m.slug: asyncio.Lock() for m in self.monitors}
@@ -116,6 +130,81 @@ class Scheduler:
         glob, overrides = await self.store.storage.read(recheck_settings.load)
         self.apply_recheck(glob, overrides)
 
+    def apply_rules(self, saved: Any) -> None:
+        """Use a new saved rule set now. Rule states of removed rules are forgotten; the rest
+        keep their rings and levels."""
+        self.rules.set_rules(saved)
+        self._rules_loaded = True
+
+    async def load_rules(self) -> None:
+        """Read the saved rules from the storage, once before the first poll."""
+        self.apply_rules(await self.store.storage.read(rules.load))
+
+    async def _feed_rules(self, host: str, key: str, metric: str,
+                          where: tuple[str, str, str, str, str],
+                          value: float | None, ts: float) -> None:
+        """Give one sample to the rule engine, if any rule applies to it. A series seen for the
+        first time (after a restart) has its ring filled from the stored samples older than this
+        one, so a rule has history at once. `where` locates the series: resource kind and name,
+        scope, metric and canonical attributes."""
+        if not self.rules.rules_for(host, metric):
+            return  # no rule, so no ring: memory stays bounded by the rules, not by the data
+        if self.rules.series(key) is None:
+            kind, name, scope, raw_metric, attrs = where
+            rows = await self.store.fetch(
+                "SELECT sm.ts, sm.value FROM samples sm JOIN series s ON s.id = sm.series_id "
+                "JOIN resources r ON r.id = s.resource_id JOIN scopes sc ON sc.id = s.scope_id "
+                "WHERE r.kind = ? AND r.name = ? AND sc.name = ? AND s.metric = ? AND s.attrs = ? "
+                "AND sm.ts < ? ORDER BY sm.ts DESC LIMIT ?",
+                (kind, name, scope, raw_metric, attrs, series.to_ms(ts), rules.RING_CAPACITY))
+            self.rules.seed(key, host, metric, [(r[0] / 1000.0, r[1]) for r in reversed(rows)])
+        self.rules.observe(key, host, metric, value, ts)
+
+    async def observe_pushed(self, host: str, samples: Any, now: float) -> None:
+        """Called after a pushed batch is stored: evaluate the rules on its samples. A failure
+        is logged and never undoes or fails the stored batch."""
+        try:
+            if not self._rules_loaded:
+                await self.load_rules()
+            for s in samples:
+                metric = f"{s.source}.{s.metric}"
+                attrs = series.canonical(s.labels)
+                key = f"host:{host}:{metric}:{attrs}"
+                await self._feed_rules(host, key, metric,
+                                       ("host", host, s.source, s.metric, attrs),
+                                       s.value, min(s.ts, now))
+        except Exception:  # noqa: BLE001 - rules must not undo a stored batch
+            log.exception("evaluating threshold rules for pushed host %s failed", host)
+
+    async def _apply_rules(self, monitor: Any, res: CheckResult, ts: float) -> CheckResult:
+        """Evaluate the rules for a poll and raise its result to what they hold. A pushed host's
+        series were fed at ingest; a pulled monitor's value and latency are fed here. The result
+        then goes through the state machine like any other, so confirmation counts apply."""
+        pushed = monitor.type == "pushed_host"
+        host = monitor.host if pushed else monitor.slug
+        try:
+            if not self._rules_loaded:
+                await self.load_rules()
+            if not pushed:
+                value = None if res.result is Result.FAIL else res.value
+                for metric, val in (("monitor.value", value), ("monitor.latency", res.latency_ms)):
+                    await self._feed_rules(host, f"monitor:{monitor.slug}:{metric}", metric,
+                                           ("monitor", monitor.slug, MONITOR_SCOPE, metric, "{}"),
+                                           val, ts)
+            self.rules.tick()
+            level, why = self.rules.worst(host)
+        except Exception:  # noqa: BLE001 - a rule problem must not stop polling
+            log.exception("evaluating threshold rules for %s failed", monitor.name)
+            return res
+        if level == rules.OK or res.result is Result.FAIL:
+            return res
+        if level == rules.CRITICAL:
+            return dataclasses.replace(res, result=Result.FAIL, message=f"{res.message}; {why}",
+                                       unreachable=False)
+        if res.result is Result.OK:
+            return dataclasses.replace(res, result=Result.WARN, message=f"{res.message}; {why}")
+        return res
+
     async def restore(self, monitor: Any) -> None:
         """Take the monitor's state from its newest stored result (the latest table), so a
         restart does not show everything as pending. A result older than three intervals is not
@@ -147,6 +236,7 @@ class Scheduler:
         async with self._locks[monitor.slug]:
             res = await self._probe(monitor)
             now = self.clock()
+            res = await self._apply_rules(monitor, res, now)
             await self.store.record(monitor.slug, now, res)
             tr = self.states[monitor.slug].observe(
                 res, now, allow_recheck=self.rollup.blocking_parent(monitor.slug) is None)
@@ -263,15 +353,40 @@ class Scheduler:
 
     async def _loop(self, monitor: Any) -> None:
         interval = self.config.effective(monitor, "interval")
-        if not self._recheck_loaded:
-            await self.load_recheck()
-        await self.restore(monitor)
-        await asyncio.sleep(random.uniform(0, min(interval, 10)))  # spread the first wave
+        failing = False
+        ready = False
+        while not ready:  # the start-up reads can meet a busy storage too
+            try:
+                if not self._recheck_loaded:
+                    await self.load_recheck()
+                if not self._rules_loaded:
+                    await self.load_rules()
+                await self.restore(monitor)
+                ready = True
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                if not failing:
+                    log.exception("monitor %s could not start; trying again", monitor.name)
+                failing = True
+                await self._wait(max(1.0, self.delay(monitor)))
+        await self._wait(random.uniform(0, min(interval, 10)))  # spread the first wave
         while True:
             started = asyncio.get_running_loop().time()
-            await self.poll_once(monitor)
+            try:
+                await self.poll_once(monitor)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - a storage error must not end the loop
+                if not failing:
+                    log.exception("polling %s failed; trying again next cycle", monitor.name)
+                failing = True
+            else:
+                if failing:
+                    log.info("polling %s recovered", monitor.name)
+                failing = False
             elapsed = asyncio.get_running_loop().time() - started
-            await asyncio.sleep(max(1.0, self.delay(monitor) - elapsed))
+            await self._wait(max(1.0, self.delay(monitor) - elapsed))
 
     async def _hook_loop(self) -> None:
         while True:
@@ -283,7 +398,8 @@ class Scheduler:
             await asyncio.sleep(60)
 
     async def _wait(self, seconds: float) -> None:
-        """The pause between collector runs. A test replaces it to avoid real waiting."""
+        """The pause between collector runs and monitor polls. A test replaces it to avoid real
+        waiting."""
         await asyncio.sleep(seconds)
 
     async def _collector_loop(self, plugin: str, collector: Any) -> None:

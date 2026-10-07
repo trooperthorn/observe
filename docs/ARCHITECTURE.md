@@ -305,7 +305,28 @@ the missing-data rules for time that passed with no sample. The rule set is vali
 `rules.config` by `rules.save` inside one `Storage.write` unit with one `rules_changed` audit row holding
 the old and new rules. `PUT /api/admin/rules` (admin session, CSRF) replaces the whole list and answers 422
 with a `rules_failed` audit row for a refused rule; the page `/admin/rules` (`admin-rules.js`) edits the
-list. The engine is not yet wired to ingest, so a saved rule is stored and audited but evaluated by nothing.
+list. The scheduler owns one engine and wires it in two places. For pushed data, `POST /v1/metrics` calls
+`Scheduler.observe_pushed` after a batch is stored (not for a resend), which feeds every sample whose
+series a rule applies to; the rule metric is `<source>.<metric>` (for example `hwmon.cpu_temp_c`) and the
+rule host is the pushed host name. For pulled data, `poll_once` feeds `monitor.value` and `monitor.latency`
+of each poll (a failed poll feeds no value, so a missing-data rule sees it), and the rule host is the
+monitor slug. A series with no applicable rule gets no ring, so memory follows the rules and not the data.
+A series seen for the first time after a restart has its ring filled from the newest stored samples
+(`samples`, at most 100). `RuleEngine.worst(host)` gives the highest level held on a host; `poll_once`
+raises the result of that host's poll to Warn (Warning) or Fail (Critical) when it is better, and the
+state machine then applies `failures_to_down` and the other confirmation counts, so the group status,
+the dashboard and the alerts follow the ordinary path. `PUT /api/admin/rules` applies the new set at
+once (`Scheduler.apply_rules`); a rule that is removed forgets its states. Rules never stop a poll or
+undo a stored batch: an error is logged and the poll or batch goes on. A window rule is judged only when
+the full ring reaches back over its window, so a window longer than 100 samples of the poll rate never
+fires (owner decision: raise `RING_CAPACITY` or bound the window by the poll rate).
+
+Monitor loops survive storage errors. `Scheduler._loop` catches any error from a poll, its state write
+or its start-up reads, logs it once per streak, retries at the next cycle and logs the recovery. After
+a recovery from a missed reply the monitor cannot start another Degraded episode for
+`defaults.degraded_cooldown` seconds (default 120, 0 turns it off; also a per-monitor field), so a host
+that alternates between answering and not answering is judged by the ordinary failure counts and does not
+create a Degraded and Up pair every cycle.
  The table reads
 `rollup_state`: one row per trimmed level (`raw`, `5m`, `1h`, `1d`) with the time it was trimmed to,
 when, the rows removed and the first coverage problem, and one `compaction` row that the

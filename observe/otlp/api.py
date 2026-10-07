@@ -32,7 +32,7 @@ import json
 import logging
 import time
 import zlib
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -164,7 +164,9 @@ def problem(status: int, title: str, detail: str) -> JSONResponse:
 
 
 def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
-                 wall: Callable[[], float] = time.time) -> APIRouter:
+                 wall: Callable[[], float] = time.time,
+                 on_samples: Callable[[str, Any, float], Awaitable[None]] | None = None
+                 ) -> APIRouter:
     router = APIRouter()
     last_used: dict[str, float] = {}  # key prefix -> monotonic time its last use was recorded
 
@@ -276,6 +278,8 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
                 raise
             if not duplicate:
                 dropped = len(batch.samples) - stored
+                if on_samples is not None and batch.samples:
+                    await on_samples(bound, batch.samples, now)  # the threshold rules
         return _reply(ctype, signal, rejects.count + dropped, rejects.message())
 
     async def field_push(request: Request, signal: str, req: Any, ctype: str, prefix: str,

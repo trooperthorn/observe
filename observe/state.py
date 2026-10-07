@@ -9,7 +9,9 @@ consecutive OK results.
 A missed reply is handled differently (docs/DATA-API-DESIGN.md section 10.3). The first failed
 check that means "nothing answered" moves the monitor to WARN at once, marked degraded with the
 message "Degraded: not responding", and the scheduler re-checks it every `recheck_interval`
-seconds. `recheck_good` good replies in a row return it to UP. If the window of `recheck_window`
+seconds. `recheck_good` good replies in a row return it to UP. After a recovery, a new episode
+cannot start for `degraded_cooldown` seconds; a miss inside the cooldown is judged by the
+ordinary counts, so a host that flaps does not produce a Degraded and Up pair every cycle. If the window of `recheck_window`
 seconds ends with no recovery it goes DOWN. A window of 0 turns this off and the counts above
 apply to every failure.
 
@@ -66,6 +68,10 @@ class MonitorState:
     degraded: bool = False
     degraded_since: float = 0.0
     replies: int = 0
+    # The least seconds between the recovery that ended one Degraded episode and the start of the
+    # next; `degraded_ended` is that recovery's time (None before the first episode ends).
+    degraded_cooldown: float = 0.0
+    degraded_ended: float | None = None
     # True once a DOWN/WARN alert has actually been sent, so the matching UP
     # alert goes out, and only then. Suppressed or never-alerted problems
     # recover silently.
@@ -95,6 +101,7 @@ class MonitorState:
             if self.replies < self.recheck_good:
                 return None
             self.degraded = False
+            self.degraded_ended = now
             self.bad = self.warnish = 0
             self.good = self.replies
             self.replies = 0
@@ -117,7 +124,9 @@ class MonitorState:
             if outcome is not False:
                 return outcome
         elif (allow_recheck and self.recheck_window > 0 and res.result is Result.FAIL
-              and res.unreachable and self.state is not State.DOWN):
+              and res.unreachable and self.state is not State.DOWN
+              and (self.degraded_ended is None
+                   or now - self.degraded_ended >= self.degraded_cooldown)):
             self.degraded, self.degraded_since, self.replies = True, now, 0
             self.bad = self.warnish = 1
             self.good = 0

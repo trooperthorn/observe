@@ -154,7 +154,8 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         return JSONResponse({"detail": msg}, status_code=status, headers=headers)
 
     plugins = plugins or LoadedPlugins()
-    app.include_router(build_otlp_router(store, ingest_guard, plugins, auth_clock))
+    app.include_router(build_otlp_router(store, ingest_guard, plugins, auth_clock,
+                                          on_samples=scheduler.observe_pushed))
 
     # The v2 read API (observe/api): its own sub-application, mounted at /api/v2. It takes a
     # session or a read token, never basic auth, and answers with problem details. A plugin
@@ -800,7 +801,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
         """Replace the whole threshold rule list. Admin session and CSRF. A refused rule answers
         422 and is audited; a change is audited with the old and new rules. Saved rules are
-        stored for the rule engine; nothing evaluates them yet (docs/ARCHITECTURE.md)."""
+        evaluated by the scheduler from the next poll or batch (docs/ARCHITECTURE.md)."""
         remote = request.client.host if request.client else ""
         body = await body_of(request)
         try:
@@ -813,6 +814,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         await store.storage.write(lambda db: rules.save(
             db, parsed, now=auth_clock(), actor=sess.username, remote=remote),
             touches=("admin", "audit"))
+        scheduler.apply_rules(parsed)
         return JSONResponse({"rules": [r.as_dict() for r in parsed], "max_rules": rules.MAX_RULES})
 
     @app.post("/api/hosts", include_in_schema=False)

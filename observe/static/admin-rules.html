@@ -22,8 +22,8 @@
   </div>
   <p id="msg" class="msg-line" role="alert"></p>
   <section class="card notice" aria-labelledby="note-h">
-    <h3 id="note-h">Saved, not yet evaluated</h3>
-    <p>Rules are validated and stored, and every change is audited. The rule engine does not read them yet, so a saved rule does not change any monitor state until that wiring ships.</p>
+    <h3 id="note-h">Rules are evaluated</h3>
+    <p>Rules are validated and stored, and every change is audited. A saved rule applies at the next poll of a monitor or the next pushed batch. A rule that holds Warning or Critical raises the host to Warn or Down through the usual confirmation counts, so alerts follow the normal path. A window rule is judged only when the last 100 samples reach back over its window.</p>
   </section>
   <section class="card" aria-labelledby="list-h">
     <h3 id="list-h">Saved rules</h3>

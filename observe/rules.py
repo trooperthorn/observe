@@ -375,6 +375,16 @@ class RuleEngine:
         st.add(now if ts is None else ts, value)
         return [self._step(rule, key, st, now) for rule in self.rules_for(host, metric)]
 
+    def worst(self, host: str) -> tuple[int, str]:
+        """The highest level any rule holds on any series of `host`, with a short reason."""
+        level, why = OK, ""
+        for (rule_id, key), slot in self._state.items():
+            if slot[0] > level and self._meta[key][0] == host:
+                level = slot[0]
+                why = (f"threshold rule {rule_id} is {LEVEL_NAMES[level]} "
+                       f"on {self._meta[key][1]}")
+        return level, why
+
     def tick(self) -> list[Verdict]:
         """Evaluate the missing-data rules of every known series against the clock."""
         now = self._clock()
@@ -453,6 +463,8 @@ class RuleEngine:
             return len(flags) == rule.x and all(flags)
         if rule.kind == "ratio":
             return sum(self._flags(rule, threshold, list(st.ring)[-rule.y:])) >= rule.x
+        if len(st.ring) >= st.capacity and st.ring[0][0] > now - rule.window:
+            return False  # a full ring that does not reach back over the window cannot judge it
         values = [v for ts, v in st.ring if v is not None and ts > now - rule.window]
         if not values:
             return False
