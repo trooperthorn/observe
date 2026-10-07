@@ -49,6 +49,15 @@ _ADDON_MARK = re.compile(r"^(?:binary_sensor\.([a-z0-9_]+)_running|update\.([a-z
 _DISK = {"sensor.home_assistant_host_disk_free": "disk_free_gb",
          "sensor.home_assistant_host_disk_used": "disk_used_gb",
          "sensor.home_assistant_host_disk_total": "disk_total_gb"}
+# The scopes this monitor writes (docs/DATA-API-DESIGN.md section 3.4); the metric names are the
+# OpenTelemetry names, and the disk sensors are in GB (10^9 bytes).
+HA = "observe.check.homeassistant"
+HASSIO = "observe.check.hassio"
+SOC = "observe.check.ha_soc"
+GB = 1e9
+_DISK_OTEL = {"disk_free_gb": ("system.filesystem.usage", "free"),
+              "disk_used_gb": ("system.filesystem.usage", "used"),
+              "disk_total_gb": ("system.filesystem.limit", "")}
 _SOC = {"sensor.ha_soc_posture_score": "posture_score",
         "sensor.ha_soc_open_detections": "open_detections",
         "sensor.ha_soc_users_at_risk": "users_at_risk",
@@ -87,17 +96,19 @@ def build_batch(host: str, config: dict[str, Any], states: list[dict[str, Any]],
                 now: float) -> Batch:
     samples: list[dict[str, Any]] = []
 
-    def add(source: str, metric: str, value: float | None, unit: str = "", **labels: str) -> None:
+    def add(source: str, metric: str, value: float | None, unit: str = "",
+            labels: dict[str, str] | None = None) -> None:
         samples.append({"source": source, "metric": metric, "value": value, "unit": unit,
-                        "labels": {k: _text(v) for k, v in labels.items()}, "ts": now})
+                        "labels": {k: _text(v) for k, v in (labels or {}).items()}, "ts": now})
 
     core_version = _text(config.get("version"))
-    add("homeassistant", "running", 1.0 if config.get("state") == "RUNNING" else 0.0, "",
-        state=_text(config.get("state")))
-    add("homeassistant", "safe_mode", 1.0 if config.get("safe_mode") else 0.0)
-    add("homeassistant", "recovery_mode", 1.0 if config.get("recovery_mode") else 0.0)
+    add(HA, "observe.ha.running", 1.0 if config.get("state") == "RUNNING" else 0.0, "1",
+        {"observe.ha.state": _text(config.get("state"))})
+    add(HA, "observe.ha.safe_mode", 1.0 if config.get("safe_mode") else 0.0, "1")
+    add(HA, "observe.ha.recovery_mode", 1.0 if config.get("recovery_mode") else 0.0, "1")
     if core_version:
-        add("homeassistant", "version", 1.0, "", component="core", version=core_version)
+        add(HA, "observe.ha.version", 1.0, "1",
+            {"observe.ha.component": "core", "observe.ha.version": core_version})
 
     domains: Counter[str] = Counter()
     unavailable = 0
@@ -148,37 +159,42 @@ def build_batch(host: str, config: dict[str, Any], states: list[dict[str, Any]],
 
     for comp in ("supervisor", "os"):
         if comp in versions:
-            add("homeassistant", "version", 1.0, "", component=comp, version=versions[comp])
-    add("homeassistant", "entities_total", float(sum(domains.values())), "count")
-    add("homeassistant", "unavailable_entities", float(unavailable), "count")
+            add(HA, "observe.ha.version", 1.0, "1",
+                {"observe.ha.component": comp, "observe.ha.version": versions[comp]})
+    add(HA, "observe.ha.entity.count", float(sum(domains.values())), "{entity}")
+    add(HA, "observe.ha.entity.unavailable", float(unavailable), "{entity}")
     for domain, n in sorted(domains.items()):
-        add("homeassistant", "entities", float(n), "count", domain=domain)
-    add("homeassistant", "updates_pending", float(len(pending)), "count")
+        add(HA, "observe.ha.entity.count", float(n), "{entity}", {"observe.ha.domain": domain})
+    add(HA, "observe.ha.update.count", float(len(pending)), "{update}")
     for p in pending:
-        add("homeassistant", "update_pending", 1.0, "", entity_id=p["entity_id"])
+        add(HA, "observe.ha.update.pending", 1.0, "1", {"observe.ha.entity_id": p["entity_id"]})
     # An explicit 0 for every update entity that is not pending, with the same labels, so an
     # installed update supersedes the earlier pending reading instead of lingering as the latest
     # one. The versions are not labels, because a label change would start a new series.
     for eid in update_entities:
         if eid not in pending_ids:
-            add("homeassistant", "update_pending", 0.0, "", entity_id=eid)
+            add(HA, "observe.ha.update.pending", 0.0, "1", {"observe.ha.entity_id": eid})
 
     for name, kind, v in hassio:
-        add("hassio", kind, v, "%", name=name)
-    for metric, v in sorted(disk.items()):
-        add("hassio", metric, v, "GB")
+        metric = "container.cpu.utilization" if kind == "cpu_percent"             else "container.memory.utilization"
+        add(HASSIO, metric, None if v is None else round(v / 100, 4), "1",
+            {"container.name": name})
+    for key, v in sorted(disk.items()):
+        metric, state = _DISK_OTEL[key]
+        add(HASSIO, metric, None if v is None else v * GB, "By",
+            {"system.filesystem.state": state} if state else None)
     used, total = disk.get("disk_used_gb"), disk.get("disk_total_gb")
     if used is not None and total:
-        add("hassio", "disk_used_pct", round(100 * used / total, 1), "%")
-    for metric, v in sorted(soc.items()):
-        add("ha_soc", metric, v)
+        add(HASSIO, "system.filesystem.utilization", round(used / total, 4), "1")
+    for key, v in sorted(soc.items()):
+        add(SOC, "observe.ha.soc." + key, v, "1" if key == "suspicious_activity" else "")
 
     have_hassio = bool(hassio or disk)
     sources = [
-        {"source": "homeassistant", "available": True},
-        {"source": "hassio", "available": have_hassio, "present": have_hassio,
+        {"source": HA, "available": True},
+        {"source": HASSIO, "available": have_hassio, "present": have_hassio,
          "reason": ""},
-        {"source": "ha_soc", "available": bool(soc), "present": bool(soc),
+        {"source": SOC, "available": bool(soc), "present": bool(soc),
          "reason": ""},
     ]
     return Batch.model_validate({

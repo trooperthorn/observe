@@ -496,17 +496,19 @@ def test_resource_attribute_filter_and_seen_since(env):
 # ---- Home Assistant -------------------------------------------------------------------------
 
 def ha_batch(host="ha01", ts=START - 5):
+    ha = "ha_soc.collector."
     return host_batch(host, ts, samples=[
-        {"source": "homeassistant", "metric": "running", "value": 1.0, "unit": "", "labels": {},
+        {"source": "observe.check.homeassistant", "metric": "observe.ha.running", "value": 1.0,
+         "unit": "1", "labels": {}, "ts": ts},
+        {"source": "observe.check.homeassistant", "metric": "observe.ha.version", "value": 1.0,
+         "unit": "1", "labels": {"observe.ha.component": "core", "observe.ha.version": "2026.9.1"},
          "ts": ts},
-        {"source": "homeassistant", "metric": "version", "value": 1.0, "unit": "",
-         "labels": {"version": "2026.9.1"}, "ts": ts},
-        {"source": "ha_supervisor", "metric": "healthy", "value": 1.0, "unit": "", "labels": {},
-         "ts": ts},
-        {"source": "ha_backup", "metric": "backups_total", "value": 3.0, "unit": "", "labels": {},
-         "ts": ts},
-        {"source": "ha_repairs", "metric": "open_total", "value": 0.0, "unit": "", "labels": {},
-         "ts": ts}])
+        {"source": ha + "supervisor", "metric": "observe.ha.supervisor.healthy", "value": 1.0,
+         "unit": "1", "labels": {}, "ts": ts},
+        {"source": ha + "backup", "metric": "observe.ha.backup.count", "value": 3.0,
+         "unit": "{backup}", "labels": {}, "ts": ts},
+        {"source": ha + "repairs", "metric": "observe.ha.repair.issues", "value": 0.0,
+         "unit": "{issue}", "labels": {"observe.ha.repair.state": "open"}, "ts": ts}])
 
 
 def test_ha_instances_are_hosts_with_home_assistant_sections(env):
@@ -522,9 +524,9 @@ def test_ha_instances_are_hosts_with_home_assistant_sections(env):
     one = env.get("/ha/instances/ha01").json()
     assert one["host"] == "ha01"
     metrics = {i["metric"] for i in one["ha"]["items"]}
-    assert {"running", "healthy"} <= metrics
-    assert [i["metric"] for i in one["backups"]["items"]] == ["backups_total"]
-    assert "events" in one and all(s["source"].startswith("ha") for s in one["sources"])
+    assert {"observe.ha.running", "observe.ha.supervisor.healthy"} <= metrics
+    assert [i["metric"] for i in one["backups"]["items"]] == ["observe.ha.backup.count"]
+    assert "events" in one and "sources" in one
     assert env.get("/ha/instances/nas01").status_code == 404
     assert env.get("/ha/instances/nobody").status_code == 404
 

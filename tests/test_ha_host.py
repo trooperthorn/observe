@@ -1,4 +1,4 @@
-"""Home Assistant host mode: /api/config and /api/states become a hostwatch batch for the Hosts
+"""Home Assistant host mode: /api/config and /api/states become a batch of OpenTelemetry-named points for the Hosts
 page. The fixtures follow the REST shapes; the hassio and HA SOC entity ids are unverified
 against a live install (see observe/checks/ha_host.py)."""
 
@@ -67,46 +67,58 @@ def item(v: dict[str, Any], section: str, metric: str, **labels: str) -> dict[st
 
 def test_states_map_to_samples_and_grades():
     v = view(build_batch("homeassistant", CONFIG, STATES, NOW))
-    assert item(v, "ha", "running")["status"] == "good"
-    assert item(v, "ha", "entities_total")["value"] == len(STATES)
-    assert item(v, "ha", "unavailable_entities")["value"] == 2
-    assert item(v, "ha", "entities", domain="update")["value"] == 3
-    assert item(v, "ha", "version", component="core")["labels"]["version"] == "2026.9.1"
-    assert item(v, "ha", "version", component="supervisor")["labels"]["version"] == "2026.09.0"
-    assert item(v, "ha", "posture_score")["value"] == 92.0
-    assert item(v, "containers", "cpu_percent", name="home_assistant_core")["value"] == 3.2
-    assert item(v, "containers", "memory_percent", name="home_assistant_core")["status"] == "good"
-    unknown = item(v, "containers", "cpu_percent", name="home_assistant_supervisor")
+    assert item(v, "ha", "observe.ha.running")["status"] == "good"
+    total = next(i for i in v["ha"]["items"]
+                 if i["metric"] == "observe.ha.entity.count" and not i["labels"])
+    assert total["value"] == len(STATES)
+    assert item(v, "ha", "observe.ha.entity.unavailable")["value"] == 2
+    assert item(v, "ha", "observe.ha.entity.count", **{"observe.ha.domain": "update"})["value"] == 3
+    assert item(v, "ha", "observe.ha.version", **{"observe.ha.component": "core"}
+                )["labels"]["observe.ha.version"] == "2026.9.1"
+    assert item(v, "ha", "observe.ha.version", **{"observe.ha.component": "supervisor"}
+                )["labels"]["observe.ha.version"] == "2026.09.0"
+    assert item(v, "ha", "observe.ha.soc.posture_score")["value"] == 92.0
+    assert item(v, "containers", "container.cpu.utilization",
+                **{"container.name": "home_assistant_core"})["value"] == 0.032
+    assert item(v, "containers", "container.memory.utilization",
+                **{"container.name": "home_assistant_core"})["status"] == "good"
+    unknown = item(v, "containers", "container.cpu.utilization",
+                   **{"container.name": "home_assistant_supervisor"})
     assert unknown["value"] is None and unknown["status"] == "warning"  # never zero
-    assert item(v, "disks", "disk_used_pct")["value"] == 20.0
+    assert item(v, "disks", "system.filesystem.utilization")["value"] == 0.2
+    assert item(v, "disks", "system.filesystem.usage",
+                **{"system.filesystem.state": "free"})["value"] == 80e9
     assert v["containers"]["state"] == "ok" and v["ha"]["state"] == "ok"
 
 
 def test_update_pending_is_warning():
     v = view(build_batch("homeassistant", CONFIG, STATES, NOW))
-    pend = item(v, "ha", "update_pending", entity_id="update.home_assistant_core_update")
-    assert pend["labels"]["entity_id"] == "update.home_assistant_core_update"
+    pend = item(v, "ha", "observe.ha.update.pending",
+                **{"observe.ha.entity_id": "update.home_assistant_core_update"})
+    assert pend["labels"]["observe.ha.entity_id"] == "update.home_assistant_core_update"
     assert pend["status"] == "warning" and v["ha"]["status"] == "warning"
     clean = [s for s in STATES if s["entity_id"] != "update.home_assistant_core_update"]
     v = view(build_batch("homeassistant", CONFIG, clean, NOW))
-    assert all(i["value"] == 0.0 for i in v["ha"]["items"] if i["metric"] == "update_pending")
+    assert all(i["value"] == 0.0 for i in v["ha"]["items"]
+               if i["metric"] == "observe.ha.update.pending")
     assert v["ha"]["status"] == "good"
 
 
 def test_not_running_is_critical_and_safe_mode_warns():
     v = view(build_batch("homeassistant", {**CONFIG, "state": "NOT_RUNNING"}, STATES, NOW))
-    assert item(v, "ha", "running")["status"] == "critical" and v["status"] == "critical"
+    assert item(v, "ha", "observe.ha.running")["status"] == "critical"
+    assert v["status"] == "critical"
     v = view(build_batch("homeassistant", {**CONFIG, "safe_mode": True}, [], NOW))
-    assert item(v, "ha", "safe_mode")["status"] == "warning"
+    assert item(v, "ha", "observe.ha.safe_mode")["status"] == "warning"
 
 
 def test_many_unavailable_entities_warn():
     many = [st(f"sensor.s{i}", "unavailable") for i in range(hostview.HA_UNAVAILABLE_WARN)]
     v = view(build_batch("homeassistant", CONFIG, many, NOW))
-    assert item(v, "ha", "unavailable_entities")["status"] == "warning"
+    assert item(v, "ha", "observe.ha.entity.unavailable")["status"] == "warning"
     few = many[: hostview.HA_UNAVAILABLE_WARN - 1]
     v = view(build_batch("homeassistant", CONFIG, few, NOW))
-    assert item(v, "ha", "unavailable_entities")["status"] == "good"
+    assert item(v, "ha", "observe.ha.entity.unavailable")["status"] == "good"
 
 
 def test_container_percent_grades_and_absent_sources():
@@ -114,8 +126,8 @@ def test_container_percent_grades_and_absent_sources():
               st("sensor.some_addon_memory_percent", "96"),
               st("binary_sensor.some_addon_running", "on")]
     v = view(build_batch("homeassistant", CONFIG, states, NOW))
-    assert item(v, "containers", "cpu_percent")["status"] == "warning"
-    assert item(v, "containers", "memory_percent")["status"] == "critical"
+    assert item(v, "containers", "container.cpu.utilization")["status"] == "warning"
+    assert item(v, "containers", "container.memory.utilization")["status"] == "critical"
     v = view(build_batch("homeassistant", CONFIG, [], NOW))
     assert v["containers"]["state"] == "absent" and v["containers"]["status"] == "good"
 
@@ -129,11 +141,11 @@ def test_an_installed_update_clears_the_pending_state():
     installed = st("update.home_assistant_core_update", "off", installed_version="2026.10.0",
                    latest_version="2026.10.0")
     first = build_batch("homeassistant", CONFIG, [pending], NOW)
-    assert next(s for s in first.samples if s.metric == "updates_pending").value == 1.0
+    assert next(s for s in first.samples if s.metric == "observe.ha.update.count").value == 1.0
     for done in (lagging, installed):
         b = build_batch("homeassistant", CONFIG, [done], NOW + 300)
-        assert next(s for s in b.samples if s.metric == "updates_pending").value == 0.0
-        zero = [s for s in b.samples if s.metric == "update_pending"]
+        assert next(s for s in b.samples if s.metric == "observe.ha.update.count").value == 0.0
+        zero = [s for s in b.samples if s.metric == "observe.ha.update.pending"]
         assert len(zero) == 1 and zero[0].value == 0.0
         assert view(b, now=NOW + 300)["ha"]["status"] == "good"
 
@@ -147,7 +159,7 @@ async def test_an_installed_update_supersedes_the_stored_pending_reading(store):
     await store.ingest_batch(build_batch("homeassistant", CONFIG, [done], NOW + 300), {},
                              now=NOW + 300)
     data = await store.latest_host("homeassistant")
-    cur = [s for s in data["samples"] if s["metric"] == "update_pending"]
+    cur = [s for s in data["samples"] if s["metric"] == "observe.ha.update.pending"]
     assert len(cur) == 1 and cur[0]["value"] == 0.0
 
 
@@ -163,10 +175,11 @@ def test_a_sensor_from_another_integration_is_not_a_container():
     states = [st("sensor.nas_cpu_percent", "99"), st("sensor.living_room_pc_memory_percent", "97"),
               st("sensor.some_addon_cpu_percent", "50"), st("update.some_addon_update", "off")]
     b = build_batch("homeassistant", CONFIG, states, NOW)
-    names = {(s.metric, s.labels["name"]) for s in b.samples if s.source == "hassio"}
-    assert names == {("cpu_percent", "some_addon")}
+    names = {(s.metric, s.labels["container.name"]) for s in b.samples
+             if s.source == "observe.check.hassio"}
+    assert names == {("container.cpu.utilization", "some_addon")}
     foreign = build_batch("homeassistant", CONFIG, states[:2], NOW)
-    assert not any(s.source == "hassio" for s in foreign.samples)
+    assert not any(s.source == "observe.check.hassio" for s in foreign.samples)
     v = view(foreign)
     assert v["containers"]["state"] == "absent" and v["containers"]["status"] == "good"
 
@@ -187,7 +200,7 @@ async def test_a_default_install_stores_absent_sources_and_grades_good(store):
     await store.ingest_batch(build_batch("homeassistant", CONFIG, [st("light.hall", "on")], NOW),
                              {}, now=NOW)
     sources = await store.host_sources("homeassistant")
-    for name in ("hassio", "ha_soc"):
+    for name in ("observe.check.hassio", "observe.check.ha_soc"):
         assert sources[name]["reason"] == ABSENT_REASON and not sources[name]["available"]
     data = await store.latest_host("homeassistant")
     row = {"host": "homeassistant", "last_seen": NOW, "platform": data["platform"]}
@@ -282,7 +295,8 @@ async def test_check_ingests_a_batch_for_the_host(store):
         data = await store.latest_host("homeassistant")
         assert data is not None and data["platform"] == "homeassistant"
         metrics = {(s["source"], s["metric"]) for s in data["samples"]}
-        assert ("homeassistant", "running") in metrics and ("hassio", "cpu_percent") in metrics
+        assert ("observe.check.homeassistant", "observe.ha.running") in metrics
+        assert ("observe.check.hassio", "container.cpu.utilization") in metrics
         assert {p for p, _h in srv.seen} == {"/api/config", "/api/states"}
     finally:
         srv.shutdown()
@@ -313,7 +327,8 @@ async def test_four_megabyte_states_parse_within_budget(store):
         assert res.result is Result.OK, res.message
         assert elapsed < 5.0
         data = await store.latest_host("homeassistant")
-        total = next(s for s in data["samples"] if s["metric"] == "entities_total")
+        total = next(s for s in data["samples"] if s["metric"] == "observe.ha.entity.count"
+                     and not s["labels"])
         assert total["value"] == len(big)
     finally:
         srv.shutdown()

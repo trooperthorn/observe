@@ -17,6 +17,8 @@ What a host producer sends:
   value they carry, a histogram as `<name>.count` and `<name>.sum`, and a point with the
   no-recorded-value flag as an unavailable sample. Exponential histograms and summaries are
   rejected.
+- A host whose resource has no `os.type` but that sends a metric or a log named `observe.ha.*`
+  (ha_Int_soc) is platform `homeassistant`.
 - Gauges `observe.source.available` and `observe.source.present` with the point attribute
   `observe.source` (and `observe.source.reason` on the first) say whether a source works.
 - A log record is an event. `event.name` is its kind, the body its title, `observe.source` its
@@ -26,7 +28,9 @@ What a host producer sends:
   `boot.power_loss`, sent under event.name `observe.host.boot`) replaces event.name as the kind, a
   `hostwatch.` prefix on event.name is dropped, `observe.severity` (the severity the agent kept,
   because a critical boot is sent as WARN) replaces the severity of the record, and the
-  `observe.detail.` prefix is removed from detail keys.
+  `observe.detail.` prefix is removed from detail keys. A log record `observe.ha.crash` from
+  ha_Int_soc is a boot classification: its `observe.ha.crash.classification` becomes the kind
+  `boot.<classification>` so the boot classifier decides clean or crash, and its severity is kept.
 - A log record with event.name `observe.source.change` (`observe.source`, `observe.source.reason`,
   and a body `<source> available` or `<source> unavailable: <reason>`) is also the source's status,
   so the reason reaches the host page when the agent sent it as a log and not as a gauge.
@@ -56,6 +60,10 @@ MAX_NS = (1 << 63) - 1
 _METRIC = re.compile(r"^[a-z][a-z0-9_.]{0,127}$")
 _UNIT = re.compile(r"^[A-Za-z0-9%/.{}_\[\]^*()' -]{0,32}$")
 EVENT_PREFIX = "hostwatch."
+HA_PREFIX = "observe.ha."
+HA_CRASH = "observe.ha.crash"
+HA_CRASH_CLASS = "observe.ha.crash.classification"
+HA_PLATFORM = "homeassistant"
 SOURCE_CHANGE = "observe.source.change"
 DETAIL_PREFIX = "observe.detail."
 SOURCE_AVAILABLE = "observe.source.available"
@@ -343,7 +351,10 @@ def normalize_metrics(req: Any, bound_host: str, now: float) -> Normalized:
     samples: list[Sample] = []
     status: dict[str, dict[str, Any]] = {}
     platform, version, sent = "", "", None
+    ha_producer = False
     for res, scope, name, unit, kind, dp, attrs, ts in _walk_metrics(req, rejects, now, want):
+        if name.startswith(HA_PREFIX):
+            ha_producer = True
         if not platform and isinstance(res.get("os.type"), str):
             platform = res["os.type"][:MAX_NAME]
         if not version:
@@ -396,6 +407,8 @@ def normalize_metrics(req: Any, bound_host: str, now: float) -> Normalized:
                                       labels=labels, ts=ts))
             except ValidationError:
                 rejects.add("a point does not fit the size limits")
+    if not platform and ha_producer:
+        platform = HA_PLATFORM
     sources = [SourceStatus(source=s, available=bool(e.get("available", True)),
                             present=bool(e.get("present", True)), reason=e.get("reason", ""))
                for s, e in status.items()][:256]
@@ -531,6 +544,7 @@ def normalize_logs(req: Any, bound_host: str, now: float) -> Normalized:
     events: list[Event] = []
     changes: dict[str, SourceStatus] = {}
     platform, version, sent = "", "", None
+    ha_producer = False
     for res, scope, rec in _walk_logs(req, rejects, want):
         if not platform and isinstance(res.get("os.type"), str):
             platform = res["os.type"][:MAX_NAME]
@@ -559,7 +573,13 @@ def normalize_logs(req: Any, bound_host: str, now: float) -> Normalized:
         boot = attrs.pop("observe.boot_id", None)
         change = kind == SOURCE_CHANGE
         reason = attrs.pop("observe.source.reason", None) if change else None
-        kind = _event_kind(kind, attrs.pop("observe.event.kind", None))
+        if kind.startswith(HA_PREFIX):
+            ha_producer = True
+        crash_class = attrs.get(HA_CRASH_CLASS)
+        sent_kind = attrs.pop("observe.event.kind", None)
+        if kind == HA_CRASH and isinstance(crash_class, str) and crash_class                 and len(crash_class) + 5 <= MAX_NAME:
+            sent_kind = "boot." + crash_class
+        kind = _event_kind(kind, sent_kind)
         sent_severity = attrs.pop("observe.severity", None)
         attrs.pop("observe.host.clean_shutdown", None)  # the classification is read from the kind
         detail = {(k[len(DETAIL_PREFIX):] or k) if k.startswith(DETAIL_PREFIX) else k: v
@@ -588,6 +608,8 @@ def normalize_logs(req: Any, bound_host: str, now: float) -> Normalized:
             rejects.add("a log record does not fit the size limits")
     if not events:
         return Normalized(None, 0, rejects)
+    if not platform and ha_producer:
+        platform = HA_PLATFORM
     batch = Batch(agent_version=version or "otlp", host=bound_host, platform=platform or "unknown",
                   sent_at=now if sent is None else sent, sources=list(changes.values()),
                   samples=[], events=events)

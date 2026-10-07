@@ -184,6 +184,27 @@ _INTEGRATION_CATEGORIES = {"failing": CRITICAL, "credential": WARNING, "communic
 _REPAIR_SEVERITIES = {"critical": CRITICAL, "error": WARNING, "warning": WARNING}
 
 
+def _integration_count(v: float, labels: dict[str, str]) -> tuple[str, str]:
+    """An integration count or error count: a point with a `category` is graded by it, the total
+    (no category) is shown."""
+    if "observe.ha.integration.category" not in labels:
+        return _info(v, labels)
+    return _count_by_label(_INTEGRATION_CATEGORIES, "observe.ha.integration.category")(v, labels)
+
+
+def _repair_issues(v: float, labels: dict[str, str]) -> tuple[str, str]:
+    """Open repair issues are a Warning, or the level of the severity attribute when the producer
+    sends one; the `all` state is a count that claims nothing."""
+    if labels.get("observe.ha.repair.state") == "all":
+        return _info(v, labels)
+    return _count_by_label(_REPAIR_SEVERITIES, "observe.ha.repair.severity")(v, labels)
+
+
+def _ha(name: str, metric: str) -> tuple[str, str]:
+    """The rule key of a point ha_Int_soc pushes: its scope `ha_soc.collector.<name>`."""
+    return HA_SOC_PREFIX + name, metric
+
+
 def _c(source: str, metric: str) -> tuple[str, str]:
     """The rule key of a hostwatch collector's point: its scope name and OpenTelemetry metric."""
     return collector_scope(source), metric
@@ -193,6 +214,10 @@ _LOADS = ("system.cpu.load_average.1m", "system.cpu.load_average.5m",
           "system.cpu.load_average.15m")
 _UTIL = _above(0.90, 0.98)  # a ratio of 0 to 1, as the design sends it
 SNMP = "observe.check.snmp"  # scope of the readings Observe's SNMP poller stores
+HA_SOC_PREFIX = "ha_soc.collector."  # scope prefix of the points ha_Int_soc pushes
+HA_POLL = "observe.check.homeassistant"  # scopes of the Home Assistant monitor in host mode
+HASSIO_POLL = "observe.check.hassio"
+SOC_POLL = "observe.check.ha_soc"
 
 
 def _snmp_cpu(v: float, labels: dict[str, str]) -> tuple[str, str]:
@@ -205,9 +230,9 @@ _FAN_SOURCES = ("hwmon", "thermalctl", "win_thermalsuite")
 # and the metric the OpenTelemetry name of docs/DATA-API-DESIGN.md section 3.2; the point
 # attributes are the labels a grader reads. A metric the agent could not map arrives as
 # `observe.legacy.<source>.<metric>` and is graded like the reading it carried. The SNMP poller
-# writes the scope `observe.check.snmp` with the section 3.5 names. The `homeassistant`, `hassio`
-# and `ha_*` keys are the sources Observe's Home Assistant poller and ha_Int_soc write, which keep
-# their names until those producers move to OpenTelemetry names.
+# writes the scope `observe.check.snmp` with the section 3.5 names. The Home Assistant sections read
+# the section 3.4 names, from ha_Int_soc (`ha_soc.collector.<name>`) and from Observe's own Home
+# Assistant monitor (`observe.check.homeassistant`, `.hassio`, `.ha_soc`).
 RULES: dict[str, dict[tuple[str, str], Grader]] = {
     "cpu": {_c("cpu", "system.cpu.utilization"): _UTIL,
             _c("win_cpu", "system.cpu.utilization"): _UTIL,
@@ -262,8 +287,9 @@ RULES: dict[str, dict[tuple[str, str], Grader]] = {
               _c("win_smartctl", "hw.errors"): _nonzero(WARNING, "media errors counted"),
               _c("win_smartctl", "hw.physical_disk.endurance_utilization"): _above(0.80, 0.95),
               _c("truenas", "hw.temperature"): _above(50, 60),
-              ("hassio", "disk_used_pct"): _above(85, 95), ("hassio", "disk_free_gb"): _info,
-              ("hassio", "disk_used_gb"): _info, ("hassio", "disk_total_gb"): _info,
+              (HASSIO_POLL, "system.filesystem.utilization"): _above(0.85, 0.95),
+              (HASSIO_POLL, "system.filesystem.usage"): _info,
+              (HASSIO_POLL, "system.filesystem.limit"): _info,
               (SNMP, "system.filesystem.utilization"): _above(0.85, 0.95),
               (SNMP, "system.filesystem.usage"): _info},
     "ups": {_c("nut", "observe.ups.status"): _ups_flag,
@@ -271,47 +297,48 @@ RULES: dict[str, dict[tuple[str, str], Grader]] = {
             _c("nut", "hw.battery.time_left"): _info,
             _c("nut", "hw.voltage"): _info,
             _c("nut", "observe.ups.load"): _above(0.80, 0.95)},
-    "ha": {("homeassistant", "running"):
+    "ha": {(HA_POLL, "observe.ha.running"):
            lambda v, _l: (GOOD, "") if v else (CRITICAL, "Home Assistant is not running"),
-           ("homeassistant", "safe_mode"): _nonzero(WARNING, "Home Assistant is in safe mode"),
-           ("homeassistant", "recovery_mode"):
+           (HA_POLL, "observe.ha.safe_mode"): _nonzero(WARNING, "Home Assistant is in safe mode"),
+           (HA_POLL, "observe.ha.recovery_mode"):
            _nonzero(WARNING, "Home Assistant is in recovery mode"),
-           ("homeassistant", "update_pending"): _nonzero(WARNING, "an update is pending"),
-           ("homeassistant", "updates_pending"): _info,
-           ("homeassistant", "unavailable_entities"):
+           (HA_POLL, "observe.ha.update.pending"): _nonzero(WARNING, "an update is pending"),
+           (HA_POLL, "observe.ha.update.count"): _info,
+           (HA_POLL, "observe.ha.entity.unavailable"):
            _above(HA_UNAVAILABLE_WARN, float("inf")),
-           ("homeassistant", "entities_total"): _info, ("homeassistant", "entities"): _info,
-           ("homeassistant", "version"): _info,
-           ("ha_supervisor", "healthy"):
+           (HA_POLL, "observe.ha.entity.count"): _info,
+           (HA_POLL, "observe.ha.version"): _info,
+           _ha("supervisor", "observe.ha.supervisor.healthy"):
            lambda v, _l: (GOOD, "") if v else (CRITICAL, "Supervisor reports an unhealthy system"),
-           ("ha_supervisor", "supported"):
+           _ha("supervisor", "observe.ha.supervisor.supported"):
            lambda v, _l: (GOOD, "") if v else (WARNING, "Supervisor reports an unsupported system"),
-           ("ha_supervisor", "unhealthy_reasons"): _info,
-           ("ha_soc", "posture_score"): _info, ("ha_soc", "open_detections"): _info,
-           ("ha_soc", "users_at_risk"): _info, ("ha_soc", "suspicious_activity"): _info},
-    # ha_container, ha_watchdog, ha_integrations, ha_repairs, ha_backup and ha_supervisor are the
-    # sources pushed by ha_Int_soc (docs/ARCHITECTURE.md, "Home Assistant push contract"). The
-    # metric names and label values are shaped from the ha_Int_soc code and are unverified
-    # against a live push.
-    "containers": {("hassio", "cpu_percent"): _above(85, 95),
-                   ("hassio", "memory_percent"): _above(85, 95),
-                   ("ha_container", "cpu_percent"): _above(85, 95),
-                   ("ha_container", "memory_percent"): _above(85, 95),
-                   ("ha_container", "memory_usage_bytes"): _info,
-                   ("ha_container", "memory_limit_bytes"): _info,
-                   ("ha_container", "running"):
+           _ha("supervisor", "observe.ha.supervisor.unhealthy_reasons"): _info,
+           (SOC_POLL, "observe.ha.soc.posture_score"): _info,
+           (SOC_POLL, "observe.ha.soc.open_detections"): _info,
+           (SOC_POLL, "observe.ha.soc.users_at_risk"): _info,
+           (SOC_POLL, "observe.ha.soc.suspicious_activity"): _info},
+    # The scopes `ha_soc.collector.<name>` are what ha_Int_soc pushes (docs/DATA-API-DESIGN.md
+    # section 3.4, docs/ARCHITECTURE.md "Home Assistant push contract"). The scopes
+    # `observe.check.homeassistant`, `.hassio` and `.ha_soc` are what Observe's own Home
+    # Assistant monitor in host mode writes.
+    "containers": {(HASSIO_POLL, "container.cpu.utilization"): _above(0.85, 0.95),
+                   (HASSIO_POLL, "container.memory.utilization"): _above(0.85, 0.95),
+                   _ha("containers", "container.cpu.utilization"): _above(0.85, 0.95),
+                   _ha("containers", "container.memory.utilization"): _above(0.85, 0.95),
+                   _ha("containers", "container.memory.usage"): _info,
+                   _ha("containers", "observe.ha.container.running"):
                    lambda v, _l: (GOOD, "") if v else (WARNING, "container is not running"),
-                   ("ha_watchdog", "breach_count"):
+                   _ha("watchdog", "observe.ha.watchdog.breaches"):
                    _nonzero(WARNING, "sustained resource breach counted by the watchdog")},
-    "integrations": {("ha_integrations", "issue"): _count_by_label(_INTEGRATION_CATEGORIES, "category"),
-                     ("ha_integrations", "issues_total"): _info,
-                     ("ha_integrations", "loaded_total"): _info},
-    "repairs": {("ha_repairs", "open"): _count_by_label(_REPAIR_SEVERITIES, "severity"),
-                ("ha_repairs", "open_total"): _info},
-    "backups": {("ha_backup", "last_success_age_hours"): _above(36, 72),
-                ("ha_backup", "last_backup_ok"):
+    "integrations": {_ha("integrations", "observe.ha.integration.count"): _integration_count,
+                     _ha("integrations", "observe.ha.integration.errors"): _integration_count},
+    "repairs": {_ha("repairs", "observe.ha.repair.issues"): _repair_issues},
+    "backups": {_ha("backup", "observe.ha.backup.last_success_age"): _above(36 * 3600, 72 * 3600),
+                _ha("backup", "observe.ha.backup.last_ok"):
                 lambda v, _l: (GOOD, "") if v else (WARNING, "the last backup failed"),
-                ("ha_backup", "backups_total"): _info},
+                _ha("backup", "observe.ha.backup.count"): _info,
+                _ha("backup", "observe.ha.backup.unprotected"):
+                _nonzero(WARNING, "backups are not password protected")},
     # Interfaces read over SNMP. An interface the admin chose to watch that is not up is a
     # Warning, never silently zero traffic.
     "network": {(SNMP, "observe.network.interface.up"):

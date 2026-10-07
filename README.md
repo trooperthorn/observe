@@ -195,7 +195,7 @@ Richer Home Assistant detail (containers, integration health, repairs, backups, 
 watchdog breaches and crash classifications) arrives when ha_Int_soc pushes OTLP/HTTP JSON
 every 60 s to `/v1/metrics` and `/v1/logs` with a `wpi` key created for the host `homeassistant`. The key
 cannot push any other host. The contract is in `docs/ARCHITECTURE.md` under "Home Assistant push
-contract", and the metric names are unverified against a live push.
+contract". The points use the OpenTelemetry names of `docs/DATA-API-DESIGN.md` section 3.4 (`container.cpu.utilization`, `observe.ha.supervisor.healthy`, `observe.ha.backup.*` and the rest), a host that sends them without `os.type` is shown as platform `homeassistant`, and an `observe.ha.crash` log (`kernel_fault` and `silent_stop` unclean, `core_restart` and `clean_reboot` clean) updates the boot state and fires the crash check. The golden files from HA SOC are in `tests/fixtures/observe_otlp`.
 
 **Windows (WinRM and WMI).** Both use WS-Management on 5986 with TLS
 validation on by default. Point `ca_bundle` at your internal root if the

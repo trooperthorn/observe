@@ -1,7 +1,8 @@
-"""The ha_Int_soc push contract: a recorded batch sent as OTLP to /v1/metrics and /v1/logs, graded
-on the host page, bound to its host by the key, and merged with the non-admin token reading.
-The fixture is shaped from the ha_Int_soc code and docs; the metric names and the label values
-are unverified against a live push (see docs/ARCHITECTURE.md)."""
+"""The HA SOC push contract: the golden OTLP files ha_Int_soc sends (tests/fixtures/observe_otlp,
+see the README there for the source commit) go through the real /v1/metrics and /v1/logs routes
+and are graded on the host page under the OpenTelemetry names of docs/DATA-API-DESIGN.md
+section 3.4. The key binds the push to its host, an observe.ha.crash log is a boot classification,
+and a host that sends observe.ha.* without os.type is platform homeassistant."""
 
 from __future__ import annotations
 
@@ -9,38 +10,42 @@ import asyncio
 import copy
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
-from observe import auth
+from observe import auth, hostview
 from observe.alerts import Alerter
 from observe.checks.ha_host import build_batch
+from observe.checks.host import PushedHostCheck
 from observe.ingest.boot import classify_events
 from observe.ingest.keys import create_key
-from observe.ingest.schema import MAX_BODY_BYTES, Batch
 from observe.scheduler import Scheduler
 from observe.store import Store
 from observe.web import create_app
 
 from .conftest import make_config
-from .otlp_build import post_batch
 
-FIXTURE = Path(__file__).parent / "fixtures" / "ha_soc" / "push_batch.json"
+FIXTURES = Path(__file__).parent / "fixtures" / "observe_otlp"
+HOST = "haos-lab"
 PASSWORD = "correct horse battery"
+T_SENT = 1_790_000_005.0  # five seconds after the points of the fixture
+SILENT_STOP = 1_789_787_700.0  # the observe.ha.crash silent_stop record of the fixture
 
 
-def load() -> dict:
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+def load(name: str) -> dict[str, Any]:
+    return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
 
 
 class Env:
-    def __init__(self, tmp_path) -> None:
+    def __init__(self, tmp_path, now: float = T_SENT) -> None:
         self.path = str(tmp_path / "w.db")
         self.store = Store(self.path)
-        self.now = load()["sent_at"] + 5
+        self.now = now
         srv = {"db_path": self.path, "argon2_time_cost": 1, "argon2_memory_kib": 8,
-               "argon2_parallelism": 1, "session_idle_s": 100_000, "session_absolute_s": 200_000}
+               "argon2_parallelism": 1, "session_idle_s": 100_000_000,
+               "session_absolute_s": 200_000_000}
         self.cfg = make_config([{"name": "p", "type": "ping", "host": "127.0.0.1"}], server=srv)
         alerter = Alerter(self.cfg)
         sched = Scheduler(self.cfg, self.store, alerter)
@@ -52,15 +57,23 @@ class Env:
     def key(self, host: str) -> str:
         return asyncio.run(create_key(self.store, host))[0]
 
-    def push(self, body: dict, key: str):
-        return post_batch(self.client, body, key)
+    def post(self, path: str, body: dict[str, Any], key: str):
+        return self.client.post(path, json=body, headers={"Authorization": f"Bearer {key}"})
+
+    def push(self, key: str, metrics: dict[str, Any] | None = None,
+             logs: dict[str, Any] | None = None) -> None:
+        for path, body in (("/v1/logs", logs if logs is not None else load("logs")),
+                           ("/v1/metrics", metrics if metrics is not None else load("metrics"))):
+            r = self.post(path, body, key)
+            assert r.status_code == 200, r.text
+            assert r.json() == {}, r.text  # nothing refused
 
     def login(self) -> None:
         asyncio.run(auth.create_user(self.store, self.cfg, "alice", PASSWORD, False, now=self.now))
         r = self.client.post("/api/login", json={"username": "alice", "password": PASSWORD})
         assert r.status_code == 200
 
-    def view(self, host: str = "homeassistant") -> dict:
+    def view(self, host: str = HOST) -> dict[str, Any]:
         r = self.client.get(f"/api/v2/hosts/{host}")
         assert r.status_code == 200, r.text
         return r.json()
@@ -82,109 +95,232 @@ def item(d: dict, section: str, metric: str, **labels: str) -> dict:
                 and all(i["labels"].get(k) == v for k, v in labels.items()))
 
 
-def test_push_fixture_is_accepted_and_graded(env):
-    key = env.key("homeassistant")
-    r = env.push(load(), key)
-    assert r.status_code == 200, r.text
-    assert r.json() == {}  # nothing refused
-    assert len(asyncio.run(env.store.host_events("homeassistant"))) == 2
+def test_the_golden_push_is_accepted_and_graded_in_every_ha_section(env):
+    env.push(env.key(HOST))
     env.login()
     d = env.view()
+    assert d["platform"] == "homeassistant"  # no os.type, observe.ha.* points
     assert d["heard"] and not d["stale"]
-    # containers: a runaway add-on is Critical, a stopped one Warning, a quiet one Good
-    assert item(d, "containers", "cpu_percent", slug="core_mosquitto")["status"] == "critical"
-    assert item(d, "containers", "cpu_percent", slug="core")["status"] == "good"
-    assert item(d, "containers", "running", slug="a0d7b954_ssh")["status"] == "warning"
-    assert item(d, "containers", "breach_count", slug="core_mosquitto")["status"] == "warning"
-    # integrations: a credential problem is a Warning, debug logging only is Good
-    assert item(d, "integrations", "issue", domain="unifi")["status"] == "warning"
-    assert item(d, "integrations", "issue", domain="hue")["status"] == "good"
-    # repairs: an open warning is a Warning, zero open critical is Good
-    assert item(d, "repairs", "open", severity="warning")["status"] == "warning"
-    assert item(d, "repairs", "open", severity="critical")["status"] == "good"
-    # backups and supervisor
-    assert item(d, "backups", "last_success_age_hours")["status"] == "good"
-    assert item(d, "ha", "healthy")["status"] == "good"
-    assert d["containers"]["status"] == "critical"
+    # ha: an unhealthy Supervisor is Critical, an unsupported one a Warning
+    assert item(d, "ha", "observe.ha.supervisor.healthy")["status"] == "critical"
+    assert item(d, "ha", "observe.ha.supervisor.supported")["status"] == "warning"
+    assert item(d, "ha", "observe.ha.supervisor.unhealthy_reasons",
+                **{"observe.ha.supervisor.reason": "privileged"})["status"] == "good"
+    assert d["ha"]["status"] == "critical" and d["ha"]["state"] == "ok"
+    # containers: ratios graded at 0.85 and 0.95; a stopped one and a breach are Warnings
+    cpu = {i["labels"]["container.name"]: i["status"] for i in d["containers"]["items"]
+           if i["metric"] == "container.cpu.utilization"}
+    assert cpu == {"core": "good", "supervisor": "good", "core_mosquitto": "good",
+                   "a0d7b954_probe": "warning"}
+    assert item(d, "containers", "container.memory.utilization",
+                **{"container.name": "a0d7b954_probe"})["status"] == "warning"
+    assert item(d, "containers", "container.memory.usage",
+                **{"container.name": "core"})["value"] == 734003200.0
+    assert item(d, "containers", "observe.ha.container.running",
+                **{"container.name": "core_samba"})["status"] == "warning"
+    assert item(d, "containers", "observe.ha.container.running",
+                **{"container.name": "core"})["status"] == "good"
+    assert item(d, "containers", "observe.ha.watchdog.breaches")["status"] == "warning"
+    assert d["containers"]["status"] == "warning"
+    # integrations and repairs
+    assert item(d, "integrations", "observe.ha.integration.count",
+                **{"observe.ha.integration.category": "errors"})["status"] == "warning"
+    assert item(d, "integrations", "observe.ha.integration.count",
+                **{"observe.ha.integration.category": "collection"})["status"] == "good"
+    assert item(d, "integrations", "observe.ha.integration.errors",
+                **{"observe.ha.integration": "unifi"})["value"] == 41.0
+    assert item(d, "repairs", "observe.ha.repair.issues",
+                **{"observe.ha.repair.domain": "hassio"})["status"] == "warning"
+    # backups: no password on the backups is a Warning
+    assert item(d, "backups", "observe.ha.backup.unprotected")["status"] == "warning"
+    assert d["backups"]["status"] == "warning"
     assert d["status"] == "critical"
-    # crash events: the silent stop is listed, the host boot state is a crash
-    kinds = {e["kind"] for e in d["events"]}
-    assert {"boot.silent_stop", "ha_watchdog.breach"} <= kinds
-    assert d["boot"]["clean_shutdown"] is False
-    assert {s["source"] for s in d["sources"]} >= {
-        "ha_container", "ha_watchdog", "ha_integrations", "ha_repairs", "ha_backup",
-        "ha_supervisor"}
+    # every HA SOC point is shown by some section: nothing is dropped
+    shown = sum(len(d[n]["items"]) for n in ("ha", "containers", "integrations", "repairs",
+                                             "backups"))
+    pushed = sum(len(m.get("gauge", m.get("sum"))["dataPoints"])
+                 for rm in load("metrics")["resourceMetrics"] for sm in rm["scopeMetrics"]
+                 for m in sm["metrics"])
+    assert shown == pushed
+
+
+def test_no_old_home_assistant_key_remains():
+    old = {"running", "safe_mode", "recovery_mode", "update_pending", "updates_pending",
+           "unavailable_entities", "entities_total", "entities", "version", "healthy",
+           "supported", "unhealthy_reasons", "posture_score", "open_detections",
+           "users_at_risk", "suspicious_activity", "cpu_percent", "memory_percent",
+           "memory_usage_bytes", "memory_limit_bytes", "breach_count", "issue",
+           "issues_total", "loaded_total", "open", "open_total", "backups_total",
+           "last_backup_ok", "last_success_age_hours", "disk_used_pct", "disk_free_gb",
+           "disk_used_gb", "disk_total_gb"}
+    old_sources = {"homeassistant", "hassio", "ha_soc", "ha_container", "ha_watchdog",
+                   "ha_integrations", "ha_repairs", "ha_backup", "ha_supervisor"}
+    keys = {k for table in hostview.RULES.values() for k in table}
+    assert not any(scope in old_sources or metric in old for scope, metric in keys)
+    states = [{"entity_id": "sensor.home_assistant_core_cpu_percent", "state": "3",
+               "attributes": {}},
+              {"entity_id": "sensor.home_assistant_host_disk_used", "state": "1",
+               "attributes": {}},
+              {"entity_id": "sensor.home_assistant_host_disk_total", "state": "4",
+               "attributes": {}},
+              {"entity_id": "sensor.ha_soc_posture_score", "state": "9", "attributes": {}}]
+    batch = build_batch("homeassistant", {"version": "1", "state": "RUNNING"}, states, 1.0)
+    assert not any(s.source in old_sources or s.metric in old for s in batch.samples)
+    assert not any(s.source in old_sources for s in batch.sources)
 
 
 def test_graded_levels_follow_the_values(env):
-    body = load()
-    for smp in body["samples"]:
-        if smp["metric"] == "last_success_age_hours":
-            smp["value"] = 100.0
-        if smp["metric"] == "healthy":
-            smp["value"] = 0.0
-        if smp["metric"] == "open" and smp["labels"]["severity"] == "critical":
-            smp["value"] = 2.0
-        if smp["metric"] == "issue" and smp["labels"]["domain"] == "unifi":
-            smp["labels"]["category"] = "failing"
-    assert env.push(body, env.key("homeassistant")).status_code == 200
+    metrics = copy.deepcopy(load("metrics"))
+    unifi = {"key": "observe.ha.integration", "value": {"stringValue": "unifi"}}
+    for rm in metrics["resourceMetrics"]:
+        for sm in rm["scopeMetrics"]:
+            for m in sm["metrics"]:
+                for dp in m["gauge"]["dataPoints"]:
+                    if m["name"] == "observe.ha.supervisor.healthy":
+                        dp["asDouble"] = 1.0
+                    if m["name"] == "container.cpu.utilization":
+                        dp["asDouble"] = 0.97
+                    if m["name"] == "observe.ha.integration.errors" and unifi in dp["attributes"]:
+                        dp["attributes"] = [a for a in dp["attributes"]
+                                            if a["key"] != "observe.ha.integration.category"]
+                        dp["attributes"].append({"key": "observe.ha.integration.category",
+                                                 "value": {"stringValue": "failing"}})
+    env.push(env.key(HOST), metrics=metrics)
     env.login()
     d = env.view()
-    assert item(d, "backups", "last_success_age_hours")["status"] == "critical"
-    assert item(d, "ha", "healthy")["status"] == "critical"
-    assert item(d, "repairs", "open", severity="critical")["status"] == "critical"
-    assert item(d, "integrations", "issue", domain="unifi")["status"] == "critical"
+    assert item(d, "ha", "observe.ha.supervisor.healthy")["status"] == "good"
+    assert item(d, "containers", "container.cpu.utilization",
+                **{"container.name": "core"})["status"] == "critical"
+    failing = item(d, "integrations", "observe.ha.integration.errors",
+                   **{"observe.ha.integration": "unifi"})
+    assert failing["status"] == "critical"
 
 
-def test_key_bound_to_homeassistant_cannot_push_as_another_host(env):
-    key = env.key("homeassistant")
-    other = load()
-    other["host"] = "nas01"
-    assert env.push(other, key).status_code == 403
+def test_a_host_with_os_type_keeps_its_platform(env):
+    metrics = copy.deepcopy(load("metrics"))
+    metrics["resourceMetrics"][0]["resource"]["attributes"].append(
+        {"key": "os.type", "value": {"stringValue": "linux"}})
+    env.push(env.key(HOST), metrics=metrics)
+    env.login()
+    assert env.view()["platform"] == "linux"
+
+
+def test_key_bound_to_one_host_cannot_push_as_another(env):
+    key = env.key(HOST)
+    assert env.post("/v1/metrics", load("metrics"), env.key("nas01")).status_code == 403
+    assert env.post("/v1/logs", load("logs"), env.key("nas01")).status_code == 403
     assert asyncio.run(env.store.host_rows()) == []
-    # and a key for another host cannot push as homeassistant
-    assert env.push(load(), env.key("nas01")).status_code == 403
+    other = copy.deepcopy(load("metrics"))
+    for a in other["resourceMetrics"][0]["resource"]["attributes"]:
+        if a["key"] == "host.name":
+            a["value"]["stringValue"] = "nas01"
+    assert env.post("/v1/metrics", other, key).status_code == 403
     assert asyncio.run(env.store.host_rows()) == []
 
 
-def test_resend_of_the_push_is_acknowledged_once(env):
-    key = env.key("homeassistant")
-    assert env.push(load(), key).status_code == 200
-    before = env.store.storage.read_sync(lambda db: db.execute(
-        "SELECT (SELECT COUNT(*) FROM samples), (SELECT COUNT(*) FROM host_events), "
-        "(SELECT COUNT(*) FROM ingest_batches)").fetchone())
-    again = env.push(load(), key)
-    assert again.status_code == 200 and again.json() == {}
-    assert env.store.storage.read_sync(lambda db: db.execute(
-        "SELECT (SELECT COUNT(*) FROM samples), (SELECT COUNT(*) FROM host_events), "
-        "(SELECT COUNT(*) FROM ingest_batches)").fetchone()) == before
+def test_resend_of_the_push_stores_nothing_more(env):
+    key = env.key(HOST)
+    env.push(key)
+    count = "SELECT (SELECT COUNT(*) FROM host_events), (SELECT COUNT(*) FROM host_sources)"
+    before = env.store.storage.read_sync(lambda db: db.execute(count).fetchone())
+    env.push(key)
+    assert env.store.storage.read_sync(lambda db: db.execute(count).fetchone()) == before
 
 
-def test_push_stays_inside_the_size_bounds():
-    body = load()
-    assert len(json.dumps(body)) < MAX_BODY_BYTES
-    assert len(body["samples"]) <= 5000 and len(body["events"]) <= 500
-    big = copy.deepcopy(body)
-    big["samples"] = big["samples"] * 300
-    with pytest.raises(ValueError):
-        Batch.model_validate(big)
+# ---- crash forensics ------------------------------------------------------------------------
+
+def crash_logs(*classes: str) -> dict[str, Any]:
+    """The logs of the fixture reduced to the observe.ha.crash records of these classifications."""
+    logs = copy.deepcopy(load("logs"))
+    scopes = logs["resourceLogs"][0]["scopeLogs"]
+    for scope in scopes:
+        scope["logRecords"] = [
+            r for r in scope["logRecords"]
+            if any(a["key"] == "observe.ha.crash.classification"
+                   and a["value"]["stringValue"] in classes for a in r["attributes"])]
+    logs["resourceLogs"][0]["scopeLogs"] = [s for s in scopes if s["logRecords"]]
+    return logs
 
 
-def test_pull_and_push_merge_under_one_host(env):
+def boot_row(env: Env) -> dict[str, Any]:
+    return next(r for r in asyncio.run(env.store.host_rows()) if r["host"] == HOST)
+
+
+@pytest.mark.parametrize("cls,flag,severity", [
+    ("silent_stop", 0, "critical"), ("kernel_fault", 0, "critical"),
+    ("core_restart", 1, "warning"), ("clean_reboot", 1, "info")])
+def test_observe_ha_crash_is_classified_by_the_boot_classifier(tmp_path, cls, flag, severity):
+    rec = copy.deepcopy(crash_logs("silent_stop")["resourceLogs"][0]["scopeLogs"][0]
+                        ["logRecords"][0])
+    for a in rec["attributes"]:
+        if a["key"] == "observe.ha.crash.classification":
+            a["value"]["stringValue"] = cls
+    rec["severityText"] = {"critical": "ERROR", "warning": "WARN", "info": "INFO"}[severity]
+    logs = crash_logs("silent_stop")
+    logs["resourceLogs"][0]["scopeLogs"][0]["logRecords"] = [rec]
+    e = Env(tmp_path)
+    try:
+        e.push(e.key(HOST), logs=logs)
+        row = boot_row(e)
+        assert (row["boot_id"], row["clean_shutdown"]) == ("crash-2026-09-19T031500Z", flag)
+        assert row["platform"] == "homeassistant"
+        ev = asyncio.run(e.store.host_events(HOST))[0]
+        assert ev["kind"] == "boot." + cls and ev["severity"] == severity
+        assert ev["detail"]["classification"] == ("clean" if flag else "crash")
+        assert ev["detail"]["observe.ha.crash.classification"] == cls
+    finally:
+        e.close()
+
+
+async def _check(store: Store, now: float, **extra: Any) -> Any:
+    cfg = make_config([{"name": HOST, "type": "pushed_host", "host": HOST, "stale_after": 10**9,
+                        "components": [], **extra}], defaults={"failures_to_down": 1, "timeout": 1})
+    check = Scheduler(cfg, store, Alerter(cfg)).checks[HOST]
+    assert isinstance(check, PushedHostCheck)
+    check.clock = lambda: now
+    return await check.probe()
+
+
+def test_a_silent_stop_fires_the_crash_check_and_a_clean_boot_does_not(tmp_path):
+    e = Env(tmp_path, now=SILENT_STOP + 60)
+    try:
+        key = e.key(HOST)
+        e.push(key, logs=crash_logs("silent_stop"))
+        row = boot_row(e)
+        assert row["clean_shutdown"] == 0 and row["boot_id"] == "crash-2026-09-19T031500Z"
+        assert row["boot_ts"] == pytest.approx(SILENT_STOP)
+        res = asyncio.run(_check(e.store, SILENT_STOP + 60, crash_hold_s=3600,
+                                 crash_result="fail"))
+        assert res.detail["components"]["boot"] == "critical" and res.result.value == "fail"
+        # a later clean reboot replaces the boot fields, and the check goes quiet
+        e.now = SILENT_STOP + 400_000
+        e.push(key, logs=crash_logs("clean_reboot"))
+        row = boot_row(e)
+        assert row["clean_shutdown"] == 1 and row["boot_id"] == "crash-2026-09-21T000000Z"
+        res = asyncio.run(_check(e.store, row["boot_ts"] + 60, crash_hold_s=3600))
+        assert "boot" not in res.detail["components"]
+    finally:
+        e.close()
+
+
+def test_the_pulled_batch_uses_the_opentelemetry_names_beside_the_push(env):
     pulled = build_batch(
-        "homeassistant",
-        {"version": "2026.9.1", "state": "RUNNING", "safe_mode": False, "recovery_mode": False},
+        HOST, {"version": "2026.9.1", "state": "RUNNING", "safe_mode": False,
+               "recovery_mode": False},
         [{"entity_id": "light.hall", "state": "on", "attributes": {}},
          {"entity_id": "sensor.home_assistant_core_cpu_percent", "state": "3.2",
           "attributes": {}}],
         env.now - 5)
     asyncio.run(env.store.ingest_batch(pulled, classify_events(pulled.events), now=env.now - 5))
-    assert env.push(load(), env.key("homeassistant")).status_code == 200
+    env.push(env.key(HOST))
     env.login()
     d = env.view()
     assert len(asyncio.run(env.store.host_rows())) == 1
     sources = {s["source"] for s in d["sources"]}
-    assert {"homeassistant", "hassio", "ha_container"} <= sources
-    assert item(d, "ha", "entities_total")["value"] == 2.0
-    assert {i["source"] for i in d["containers"]["items"]} >= {"hassio", "ha_container"}
+    assert {"observe.check.homeassistant", "observe.check.hassio"} <= sources
+    total = next(i for i in d["ha"]["items"]
+                 if i["metric"] == "observe.ha.entity.count" and not i["labels"])
+    assert total["value"] == 2.0
+    scopes = {i["source"] for i in d["containers"]["items"]}
+    assert {"observe.check.hassio", "ha_soc.collector.containers"} <= scopes
     assert d["integrations"]["state"] == "ok" and d["repairs"]["state"] == "ok"

@@ -1,0 +1,346 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "host.name",
+            "value": {
+              "stringValue": "haos-lab"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "home-assistant"
+            }
+          },
+          {
+            "key": "observe.producer",
+            "value": {
+              "stringValue": "ha_Int_soc"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "5f0c1c36a1a24a1d9c7e0b7f4c2d9e10"
+            }
+          },
+          {
+            "key": "service.version",
+            "value": {
+              "stringValue": "2026.9.3"
+            }
+          },
+          {
+            "key": "observe.ha.installation_type",
+            "value": {
+              "stringValue": "Home Assistant OS"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "logRecords": [
+            {
+              "attributes": [
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "observe.ha.watchdog.breach"
+                  }
+                },
+                {
+                  "key": "observe.dedup_key",
+                  "value": {
+                    "stringValue": "watchdog:a0d7b954_probe:2026-09-21T13:50:00+00:00"
+                  }
+                },
+                {
+                  "key": "observe.source",
+                  "value": {
+                    "stringValue": "watchdog"
+                  }
+                },
+                {
+                  "key": "container.name",
+                  "value": {
+                    "stringValue": "a0d7b954_probe"
+                  }
+                },
+                {
+                  "key": "observe.ha.watchdog.rule",
+                  "value": {
+                    "stringValue": "container_resource_breach"
+                  }
+                },
+                {
+                  "key": "observe.ha.watchdog.action",
+                  "value": {
+                    "stringValue": "alerted"
+                  }
+                },
+                {
+                  "key": "observe.ha.watchdog.restart_loop",
+                  "value": {
+                    "boolValue": false
+                  }
+                },
+                {
+                  "key": "observe.ha.watchdog.cpu_percent",
+                  "value": {
+                    "doubleValue": 91.0
+                  }
+                },
+                {
+                  "key": "observe.ha.watchdog.memory_percent",
+                  "value": {
+                    "doubleValue": 87.5
+                  }
+                }
+              ],
+              "body": {
+                "stringValue": "Container 'HA SOC Probe' sustained CPU 91% and memory 88%"
+              },
+              "severityNumber": 13,
+              "severityText": "WARN",
+              "timeUnixNano": "1789998600000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "observe.ha.watchdog.breach"
+                  }
+                },
+                {
+                  "key": "observe.dedup_key",
+                  "value": {
+                    "stringValue": "watchdog:core_samba:2026-09-20T08:03:00+00:00"
+                  }
+                },
+                {
+                  "key": "observe.source",
+                  "value": {
+                    "stringValue": "watchdog"
+                  }
+                },
+                {
+                  "key": "container.name",
+                  "value": {
+                    "stringValue": "core_samba"
+                  }
+                },
+                {
+                  "key": "observe.ha.watchdog.rule",
+                  "value": {
+                    "stringValue": "container_resource_breach"
+                  }
+                },
+                {
+                  "key": "observe.ha.watchdog.action",
+                  "value": {
+                    "stringValue": "add-on restarted"
+                  }
+                },
+                {
+                  "key": "observe.ha.watchdog.restart_loop",
+                  "value": {
+                    "boolValue": false
+                  }
+                },
+                {
+                  "key": "observe.ha.watchdog.cpu_percent",
+                  "value": {
+                    "doubleValue": 3.0
+                  }
+                },
+                {
+                  "key": "observe.ha.watchdog.memory_percent",
+                  "value": {
+                    "doubleValue": 90.0
+                  }
+                }
+              ],
+              "body": {
+                "stringValue": "Container 'Samba share' sustained memory 90%"
+              },
+              "severityNumber": 13,
+              "severityText": "WARN",
+              "timeUnixNano": "1789891380000000000"
+            }
+          ],
+          "scope": {
+            "name": "ha_soc.collector.watchdog"
+          }
+        },
+        {
+          "logRecords": [
+            {
+              "attributes": [
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "observe.ha.crash"
+                  }
+                },
+                {
+                  "key": "observe.dedup_key",
+                  "value": {
+                    "stringValue": "crash:crash-2026-09-19T031500Z"
+                  }
+                },
+                {
+                  "key": "observe.source",
+                  "value": {
+                    "stringValue": "crash_forensics"
+                  }
+                },
+                {
+                  "key": "observe.boot_id",
+                  "value": {
+                    "stringValue": "crash-2026-09-19T031500Z"
+                  }
+                },
+                {
+                  "key": "observe.ha.crash.classification",
+                  "value": {
+                    "stringValue": "silent_stop"
+                  }
+                },
+                {
+                  "key": "observe.ha.crash.gap_seconds",
+                  "value": {
+                    "doubleValue": 412.0
+                  }
+                },
+                {
+                  "key": "observe.ha.crash.suspects",
+                  "value": {
+                    "stringValue": "container:a0d7b954_probe; logger:homeassistant.components.mqtt; kernel:oom"
+                  }
+                }
+              ],
+              "body": {
+                "stringValue": "Host stopped without a clean shutdown"
+              },
+              "severityNumber": 17,
+              "severityText": "ERROR",
+              "timeUnixNano": "1789787700000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "observe.ha.crash"
+                  }
+                },
+                {
+                  "key": "observe.dedup_key",
+                  "value": {
+                    "stringValue": "crash:crash-2026-09-20T101000Z"
+                  }
+                },
+                {
+                  "key": "observe.source",
+                  "value": {
+                    "stringValue": "crash_forensics"
+                  }
+                },
+                {
+                  "key": "observe.boot_id",
+                  "value": {
+                    "stringValue": "crash-2026-09-20T101000Z"
+                  }
+                },
+                {
+                  "key": "observe.ha.crash.classification",
+                  "value": {
+                    "stringValue": "core_restart"
+                  }
+                },
+                {
+                  "key": "observe.ha.crash.gap_seconds",
+                  "value": {
+                    "doubleValue": -35.5
+                  }
+                },
+                {
+                  "key": "observe.ha.crash.suspects",
+                  "value": {
+                    "stringValue": ""
+                  }
+                }
+              ],
+              "body": {
+                "stringValue": "Home Assistant Core restarted inside one host boot"
+              },
+              "severityNumber": 13,
+              "severityText": "WARN",
+              "timeUnixNano": "1789899000000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "observe.ha.crash"
+                  }
+                },
+                {
+                  "key": "observe.dedup_key",
+                  "value": {
+                    "stringValue": "crash:crash-2026-09-21T000000Z"
+                  }
+                },
+                {
+                  "key": "observe.source",
+                  "value": {
+                    "stringValue": "crash_forensics"
+                  }
+                },
+                {
+                  "key": "observe.boot_id",
+                  "value": {
+                    "stringValue": "crash-2026-09-21T000000Z"
+                  }
+                },
+                {
+                  "key": "observe.ha.crash.classification",
+                  "value": {
+                    "stringValue": "clean_reboot"
+                  }
+                },
+                {
+                  "key": "observe.ha.crash.gap_seconds",
+                  "value": {
+                    "doubleValue": 90.0
+                  }
+                },
+                {
+                  "key": "observe.ha.crash.suspects",
+                  "value": {
+                    "stringValue": ""
+                  }
+                }
+              ],
+              "body": {
+                "stringValue": "Host rebooted cleanly"
+              },
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "timeUnixNano": "1789948800000000000"
+            }
+          ],
+          "scope": {
+            "name": "ha_soc.collector.crash_forensics"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 Home Assistant section, with the supervisor, container, integration, repair and backup sections
 of their host view.
 
-There is no Home Assistant plugin: the data arrives as hostwatch-schema batches (pushed by
+There is no Home Assistant plugin: the data arrives as OpenTelemetry points and logs (pushed by
 ha_Int_soc, or polled by a Home Assistant monitor in host mode) and the host view already grades
 it. An instance is a host with at least one of these sections reporting, so a Linux host is not
 listed. Detail needs a session or a token; it is never anonymous.
@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from ..hostview import _sources_of
 from .hosts import FRESH_S, HostViews, _times
 from .cursor import PageParams, encode
 from .models import IsoTs, Page
@@ -86,7 +87,8 @@ async def get_instance(ctx: ApiContext, name: str) -> dict[str, Any]:
         raise ApiProblem(404, "unknown Home Assistant instance")
     out = _summary(view)
     out.update({n: view[n] for n in SECTIONS})
-    out["sources"] = [s for s in view["sources"] if s["source"].startswith(("ha", "homeassistant"))]
+    wanted = {src for n in SECTIONS for src in _sources_of(n)}
+    out["sources"] = [s for s in view["sources"] if s["source"] in wanted]
     out["events"] = view["events"]
     return _times(out)
 

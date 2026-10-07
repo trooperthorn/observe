@@ -1,0 +1,657 @@
+{
+  "resourceMetrics": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "host.name",
+            "value": {
+              "stringValue": "haos-lab"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "home-assistant"
+            }
+          },
+          {
+            "key": "observe.producer",
+            "value": {
+              "stringValue": "ha_Int_soc"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "5f0c1c36a1a24a1d9c7e0b7f4c2d9e10"
+            }
+          },
+          {
+            "key": "service.version",
+            "value": {
+              "stringValue": "2026.9.3"
+            }
+          },
+          {
+            "key": "observe.ha.installation_type",
+            "value": {
+              "stringValue": "Home Assistant OS"
+            }
+          }
+        ]
+      },
+      "scopeMetrics": [
+        {
+          "metrics": [
+            {
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "asDouble": 0.125,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "core"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 0.012,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "supervisor"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 0.004,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "core_mosquitto"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 0.91,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "a0d7b954_probe"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  }
+                ]
+              },
+              "name": "container.cpu.utilization",
+              "unit": "1"
+            },
+            {
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "asDouble": 0.1835,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "core"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 0.0524,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "supervisor"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 0.0026,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "core_mosquitto"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 0.875,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "a0d7b954_probe"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  }
+                ]
+              },
+              "name": "container.memory.utilization",
+              "unit": "1"
+            },
+            {
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "asDouble": 734003200.0,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "core"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 209715200.0,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "supervisor"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 10485760.0,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "core_mosquitto"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 3500000000.0,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "a0d7b954_probe"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  }
+                ]
+              },
+              "name": "container.memory.usage",
+              "unit": "By"
+            },
+            {
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "asDouble": 1.0,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "core"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 1.0,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "supervisor"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 1.0,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "core_mosquitto"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 1.0,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "a0d7b954_probe"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 0.0,
+                    "attributes": [
+                      {
+                        "key": "container.name",
+                        "value": {
+                          "stringValue": "core_samba"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  }
+                ]
+              },
+              "name": "observe.ha.container.running",
+              "unit": "1"
+            }
+          ],
+          "scope": {
+            "name": "ha_soc.collector.containers"
+          }
+        },
+        {
+          "metrics": [
+            {
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "asDouble": 1.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.watchdog.rule",
+                        "value": {
+                          "stringValue": "container_resource_breach"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  }
+                ]
+              },
+              "name": "observe.ha.watchdog.breaches",
+              "unit": "{breach}"
+            }
+          ],
+          "scope": {
+            "name": "ha_soc.collector.watchdog"
+          }
+        },
+        {
+          "metrics": [
+            {
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "asDouble": 0.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.integration.category",
+                        "value": {
+                          "stringValue": "collection"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 1.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.integration.category",
+                        "value": {
+                          "stringValue": "communication"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 1.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.integration.category",
+                        "value": {
+                          "stringValue": "credential"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 0.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.integration.category",
+                        "value": {
+                          "stringValue": "debug_logging"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 0.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.integration.category",
+                        "value": {
+                          "stringValue": "disabled"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 4.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.integration.category",
+                        "value": {
+                          "stringValue": "errors"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 0.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.integration.category",
+                        "value": {
+                          "stringValue": "failing"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  }
+                ]
+              },
+              "name": "observe.ha.integration.count",
+              "unit": "{integration}"
+            },
+            {
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "asDouble": 0.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.integration",
+                        "value": {
+                          "stringValue": "ecobee"
+                        }
+                      },
+                      {
+                        "key": "observe.ha.integration.category",
+                        "value": {
+                          "stringValue": "credential"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 3.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.integration",
+                        "value": {
+                          "stringValue": "elkm1"
+                        }
+                      },
+                      {
+                        "key": "observe.ha.integration.category",
+                        "value": {
+                          "stringValue": "communication"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 24.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.integration",
+                        "value": {
+                          "stringValue": "esphome"
+                        }
+                      },
+                      {
+                        "key": "observe.ha.integration.category",
+                        "value": {
+                          "stringValue": "errors"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 41.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.integration",
+                        "value": {
+                          "stringValue": "unifi"
+                        }
+                      },
+                      {
+                        "key": "observe.ha.integration.category",
+                        "value": {
+                          "stringValue": "errors"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  }
+                ]
+              },
+              "name": "observe.ha.integration.errors",
+              "unit": "{error}"
+            }
+          ],
+          "scope": {
+            "name": "ha_soc.collector.integrations"
+          }
+        },
+        {
+          "metrics": [
+            {
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "asDouble": 3.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.repair.state",
+                        "value": {
+                          "stringValue": "open"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 2.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.repair.state",
+                        "value": {
+                          "stringValue": "open"
+                        }
+                      },
+                      {
+                        "key": "observe.ha.repair.domain",
+                        "value": {
+                          "stringValue": "ha_soc"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 1.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.repair.state",
+                        "value": {
+                          "stringValue": "open"
+                        }
+                      },
+                      {
+                        "key": "observe.ha.repair.domain",
+                        "value": {
+                          "stringValue": "hassio"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  }
+                ]
+              },
+              "name": "observe.ha.repair.issues",
+              "unit": "{issue}"
+            }
+          ],
+          "scope": {
+            "name": "ha_soc.collector.repairs"
+          }
+        },
+        {
+          "metrics": [
+            {
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "asDouble": 1.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.backup.password_set",
+                        "value": {
+                          "boolValue": false
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  }
+                ]
+              },
+              "name": "observe.ha.backup.unprotected",
+              "unit": "1"
+            }
+          ],
+          "scope": {
+            "name": "ha_soc.collector.backup"
+          }
+        },
+        {
+          "metrics": [
+            {
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "asDouble": 0.0,
+                    "attributes": [],
+                    "timeUnixNano": "1790000000000000000"
+                  }
+                ]
+              },
+              "name": "observe.ha.supervisor.healthy",
+              "unit": "1"
+            },
+            {
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "asDouble": 0.0,
+                    "attributes": [],
+                    "timeUnixNano": "1790000000000000000"
+                  }
+                ]
+              },
+              "name": "observe.ha.supervisor.supported",
+              "unit": "1"
+            },
+            {
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "asDouble": 2.0,
+                    "attributes": [],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 1.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.supervisor.reason",
+                        "value": {
+                          "stringValue": "privileged"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  },
+                  {
+                    "asDouble": 1.0,
+                    "attributes": [
+                      {
+                        "key": "observe.ha.supervisor.reason",
+                        "value": {
+                          "stringValue": "setup"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1790000000000000000"
+                  }
+                ]
+              },
+              "name": "observe.ha.supervisor.unhealthy_reasons",
+              "unit": "{reason}"
+            }
+          ],
+          "scope": {
+            "name": "ha_soc.collector.supervisor"
+          }
+        }
+      ]
+    }
+  ]
+}

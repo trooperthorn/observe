@@ -25,9 +25,10 @@ UNKNOWN = "unknown"
 # Agent classifications from hostwatch's boot classifier. unclean_shutdown
 # appears in older agents and fixtures and is treated as a crash.
 # ha_Int_soc (docs/CRASH-FORENSICS.md) classifies with clean_reboot, kernel_fault, silent_stop and
-# core_restart. core_restart is a Core-only unclean stop with no host reboot, so it is unknown here
-# and still raises its warning event; it never marks the host as cleanly shut down.
-_CLEAN_KINDS = {"clean_shutdown", "clean_reboot"}
+# core_restart. kernel_fault and silent_stop are unclean. core_restart (Core alone restarted, the
+# host kept running) and clean_reboot are clean; the severity of the event is kept, so a
+# core_restart still shows as a warning.
+_CLEAN_KINDS = {"clean_shutdown", "clean_reboot", "core_restart"}
 _CRASH_KINDS = {"kernel_panic", "watchdog_reset", "power_loss", "unknown_unclean",
                 "unclean_shutdown", "kernel_fault", "silent_stop"}
 BOOT_PREFIX = "boot."

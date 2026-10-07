@@ -625,12 +625,20 @@ hostwatch.collector.hwmon` and `metric: hw.temperature`), and the agent never se
 
 A `homeassistant` monitor with `mode: host` feeds the same page without an agent. Every 300 s
 (or its `interval`) it reads `/api/config` and `/api/states` with the existing non-admin token,
-maps them in `observe/checks/ha_host.py` to a hostwatch `Batch` for the host named `host_name`
+maps them in `observe/checks/ha_host.py` to a `Batch` for the host named `host_name`
 (default `homeassistant`), and calls `Store.ingest_batch` in process, so grading, staleness and
-retention are the ordinary ones. Sources are `homeassistant` (run state, safe and recovery mode,
-versions, pending updates, entity counts, unavailable count), `hassio` (Core, Supervisor and
-add-on CPU and memory percent, host disk) and `ha_soc` (posture, open detections, users at
-risk, suspicious activity). A source with no matching sensor is reported absent, never as zero,
+retention are the ordinary ones. The points carry the OpenTelemetry names of
+`docs/DATA-API-DESIGN.md` section 3.4 under three scopes: `observe.check.homeassistant`
+(`observe.ha.running`, `observe.ha.safe_mode`, `observe.ha.recovery_mode`, `observe.ha.version`
+with the attributes `observe.ha.component` and `observe.ha.version`, `observe.ha.update.pending`
+per update entity, `observe.ha.update.count`, `observe.ha.entity.count` (the total, and one point
+per `observe.ha.domain`) and `observe.ha.entity.unavailable`), `observe.check.hassio`
+(`container.cpu.utilization` and `container.memory.utilization` as ratios per `container.name`
+for Core, Supervisor and add-ons, and the host disk as `system.filesystem.usage` with
+`system.filesystem.state` used or free, `system.filesystem.limit` and
+`system.filesystem.utilization`, in bytes and as a ratio) and `observe.check.ha_soc`
+(`observe.ha.soc.posture_score`, `.open_detections`, `.users_at_risk`, `.suspicious_activity`).
+A source with no matching sensor is reported absent, never as zero,
 and a source that is absent claims nothing, so a healthy Home Assistant with default settings
 (the hassio and HA SOC sensors are opt-in) grades Good. Only the Core and Supervisor sensors
 (`sensor.home_assistant_core_*` and `sensor.home_assistant_supervisor_*`) and add-ons are read
@@ -678,7 +686,8 @@ The hrStorage description strings and unit sizes the Probe reports are unverifie
 Probe; the test fixture is shaped from the contract documents.
 `hostview.py` grades the `ha` section (not running Critical; update pending, safe or recovery
 mode, and 25 or more unavailable entities Warning) and the `containers` section (CPU and memory
-percent Warning at 85, Critical at 95); `hassio` disk used percent is graded under disks. The
+ratio Warning at 0.85, Critical at 0.95); the `hassio` disk utilization ratio is graded under
+disks (Warning at 0.85, Critical at 0.95). The
 stale window of that host is three times the monitor's interval, so a 300 s poll is not stale
 at 180 s. The entity ids of the hassio and HA SOC sensors are unverified against a live install
 and are marked in the module. Richer HA detail arrives from ha_Int_soc pushing batches with its
@@ -698,33 +707,34 @@ points per container and a handful per other source, so a 60 s cycle is far insi
 never holds an HA admin token; the pull monitor (`mode: host`) keeps using the non-admin token,
 and both write to the same host, because series are keyed by source, metric and labels.
 
-| Source | Metrics (unit) | Labels | Graded under |
+ha_Int_soc names its points as in `docs/DATA-API-DESIGN.md` section 3.4, under the scopes
+`ha_soc.collector.<name>`. The golden files it sends are copied into `tests/fixtures/observe_otlp`
+(the README there names the source commit) and `tests/test_ha_push.py` sends them through the
+real routes. A resource with no `os.type` that sends a metric or log named `observe.ha.*` is
+platform `homeassistant`.
+
+| Scope `ha_soc.collector.` | Metrics (unit) | Attributes | Graded under |
 | --- | --- | --- | --- |
-| `ha_container` | `cpu_percent` (%), `memory_percent` (%), `memory_usage_bytes` (B), `memory_limit_bytes` (B), `running` (0 or 1) | `slug` (Supervisor slug, `core`, `supervisor` or an add-on slug) | Containers: percent Warning at 85, Critical at 95; not running Warning |
-| `ha_watchdog` | `breach_count` (count) | `slug` | Containers: any breach Warning |
-| `ha_integrations` | `loaded_total`, `issues_total` (count); `issue` (1 per integration with a problem); `error_count_24h` (count) | `issue`: `domain`, `title`, `category`, `state`; `error_count_24h`: `domain` | Integration health: category `failing` Critical, `credential`, `communication`, `collection`, `errors` Warning, `debug_logging` and `disabled` Good |
-| `ha_repairs` | `open_total` (count); `open` (count) | `severity` (`critical`, `error`, `warning`) | Repairs: `critical` Critical, others Warning, zero Good |
-| `ha_backup` | `backups_total` (count), `last_success_age_hours` (h), `last_backup_ok` (0 or 1) | none | Backups: age Warning at 36 h, Critical at 72 h; failed Warning |
-| `ha_supervisor` | `healthy`, `supported` (0 or 1), `unhealthy_reasons` (count) | none | Home Assistant: unhealthy Critical, unsupported Warning |
+| `containers` | `container.cpu.utilization`, `container.memory.utilization` (1, ratio), `container.memory.usage` (By), `observe.ha.container.running` (0 or 1) | `container.name` (Supervisor slug, `core`, `supervisor` or an add-on slug) | Containers: ratio Warning at 0.85, Critical at 0.95; not running Warning |
+| `watchdog` | `observe.ha.watchdog.breaches` ({breach}) | `observe.ha.watchdog.rule` | Containers: any breach Warning |
+| `integrations` | `observe.ha.integration.count` ({integration}) per `observe.ha.integration.category`, `observe.ha.integration.errors` ({error}) | `observe.ha.integration.category`, `observe.ha.integration` | Integration health: category `failing` Critical, `credential`, `communication`, `collection`, `errors` Warning, `debug_logging` and `disabled` Good; a count with no category is shown |
+| `repairs` | `observe.ha.repair.issues` ({issue}) | `observe.ha.repair.state` (`open`, `all`), `observe.ha.repair.domain`, `observe.ha.repair.severity` | Repairs: open issues Warning, or the level of the severity (`critical` Critical) when sent; `all` is shown |
+| `backup` | `observe.ha.backup.count`, `observe.ha.backup.last_ok` (0 or 1), `observe.ha.backup.last_success_age` (s), `observe.ha.backup.unprotected` (0 or 1) | `observe.ha.backup.password_set` | Backups: age Warning at 36 h, Critical at 72 h; failed or unprotected Warning |
+| `supervisor` | `observe.ha.supervisor.healthy`, `observe.ha.supervisor.supported` (0 or 1), `observe.ha.supervisor.unhealthy_reasons` ({reason}) | `observe.ha.supervisor.reason` | Home Assistant: unhealthy Critical, unsupported Warning |
 
-Events carry the same `Event` schema. `ha_watchdog.breach` (source `ha_watchdog`, severity
-`warning`, `detail.slug`, `detail.action`) is sent when a sustained breach triggers an action.
-Crash classifications from ha_Int_soc `docs/CRASH-FORENSICS.md` travel as `boot.<class>` events
-from the source `ha_crash_forensics`, with the previous run's boot id as `boot_id` and the
-heartbeat key as `dedup_key`: `boot.clean_reboot` is clean, `boot.kernel_fault` and
-`boot.silent_stop` are crashes, and `boot.core_restart` (Core alone stopped, no host reboot) is
-unknown, so it is listed and alerts but never marks the host cleanly shut down or crashed. The host
-page lists boot events that are not clean under Crash events, and warning and critical events under
-Alerts for 24 h. The page sections Integration health, Repairs and Backups are new, and the existing
-Containers and Home Assistant sections take the new sources beside the pulled `hassio` and
-`homeassistant` ones. A source that has never reported shows `not_reported`, never zero.
-
-Unverified: ha_Int_soc does not push yet. The metric names, the label values, the backup and
-Supervisor health sources, and the `ha_watchdog.breach` and `ha_crash_forensics` names are
-proposed here from the ha_Int_soc code (`containers.py`, `resource_watchdog.py`, `health.py`,
-`crash_forensics.py`) and are not a recording of a live push. The fixture
-`tests/fixtures/ha_soc/push_batch.json` and `tests/test_ha_push.py` fix the contract; ha_Int_soc
-should be changed to match them, or this section and the fixture changed together.
+Log records are events. `observe.ha.watchdog.breach` (severity WARN) is a warning event. An
+`observe.ha.crash` record is a boot classification: its attribute
+`observe.ha.crash.classification` becomes the event kind `boot.<classification>`, so the boot
+classifier decides the state of the host (`docs/CRASH-FORENSICS.md` of ha_Int_soc), the boot id is
+`observe.boot_id` and the severity the record carries is kept. `kernel_fault` and `silent_stop`
+are unclean (the host's boot fields show a crash and the pushed host crash check fires),
+`core_restart` and `clean_reboot` are clean (a `core_restart` keeps its warning severity, so it is
+still listed and alerts). The host page lists boot events that are not clean under Crash events,
+and warning and critical events under Alerts for 24 h. The page sections Integration health,
+Repairs and Backups, and the existing Containers and Home Assistant sections, take the
+`ha_soc.collector.*` scopes beside the pulled `observe.check.*` ones. A source that has never
+reported shows `not_reported`, never zero. The old source and metric names (`ha_container`,
+`ha_backup`, `cpu_percent`, `backups_total` and the rest) are gone.
 
 Missing data is shown, not hidden. Each section has a `state`: `ok`, `stale`
 (no reading inside the stale window, or the host is silent), `unavailable` (a

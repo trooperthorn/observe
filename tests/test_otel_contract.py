@@ -35,11 +35,12 @@ T0 = 1_700_000_000.0
 NOW = T0 + 30.0
 HOST = "nas01"
 
-# Scopes and ids that Observe's own checks and ha_Int_soc write, which are not hostwatch collector
-# scopes (the SNMP check has its own section 3.5 test in test_snmp_otel.py); the Home Assistant
-# rules keep their names until those producers move to OpenTelemetry names.
-OTHER_PRODUCERS = {"observe.check.snmp", "homeassistant", "hassio", "ha_supervisor", "ha_soc",
-                   "ha_container", "ha_watchdog", "ha_integrations", "ha_repairs", "ha_backup"}
+# Scopes that Observe's own checks and ha_Int_soc write, which are not hostwatch collector scopes
+# (the SNMP check has its own section 3.5 test in test_snmp_otel.py, the Home Assistant scopes
+# are tested in test_ha_push.py and test_ha_host.py).
+OTHER_PRODUCERS = {"observe.check.snmp", "observe.check.homeassistant", "observe.check.hassio",
+                   "observe.check.ha_soc"}
+HA_SOC_PREFIX = "ha_soc.collector."
 
 # Every point of every fixture: (collector, metric, a subset of its attributes) -> (section, grade).
 # The Windows storage rows (physical disk, pool, virtual disk) are `hw.status` and are told apart by
@@ -278,7 +279,8 @@ def test_the_rules_are_keyed_by_opentelemetry_names_and_no_old_key_remains():
     seen_metrics = {p["name"] for name in COLLECTORS for p in _fixture(name)["points"]}
     keys = {key for table in hostview.RULES.values() for key in table}
     assert not (keys & old)
-    hostwatch_keys = {k for k in keys if short_source(k[0]) not in OTHER_PRODUCERS}
+    hostwatch_keys = {k for k in keys if short_source(k[0]) not in OTHER_PRODUCERS
+                      and not k[0].startswith(HA_SOC_PREFIX)}
     assert hostwatch_keys
     for scope, metric in hostwatch_keys:
         assert scope.startswith(COLLECTOR_PREFIX), (scope, metric)

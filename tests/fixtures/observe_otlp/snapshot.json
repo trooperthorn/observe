@@ -1,0 +1,77 @@
+{
+  "identity": {
+    "host_name": "haos-lab",
+    "instance_id": "5f0c1c36a1a24a1d9c7e0b7f4c2d9e10",
+    "version": "2026.9.3",
+    "installation_type": "Home Assistant OS"
+  },
+  "now": 1790000000.0,
+  "snapshot": {
+    "containers": {
+      "available": true,
+      "reason": null,
+      "generated_at": "2026-09-21T14:13:20+00:00",
+      "containers": [
+        {"slug": "core", "name": "Home Assistant Core", "kind": "core", "state": "started",
+         "cpu_percent": 12.5, "memory_usage": 734003200, "memory_limit": 4000000000, "memory_percent": 18.35, "flags": []},
+        {"slug": "supervisor", "name": "Supervisor", "kind": "supervisor", "state": "started",
+         "cpu_percent": 1.2, "memory_usage": 209715200, "memory_limit": 4000000000, "memory_percent": 5.24, "flags": []},
+        {"slug": "core_mosquitto", "name": "Mosquitto broker", "kind": "addon", "state": "started",
+         "cpu_percent": 0.4, "memory_usage": 10485760, "memory_limit": 4000000000, "memory_percent": 0.26, "flags": []},
+        {"slug": "a0d7b954_probe", "name": "HA SOC Probe", "kind": "addon", "state": "started",
+         "cpu_percent": 91.0, "memory_usage": 3500000000, "memory_limit": 4000000000, "memory_percent": 87.5, "flags": ["high_memory", "high_cpu"]},
+        {"slug": "core_samba", "name": "Samba share", "kind": "addon", "state": "stopped",
+         "cpu_percent": null, "memory_usage": null, "memory_limit": null, "memory_percent": null, "flags": ["not_running"]}
+      ]
+    },
+    "detections": [
+      {"id": "watchdog_a0d7b954_probe", "rule_id": "container_resource_breach", "severity": "high",
+       "ts": "2026-09-21T13:50:00+00:00", "last_seen": "2026-09-21T14:10:00+00:00", "status": "open",
+       "recurrence_count": 2, "title": "Container 'HA SOC Probe' sustained CPU 91% and memory 88%",
+       "detail": {"slug": "a0d7b954_probe", "kind": "addon", "cpu_percent": 91.0, "memory_percent": 87.5,
+                  "action_taken": "alerted", "restart_loop_suspected": false,
+                  "episode_start": "2026-09-21T13:50:00+00:00"}},
+      {"id": "watchdog_core_samba", "rule_id": "container_resource_breach", "severity": "high",
+       "ts": "2026-09-20T08:00:00+00:00", "last_seen": "2026-09-20T08:03:00+00:00", "status": "resolved",
+       "recurrence_count": 1, "title": "Container 'Samba share' sustained memory 90%",
+       "detail": {"slug": "core_samba", "kind": "addon", "cpu_percent": 3.0, "memory_percent": 90.0,
+                  "action_taken": "add-on restarted", "restart_loop_suspected": false}},
+      {"id": "other_rule", "rule_id": "new_admin_login", "severity": "medium", "status": "open",
+       "last_seen": "2026-09-21T14:00:00+00:00", "title": "Not a watchdog detection", "detail": {}}
+    ],
+    "crash_bundles": [
+      {"id": "crash-2026-09-19T031500Z", "ts": "2026-09-19T03:15:00+00:00", "classification": "silent_stop",
+       "gap_seconds": 412.0, "suspects": [
+         {"kind": "container", "subject": "a0d7b954_probe"},
+         {"kind": "logger", "subject": "homeassistant.components.mqtt"},
+         {"kind": "kernel", "subject": "oom"},
+         {"kind": "extra", "subject": "dropped"}], "size_bytes": 1048576, "path": "/config/ha_soc/crash-x"},
+      {"id": "crash-2026-09-20T101000Z", "ts": "2026-09-20T10:10:00+00:00", "classification": "core_restart",
+       "gap_seconds": -35.5, "suspects": [], "size_bytes": 2048, "path": "/config/ha_soc/crash-y"},
+      {"id": "crash-2026-09-21T000000Z", "ts": "2026-09-21T00:00:00+00:00", "classification": "clean_reboot",
+       "gap_seconds": 90.0, "suspects": [], "size_bytes": 2048, "path": "/config/ha_soc/crash-z"},
+      {"id": "crash-2026-09-21T120000Z", "ts": "2026-09-21T12:00:00+00:00", "classification": "silent_stop",
+       "gap_seconds": 0.0, "dry_run": true, "suspects": [], "size_bytes": 2048, "path": "/config/ha_soc/crash-dry"}
+    ],
+    "integration_overview": {
+      "category_counts": {"credential": 1, "failing": 0, "communication": 1, "collection": 0, "errors": 4, "debug_logging": 0, "disabled": 0},
+      "integrations": [
+        {"entry_id": "e1", "domain": "unifi", "title": "UniFi", "state": "loaded", "error_count_24h": 41, "issue_category": "errors"},
+        {"entry_id": "e2", "domain": "elkm1", "title": "Elk", "state": "setup_retry", "error_count_24h": 3, "issue_category": "communication"},
+        {"entry_id": "e3", "domain": "ecobee", "title": "ecobee", "state": "loaded", "error_count_24h": 0, "issue_category": "credential"},
+        {"entry_id": "es1", "domain": "esphome", "title": "Sensor node 1", "state": "loaded", "error_count_24h": 12, "issue_category": "errors"},
+        {"entry_id": "es2", "domain": "esphome", "title": "Sensor node 2", "state": "loaded", "error_count_24h": 7, "issue_category": "errors"},
+        {"entry_id": "es3", "domain": "esphome", "title": "Sensor node 3", "state": "loaded", "error_count_24h": 5, "issue_category": "errors"}
+      ]
+    },
+    "repairs": [
+      {"domain": "ha_soc", "issue_id": "unclean_stop_2026-09-19", "severity": "warning"},
+      {"domain": "ha_soc", "issue_id": "admin_without_mfa_u1", "severity": "warning"},
+      {"domain": "hassio", "issue_id": "issue_system_unhealthy", "severity": "error"}
+    ],
+    "backup_checked": true,
+    "backup_finding": {"id": "misconfig:backup_unprotected", "check": "backup_unprotected", "severity": "medium",
+                       "detail": {"password_set": false, "unprotected_agents": ["backup.local"], "configured_agents": ["backup.local"]}},
+    "resolution": {"data": {"unhealthy": ["privileged", "setup"], "unsupported": ["os"], "issues": [], "suggestions": []}}
+  }
+}
