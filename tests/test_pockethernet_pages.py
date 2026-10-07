@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import quote
 from importlib.metadata import EntryPoint
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,7 @@ PASSWORD = "correct horse battery"
 PKG = Path(__file__).parent.parent / "plugins" / "pockethernet" / "observe_pockethernet"
 JACK = FIXTURE["site"]["port_id"]
 HOSTILE = '<img src=x onerror="alert(1)">&"\'</script>'
-API = "/api/plugins/pockethernet"
+V2 = "/api/v2/pockethernet"
 PAGES = ["/plugins/pockethernet", "/plugins/pockethernet/report", "/plugins/pockethernet/jack"]
 
 
@@ -101,13 +102,15 @@ def test_pages_are_static_shells_behind_the_core_and_the_data_needs_a_login(env)
         assert FIXTURE["report_id"] not in r.text and "sean-pixel" not in r.text
         assert "default-src 'self'" in r.headers["content-security-policy"]
     assert env.client.get("/plugins/pockethernet/static/pockethernet.js").status_code == 200
-    for path in ("/reports", "/report?source=sean-pixel&report_id=x", "/jack?key=x"):
-        r = env.client.get(API + path)
-        assert r.status_code == 401 and "www-authenticate" not in r.headers
+    for path in ("/reports", "/reports/sean-pixel/x", "/jacks/x"):
+        r = env.client.get(V2 + path)
+        assert r.status_code == 401
     js = (PKG / "static" / "pockethernet.js").read_text(encoding="utf-8")
-    assert 'location.assign("/login")' in js and "whoami()" in js
+    assert "/api/v2/pockethernet" in js and "/api/plugins" not in js and "whoami()" in js
+    assert env.client.get("/api/plugins/pockethernet/reports").status_code in (401, 404)
     env.login()
-    assert env.client.get(API + "/reports").status_code == 200
+    assert env.client.get(V2 + "/reports").status_code == 200
+    assert env.client.get("/api/plugins/pockethernet/reports").status_code == 404
 
 
 def test_pages_ask_for_basic_auth_when_it_is_configured(tmp_path):
@@ -136,30 +139,25 @@ def test_report_list_has_summary_ports_and_paging(env):
     env.clock.now += 60
     env.upload(report("second-report", link_speed_mbps=100))
     env.login()
-    d = env.client.get(API + "/reports").json()
-    assert d["total"] == 2
-    first, second = d["reports"]  # newest first
+    d = env.client.get(V2 + "/reports").json()
+    first, second = d["items"]  # newest first
     assert second["report_id"] == FIXTURE["report_id"] and second["source"] == "sean-pixel"
     assert second["port_id"] == JACK and second["tester_serial"] == 1234567
-    assert second["taken_at"] == FIXTURE["taken_at_ms"] / 1000 and not second["body_pruned"]
+    assert second["taken_at"].endswith("Z") and not second["body_pruned"]
     assert second["ports"][0]["port_key"] == "gi1/0/5"
-    page = env.client.get(API + "/reports", params={"limit": 1, "offset": 1}).json()
-    assert page["total"] == 2 and [r["report_id"] for r in page["reports"]] == [
-        FIXTURE["report_id"]]
-    assert len(env.client.get(API + "/reports", params={"limit": 100000}).json()["reports"]) == 2
+    page = env.client.get(V2 + "/reports", params={"limit": 1}).json()
+    assert [r["report_id"] for r in page["items"]] == ["second-report"] and page["next_cursor"]
 
 
 def test_report_detail_returns_typed_sections_and_raw_steps_and_tool_results(env):
     env.upload(FIXTURE)
     env.login()
-    d = env.client.get(API + "/report", params={"source": "sean-pixel",
-                                                "report_id": FIXTURE["report_id"]}).json()
+    d = env.client.get(V2 + f"/reports/sean-pixel/{FIXTURE['report_id']}").json()
     assert d["revision"] == 1 and d["ports"][0]["switch_id"].startswith("mac:")
     body = d["body"]
     assert body["link"]["speed_mbps"] == 1000 and body["poe"]["poe_class"] == 4
     assert body["steps"][0]["step"] == "WIREMAP" and body["tool_results"][0]["tool"] == "ping"
-    assert env.client.get(API + "/report", params={"source": "other",
-                                                   "report_id": FIXTURE["report_id"]}
+    assert env.client.get(V2 + f"/reports/other/{FIXTURE['report_id']}"
                           ).status_code == 404  # another phone's source is another report
 
 
@@ -167,8 +165,7 @@ def test_pruned_report_keeps_its_summary_and_has_no_body(env):
     env.upload(FIXTURE)
     env.login()
     run(prune_evidence(env.store, env.clock.now + 400 * 86400, 365))
-    d = env.client.get(API + "/report", params={"source": "sean-pixel",
-                                                "report_id": FIXTURE["report_id"]}).json()
+    d = env.client.get(V2 + f"/reports/sean-pixel/{FIXTURE['report_id']}").json()
     assert d["body"] is None and d["body_pruned"] is True and d["status"] == "complete"
 
 
@@ -181,13 +178,13 @@ def test_jack_page_shows_current_port_history_links_and_reports(env):
     moved["neighbors"] = [n]
     env.upload(moved)
     env.login()
-    d = env.client.get(API + "/jack", params={"key": JACK}).json()
+    d = env.client.get(V2 + f"/jacks/{JACK}").json()
     assert d["jack_key"] == JACK and d["room"] == "Room 204" and d["port_key"] == "gi1/0/6"
     assert [h["port_key"] for h in d["history"]] == ["gi1/0/6", "gi1/0/5"]
     states = {l["port"].split("|")[1]: l["closed_at"] for l in d["links"]}
     assert states["gi1/0/5"] is not None and states["gi1/0/6"] is None
     assert {r["report_id"] for r in d["reports"]} == {FIXTURE["report_id"], "moved-report"}
-    assert env.client.get(API + "/jack", params={"key": "nope"}).status_code == 404
+    assert env.client.get(V2 + "/jacks/nope").status_code == 404
 
 
 def test_hostile_strings_are_json_data_and_the_scripts_never_write_markup(env):
@@ -199,9 +196,9 @@ def test_hostile_strings_are_json_data_and_the_scripts_never_write_markup(env):
                "location_label": HOSTILE}
     env.upload(hostile)
     env.login()
-    for path, query in ((API + "/reports", {}),
-                        (API + "/report", {"source": "sean-pixel", "report_id": "hostile-report"}),
-                        (API + "/jack", {"key": HOSTILE})):
+    for path, query in ((V2 + "/reports", {}),
+                        (V2 + "/reports/sean-pixel/hostile-report", {}),
+                        (V2 + "/jacks/" + quote(HOSTILE, safe=""), {})):
         r = env.client.get(path, params=query)
         assert r.status_code == 200, r.text
         assert r.headers["content-type"].startswith("application/json")
@@ -285,13 +282,11 @@ def test_report_list_carries_the_cable_verdict_for_the_fails_column(env):
     env.clock.now += 60
     env.upload(report("failing-report", cable_verdict="fail"))
     env.login()
-    got = {r["report_id"]: r["verdict"] for r in env.client.get(API + "/reports").json()["reports"]}
+    got = {r["report_id"]: r["verdict"] for r in env.client.get(V2 + "/reports").json()["items"]}
     assert got == {FIXTURE["report_id"]: "pass", "failing-report": "fail"}
 
 
-# ---- the same data on /api/v2/pockethernet ----------------------------------------------------
-
-V2 = "/api/v2/pockethernet"
+# ---- the resources themselves -----------------------------------------------------------------
 
 
 def test_v2_resources_need_a_credential_and_belong_to_the_plugin(env):

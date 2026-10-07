@@ -23,7 +23,7 @@ PUT_BODY = {"fans": [{"header": "fan1", "min_duty_limit": 20}, "fan9"], "service
 
 
 def settings(env, host="nas01"):
-    return env.client.get(f"/api/hosts/{host}/settings")
+    return env.client.get(f"/api/v2/hosts/{host}/settings")
 
 
 def put(env, hdr, host="nas01", **over):
@@ -81,7 +81,7 @@ def test_settings_are_admin_only_session_only_and_hold_no_secret(env):
     env.login("bob")
     assert settings(env).status_code == 403
     env.client.cookies.clear()
-    assert env.client.get("/api/hosts/nas01/settings", headers=BASIC).status_code in (401, 403)
+    assert env.client.get("/api/v2/hosts/nas01/settings", headers=BASIC).status_code in (401, 403)
 
 
 def test_an_unknown_host_is_404_and_a_host_outside_the_console_is_readable(env):
@@ -388,10 +388,10 @@ def test_reissue_resets_the_progress_so_old_data_does_not_count(env):
     hdr = admin(env)
     old = enrol_host(env, hdr)
     assert ingest_for(env, "nas01", secrets_of(old)["AGENT_KEY"]).status_code == 200
-    assert env.client.get("/api/hosts/nas01/enrolment").json()["ready"] is False
+    assert env.client.get("/api/v2/hosts/nas01/enrolment").json()["ready"] is False
     env.clock.now += 100
     env.client.post("/api/hosts/nas01/enrolment/reissue", json={"confirmed": True}, headers=hdr)
-    state = env.client.get("/api/hosts/nas01/enrolment").json()
+    state = env.client.get("/api/v2/hosts/nas01/enrolment").json()
     assert [s["status"] for s in state["steps"]] == ["waiting"] * 4 and not state["ready"]
 
 

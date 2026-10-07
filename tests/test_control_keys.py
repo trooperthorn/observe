@@ -341,7 +341,7 @@ def test_wpi_and_wpf_keys_are_refused_on_control_endpoints(env):
 
 def test_wpc_key_is_refused_on_session_routes_and_admin_routes(env):
     key, _ = run(create_control_key(env.store, "nas01"))
-    for path in ("/api/v2/admin/keys", "/api/plugins/pockethernet/reports"):
+    for path in ("/api/v2/admin/keys", "/api/v2/pockethernet/reports"):
         assert env.client.get(path, headers=bearer(key)).status_code in (401, 403), path
     assert env.client.post("/api/admin/keys", json={"host": "h", "scope": "wpc"},
                            headers=bearer(key)).status_code in (401, 403)

@@ -29,7 +29,7 @@ PASSWORD = "correct horse battery"
 ROOT = Path(__file__).parent.parent
 PKG = ROOT / "plugins" / "unifi" / "observe_unifi"
 HOSTILE = '<img src=x onerror="alert(1)">&"\'</script>'
-API = "/api/plugins/unifi"
+API = "/api/v2/unifi"
 PAGE = "/plugins/unifi"
 
 
@@ -96,31 +96,42 @@ def test_the_page_is_a_static_shell_and_the_data_needs_a_login(env):
     assert "default-src 'self'" in r.headers["content-security-policy"]
     assert env.client.get("/plugins/unifi/static/unifi.js").status_code == 200
     assert env.client.get("/plugins/unifi/static/vlist-core.js").status_code == 200
-    for path in ("/devices", "/clients", "/protect"):
-        r = env.client.get(API + path)
-        assert r.status_code == 401 and "www-authenticate" not in r.headers
+    for path in ("/status", "/devices", "/clients", "/cameras"):
+        assert env.client.get(API + path).status_code == 401
     js = (PKG / "static" / "unifi.js").read_text(encoding="utf-8")
-    assert 'location.assign("/login")' in js and "whoami()" in js
+    assert "/api/v2/unifi" in js and "/api/plugins" not in js and "whoami()" in js
     env.login()
-    for path in ("/devices", "/clients", "/protect"):
+    for path in ("/status", "/devices", "/clients", "/cameras"):
         assert env.client.get(API + path).status_code == 200
+    for path in ("/devices", "/clients", "/protect"):  # the old page routes are gone
+        assert env.client.get("/api/plugins/unifi" + path).status_code == 404
 
 
-def test_the_devices_page_marks_data_stale_after_twice_the_interval(env):
+def test_the_status_marks_devices_stale_after_twice_the_interval(env):
     env.login()
     plugin = env.inner.plugin
     interval = plugin.settings.interval
-    got = env.client.get(API + "/devices").json()
-    assert got["stale"] is False and got["last_update"] == 1000.0
+    got = env.client.get(API + "/status").json()
+    assert got["devices_stale"] is False and got["devices_updated"].endswith("Z")
     env.inner.now = 1000.0 + 2 * interval - 1
-    assert env.client.get(API + "/devices").json()["stale"] is False
+    assert env.client.get(API + "/status").json()["devices_stale"] is False
     env.inner.now = 1000.0 + 2 * interval + 1
-    got = env.client.get(API + "/devices").json()
-    assert got["stale"] is True and got["last_update"] == 1000.0
+    got = env.client.get(API + "/status").json()
+    assert got["devices_stale"] is True and got["now"].endswith("Z")
     js = (PKG / "static" / "unifi.js").read_text(encoding="utf-8")
-    assert "d.stale" in js and "d.last_update" in js
+    assert "devices_stale" in js and "devices_updated" in js
     run(plugin.collect_devices(env.store))  # a good poll clears the marker
-    assert env.client.get(API + "/devices").json()["stale"] is False
+    assert env.client.get(API + "/status").json()["devices_stale"] is False
+
+
+def test_the_status_carries_the_stale_windows_and_the_settings(env):
+    env.login()
+    s = env.inner.plugin.settings
+    got = env.client.get(API + "/status").json()
+    assert got["clients_stale_after"] == 2.5 * s.clients_interval
+    assert got["protect_stale_after"] == 2.5 * s.protect_interval
+    assert got["protect_enabled"] is True and got["classic_configured"] is True
+    assert "etag" not in env.client.get(API + "/status").headers  # it depends on the clock
 
 
 def test_navigation_entry_sits_under_network(env):
@@ -130,21 +141,21 @@ def test_navigation_entry_sits_under_network(env):
     assert {"label": "UniFi", "path": PAGE, "workspace": "network"} in mine["nav"]
 
 
-def test_routes_return_devices_clients_and_cameras(env):
+def test_resources_return_devices_clients_and_cameras(env):
     env.login()
-    devices = env.client.get(API + "/devices").json()["devices"]
+    devices = env.client.get(API + "/devices").json()["items"]
     assert len(devices) == 2
-    clients = env.client.get(API + "/clients").json()
-    assert clients["total"] == 7 and clients["classic_configured"] is True
-    states = {c["mac"]: c["connected"] for c in clients["clients"]}
+    clients = env.client.get(API + "/clients").json()["items"]
+    assert len(clients) == 7
+    states = {c["mac"]: c["connected"] for c in clients}
     assert states["02:00:00:00:07:07"] is False and states["02:00:00:00:00:01"] is True
-    cams = env.client.get(API + "/protect").json()
-    assert cams["enabled"] is True and cams["cameras"][0]["recording"] is True
+    cams = env.client.get(API + "/cameras").json()["items"]
+    assert cams[0]["recording"] is True
 
 
 def test_hostile_strings_are_json_data_and_the_script_never_writes_markup(env):
     env.login()
-    for path in ("/devices", "/clients", "/protect"):
+    for path in ("/devices", "/clients", "/cameras"):
         r = env.client.get(API + path)
         assert r.headers["content-type"].startswith("application/json")
         assert r.headers["x-content-type-options"] == "nosniff"
@@ -183,7 +194,8 @@ def test_protect_tab_is_explained_when_protect_is_off(tmp_path):
     e = Env(tmp_path, Full([]), protect=False)
     try:
         e.login()
-        assert e.client.get(API + "/protect").json() == {"cameras": [], "enabled": False}
+        assert e.client.get(API + "/status").json()["protect_enabled"] is False
+        assert e.client.get(API + "/cameras").json()["items"] == []
     finally:
         e.close()
 
@@ -224,12 +236,13 @@ def test_window_and_filter_rules_in_node():
 # ---- the same data on /api/v2/unifi -------------------------------------------------------
 
 def test_v2_resources_are_mounted_by_the_plugin_and_need_a_credential(env):
-    for path in ("/devices", "/clients", "/cameras", "/devices/a/b"):
+    for path in ("/status", "/devices", "/clients", "/cameras", "/devices/a/b"):
         r = env.client.get("/api/v2/unifi" + path)
         assert r.status_code == 401, path
     env.login()
     ops = {r.operation_id for r in env.client.app.state.v2_runtime.resources if r.owner == "unifi"}
-    assert ops == {"unifi_devices", "unifi_device", "unifi_clients", "unifi_cameras"}
+    assert ops == {"unifi_status", "unifi_devices", "unifi_device", "unifi_clients",
+                   "unifi_cameras"}
 
 
 def test_v2_devices_page_by_cursor_and_one_device_by_id(env):

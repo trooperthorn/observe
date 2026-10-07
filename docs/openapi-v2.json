@@ -254,13 +254,6 @@
         "title": "ConfigOut",
         "type": "object"
       },
-      "Document": {
-        "additionalProperties": true,
-        "description": "A settings document: the fields named here are always present, others may follow.",
-        "properties": {},
-        "title": "Document",
-        "type": "object"
-      },
       "EventOut": {
         "properties": {
           "attributes": {
@@ -2606,6 +2599,23 @@
         "title": "StorageOut",
         "type": "object"
       },
+      "UnlinkedList": {
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "UnlinkedList",
+        "type": "object"
+      },
       "UserOut": {
         "properties": {
           "created": {
@@ -2766,6 +2776,20 @@
         ],
         "title": "WaitingPage",
         "type": "object"
+      },
+      "observe__api__admin__Document": {
+        "additionalProperties": true,
+        "description": "A settings document: the fields named here are always present, others may follow.",
+        "properties": {},
+        "title": "Document",
+        "type": "object"
+      },
+      "observe__api__console__Document": {
+        "additionalProperties": true,
+        "description": "A document whose named fields are always present; others may follow.",
+        "properties": {},
+        "title": "Document",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -2877,6 +2901,104 @@
           }
         ],
         "summary": "The effective configuration",
+        "tags": [
+          "admin"
+        ],
+        "x-change-domains": [],
+        "x-rate-cost": 1.0,
+        "x-roles": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/infra/unlinked": {
+      "get": {
+        "description": "Switches seen in the field that match no monitor, waiting for an admin to link.",
+        "operationId": "unlinked",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnlinkedList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "304": {
+            "description": "Unchanged since the ETag in If-None-Match."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid session or read token."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The role is too low, or the CSRF token is missing."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Rate limit exceeded. Retry-After says when to retry."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "An internal error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The database is busy. Retry-After says when."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Switches that match no monitor",
         "tags": [
           "admin"
         ],
@@ -3075,7 +3197,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Document"
+                  "$ref": "#/components/schemas/observe__api__admin__Document"
                 }
               }
             },
@@ -3175,7 +3297,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Document"
+                  "$ref": "#/components/schemas/observe__api__admin__Document"
                 }
               }
             },
@@ -3275,7 +3397,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Document"
+                  "$ref": "#/components/schemas/observe__api__admin__Document"
                 }
               }
             },
@@ -3473,7 +3595,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Document"
+                  "$ref": "#/components/schemas/observe__api__admin__Document"
                 }
               }
             },
@@ -5090,6 +5212,244 @@
         ]
       }
     },
+    "/hosts/{host}/enrolment": {
+      "get": {
+        "description": "Progress of one enrolment: script fetched, first data, control first pull, ready or\nexpired. It never returns the token or a key.",
+        "operationId": "host_enrolment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "host",
+            "required": true,
+            "schema": {
+              "title": "Host",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/observe__api__console__Document"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "304": {
+            "description": "Unchanged since the ETag in If-None-Match."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid session or read token."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The role is too low, or the CSRF token is missing."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Rate limit exceeded. Retry-After says when to retry."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "An internal error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The database is busy. Retry-After says when."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Enrolment progress of one host",
+        "tags": [
+          "admin"
+        ],
+        "x-change-domains": [],
+        "x-rate-cost": 1.0,
+        "x-roles": [
+          "admin"
+        ]
+      }
+    },
+    "/hosts/{host}/settings": {
+      "get": {
+        "description": "What the host settings page shows: identity, the saved allowlist, whether the host has\npicked it up, and the newest update or cleanup task.",
+        "operationId": "host_settings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "host",
+            "required": true,
+            "schema": {
+              "title": "Host",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/observe__api__console__Document"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "304": {
+            "description": "Unchanged since the ETag in If-None-Match."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid session or read token."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The role is too low, or the CSRF token is missing."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Rate limit exceeded. Retry-After says when to retry."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "An internal error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The database is busy. Retry-After says when."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Settings document of one host",
+        "tags": [
+          "admin"
+        ],
+        "x-change-domains": [],
+        "x-rate-cost": 1.0,
+        "x-roles": [
+          "admin"
+        ]
+      }
+    },
     "/hosts/{name}": {
       "get": {
         "description": "One host with every section, its sources and its latest events.",
@@ -5207,6 +5567,104 @@
           "metrics",
           "events"
         ],
+        "x-rate-cost": 1.0,
+        "x-roles": [
+          "viewer"
+        ]
+      }
+    },
+    "/infra/dependencies": {
+      "get": {
+        "description": "Applied, pending, refused and rejected dependency edges, computed now.",
+        "operationId": "dependencies",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/observe__api__console__Document"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "304": {
+            "description": "Unchanged since the ETag in If-None-Match."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid session or read token."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The role is too low, or the CSRF token is missing."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Rate limit exceeded. Retry-After says when to retry."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "An internal error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The database is busy. Retry-After says when."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Dependency edges by decision",
+        "tags": [
+          "network"
+        ],
+        "x-change-domains": [],
         "x-rate-cost": 1.0,
         "x-roles": [
           "viewer"

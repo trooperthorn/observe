@@ -285,7 +285,7 @@ function poll() {
   stopPoll();
   const host = created.host;
   const handle = poller(async ({ signal }) => {
-    const next = await api("GET", `/api/hosts/${encodeURIComponent(host)}/enrolment`);
+    const next = await api("GET", `/api/v2/hosts/${encodeURIComponent(host)}/enrolment`);
     if (signal.aborted) return;
     latest = next;
     drawProgress();

@@ -9,7 +9,7 @@ the controller or from a client that named itself, and is only ever handed over 
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
@@ -18,7 +18,15 @@ from observe.api.cursor import PageParams, encode
 from observe.api.models import Page, Ts
 from observe.api.problems import ApiProblem
 
+if TYPE_CHECKING:  # pragma: no cover
+    from . import UniFiPlugin
+
 DOMAINS = ("unifi",)
+# A client or camera row is stale when its last_seen is older than this many poll intervals.
+STALE_FACTOR = 2.5
+# The devices list is stale when the devices collector has not succeeded within this many
+# intervals.
+DEVICES_STALE_FACTOR = 2.0
 
 
 def _like(text: str) -> str:
@@ -189,7 +197,48 @@ def list_cameras(db: Any, page: PageParams) -> dict[str, Any]:
     return {"items": items, "next_cursor": encode([rows[-1][0]]) if more else None}
 
 
-def register(api: ApiRegistry) -> None:
+def devices_freshness(newest_seen: float | None, ok_at: float | None, now: float,
+                      interval: float) -> tuple[float | None, bool]:
+    """The time of the last good devices poll and whether it is older than twice the interval.
+    After a restart the in-memory time is unknown, so the newest stored last_seen stands in."""
+    last = ok_at if ok_at is not None else newest_seen
+    return last, last is not None and now - last > DEVICES_STALE_FACTOR * interval
+
+
+class Status(BaseModel):
+    now: Ts = Field(description="The server clock, so a client judges staleness without its own.")
+    devices_updated: Ts | None = Field(None, description="The last good devices poll.")
+    devices_stale: bool
+    clients_stale_after: float = Field(description="Seconds after which a connected client row "
+                                                   "that was not refreshed is stale.")
+    protect_stale_after: float
+    protect_enabled: bool
+    classic_configured: bool
+    classic_note: str | None = None
+
+
+def build_status(plugin: UniFiPlugin) -> Any:
+    def status(db: Any) -> dict[str, Any]:
+        """What the page needs to judge the lists: the clock, the staleness windows and whether
+        the optional classic account and Protect are set up. It depends on the clock and on
+        collector memory, so it sends no ETag."""
+        now = plugin.wall()
+        newest = db.execute("SELECT MAX(last_seen) FROM unifi_devices").fetchone()[0]
+        updated, stale = devices_freshness(newest, plugin.devices_ok_at, now,
+                                           plugin.settings.interval)
+        s = plugin.settings
+        return {"now": now, "devices_updated": updated, "devices_stale": stale,
+                "clients_stale_after": STALE_FACTOR * s.clients_interval,
+                "protect_stale_after": STALE_FACTOR * s.protect_interval,
+                "protect_enabled": s.protect,
+                "classic_configured": s.classic_credential is not None,
+                "classic_note": plugin.classic_note}
+    return status
+
+
+def register(api: ApiRegistry, plugin: UniFiPlugin) -> None:
+    api.resource("/unifi/status", build_status(plugin), Status, etag=False, tags=("unifi",),
+                 operation_id="status", summary="UniFi poll freshness and settings")
     api.resource("/unifi/devices", list_devices, DevicePage, domains=DOMAINS, tags=("unifi",),
                  paginate=True, filters=DeviceFilters, operation_id="devices",
                  summary="List UniFi devices")

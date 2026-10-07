@@ -21,7 +21,6 @@ from observe.store import Store
 from .api import register as register_resources
 from .keys import SCOPE
 from .derive import rebuild, retry_failed
-from .pages import build_pages_router
 from .reports import MIGRATIONS, prune_evidence
 from .otlp import EVENT, handle_report
 
@@ -92,11 +91,10 @@ class PockethernetPlugin(PluginBase):
         register_resources(api)
 
     def routers(self) -> list[PluginRouter]:
-        return [PluginRouter(build_pages_router()),  # a login session, enforced by the core
-                PluginRouter(build_admin_router(), admin=True)]
+        return [PluginRouter(build_admin_router(), admin=True)]
 
     def pages(self) -> list[PluginPage]:
-        # Static shells with no data; their script reads the session-guarded routes above.
+        # Static shells with no data; their script reads the /api/v2/pockethernet resources.
         return [PluginPage(BASE, HERE / "pages" / "reports.html"),
                 PluginPage(f"{BASE}/report", HERE / "pages" / "report.html"),
                 PluginPage(f"{BASE}/jack", HERE / "pages" / "jack.html")]

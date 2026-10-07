@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
-from . import admin, changes, events, ha, hosts, metrics, monitors, network, problems
+from . import admin, changes, console, events, ha, hosts, metrics, monitors, network, problems
 from .registry import (ApiContext, ApiRegistry, ApiRuntime, CachedBody, NotModified,
                        on_cached, on_not_modified)
 
@@ -58,6 +58,8 @@ def build(runtime: ApiRuntime) -> tuple[FastAPI, ApiRegistry]:
     app.add_exception_handler(CachedBody, on_cached)
     app.openapi = lambda: build_openapi(app)  # type: ignore[method-assign]
     registry = ApiRegistry(app, runtime)
+    # Before the hosts: `/hosts/{name:path}` would answer the paths under one host first.
+    console.register(registry)
     if runtime.scheduler is not None:
         monitors.register(registry)
         hosts.register(registry)

@@ -143,11 +143,13 @@ def test_500_clients_are_stored_within_the_time_budget(tmp_path):
     asked = [r for r in console.requests if r.url.path.endswith("/clients")]
     assert len(asked) == 3  # 200 per page
     started = time.perf_counter()
-    from observe_unifi.clients import read_clients
-    got = read_clients(env.store)
+    from observe.api.cursor import PageParams
+    from observe_unifi.api import ClientFilters, list_clients
+    got = env.store.storage.read_sync(
+        lambda db: list_clients(db, PageParams(500, None), ClientFilters()))
     assert time.perf_counter() - started < BUDGET_S
-    assert got["total"] == 500 and not got["truncated"]
-    first = got["clients"][0]
+    assert len(got["items"]) == 500 and got["next_cursor"] is None
+    first = got["items"][0]
     assert first["uplink_name"] == "Dev 1" and first["connected"] is True
 
 
@@ -411,22 +413,6 @@ def test_schema_upgrades_from_version_1_keeping_rows():
     assert db.execute("SELECT COUNT(*) FROM unifi_cameras").fetchone()[0] == 0
     migrate_plugins(db, {"unifi": MIGRATIONS})  # a second run changes nothing
     assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == 3
-
-
-def test_connected_rows_not_refreshed_lately_are_flagged_stale(tmp_path):
-    from observe_unifi.clients import read_cameras, read_clients
-    console = Full([client_row(1)])
-    console.cameras = [{"id": "cam-1", "name": "Door", "isConnected": True, "isRecording": True}]
-    env = env_with(tmp_path, console, protect=True)
-    run(env.plugin.collect_devices(env.store))
-    run(env.plugin.collect_clients(env.store))
-    run(env.plugin.collect_protect(env.store))
-    now = env.plugin.wall()
-    assert read_clients(env.store, now, 750.0)["clients"][0]["stale"] is False
-    assert read_clients(env.store, now + 751.0, 750.0)["clients"][0]["stale"] is True
-    assert read_cameras(env.store, now, 300.0)["cameras"][0]["stale"] is False
-    assert read_cameras(env.store, now + 301.0, 300.0)["cameras"][0]["stale"] is True
-    assert read_clients(env.store)["clients"][0]["stale"] is False  # no clock given
 
 
 def test_classic_note_carries_only_the_error_class(tmp_path):

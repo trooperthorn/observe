@@ -2,6 +2,7 @@
 // written with textContent only, never as markup. Helpers (el, when, whoami, portHref) come
 // from the /static/infra-common.js module, which this file loads as a module script.
 import { el, when, whoami, portHref } from "/static/infra-common.js";
+import { ApiError, get as apiGet } from "/static/js/api.js";
 import { statusChip, monoTag } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { svg } from "/static/js/dom.js";
@@ -9,7 +10,7 @@ import { svg } from "/static/js/dom.js";
 const page = document.getElementById("page");
 const footer = document.getElementById("footer");
 const params = new URLSearchParams(location.search);
-const API = "/api/plugins/pockethernet";
+const API = "/api/v2/pockethernet";
 const PAGE_SIZE = 50;
 
 // A titled card from the shared components. Titles and values are set with textContent.
@@ -95,13 +96,17 @@ function kv(obj) {
   return rows.length ? table(["Field", "Value"], rows) : el("p", "note", "Nothing reported.");
 }
 
+// A read of the v2 resources. A 404 is a page that says so, so it comes back as null.
 async function get(path, query) {
-  const r = await fetch(`${API}${path}?${new URLSearchParams(query)}`);
-  if (r.status === 401) { location.assign("/login"); throw new Error("not signed in"); }
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`request failed (${r.status})`);
-  return r.json();
+  try {
+    return await apiGet(`${API}${path}`, query);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
 }
+
+const reportPath = (source, id) => `/reports/${encodeURIComponent(source)}/${encodeURIComponent(id)}`;
 
 const PASSING = new Set(["pass", "ok"]);
 
@@ -110,11 +115,11 @@ function failCount(r) {
 }
 
 async function listView() {
-  const offset = Math.max(0, parseInt(params.get("offset") || "0", 10) || 0);
-  const d = await get("/reports", { limit: PAGE_SIZE, offset });
+  const cursor = params.get("cursor") || "";
+  const d = await get("/reports", { limit: PAGE_SIZE, cursor });
   const frag = document.createDocumentFragment();
   frag.append(crumbs("Network", "Cable reports"), el("h1", null, "Field reports"));
-  if (!d.reports.length) {
+  if (!d.items.length) {
     frag.append(section("Reports", el("p", "empty muted", "No field reports have been uploaded yet.")));
     page.replaceChildren(frag);
     return;
@@ -144,15 +149,15 @@ async function listView() {
   const holder = el("div");
   const draw = () => {
     const q = search.value.trim().toLowerCase();
-    const rows = d.reports.filter((r) => !q ||
+    const rows = d.items.filter((r) => !q ||
       [r.site, r.port_id, r.source, r.report_id].some((x) => String(x || "").toLowerCase().includes(q)));
     holder.replaceChildren(sortable(columns, rows, "No report matches that filter.", "Field reports"));
   };
   search.addEventListener("input", draw);
   draw();
-  const nav = el("p", "card-sub", `Showing ${offset + 1} to ${offset + d.reports.length} of ${d.total}. `);
-  if (offset > 0) nav.append(link("Newer", `?offset=${Math.max(0, offset - PAGE_SIZE)}`), " ");
-  if (offset + d.reports.length < d.total) nav.append(link("Older", `?offset=${offset + PAGE_SIZE}`));
+  const nav = el("p", "card-sub", `Showing ${d.items.length} reports, newest first. `);
+  if (cursor) nav.append(link("Newest", location.pathname), " ");
+  if (d.next_cursor) nav.append(link("Older", `?cursor=${encodeURIComponent(d.next_cursor)}`));
   frag.append(section("Reports", box, holder, nav));
   page.replaceChildren(frag);
 }
@@ -259,7 +264,7 @@ function reportKpis(b) {
 }
 
 async function reportView() {
-  const d = await get("/report", { source: params.get("source") || "", report_id: params.get("report_id") || "" });
+  const d = await get(reportPath(params.get("source") || "", params.get("report_id") || ""));
   if (!d) { page.replaceChildren(el("p", null, "Unknown report.")); return; }
   const b = d.body;
   const frag = document.createDocumentFragment();
@@ -310,7 +315,7 @@ async function reportView() {
 }
 
 async function jackView() {
-  const d = await get("/jack", { key: params.get("key") || "" });
+  const d = await get(`/jacks/${encodeURIComponent(params.get("key") || "")}`);
   if (!d) { page.replaceChildren(el("p", null, "Unknown jack.")); return; }
   const frag = document.createDocumentFragment();
   const head = el("div", "admin-title");
@@ -323,7 +328,7 @@ async function jackView() {
   else now.textContent = "Not patched to a port at the moment.";
   frag.append(section("Patched now", now));
   const newest = d.reports[0];
-  const latest = newest ? await get("/report", { source: newest.source, report_id: newest.report_id }) : null;
+  const latest = newest ? await get(reportPath(newest.source, newest.report_id)) : null;
   const props = latest && latest.body ? latest.body.properties || {} : null;
   if (props) {
     frag.append(section("Latest cable test", el("p", "card-sub", `Taken ${when(latest.taken_at)}.`),

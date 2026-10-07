@@ -201,7 +201,7 @@ def test_create_and_regenerate_are_admin_only_with_csrf(env):
     env.user("bob")
     bob = env.csrf(env.login("bob"))
     assert env.client.post(url, json={}, headers=bob).status_code == 403
-    assert env.client.get("/api/hosts/nas01/enrolment").status_code == 403
+    assert env.client.get("/api/v2/hosts/nas01/enrolment").status_code == 403
     assert create(env, bob, name="nas02").status_code == 403
 
 
@@ -216,7 +216,7 @@ def test_regenerate_after_expiry_issues_a_working_token_and_kills_the_old_one(en
     hdr = admin(env)
     old = token_of(create(env, hdr))
     env.clock.now += enrol.TOKEN_TTL_S
-    assert env.client.get("/api/hosts/nas01/enrolment").json()["state"] == "expired"
+    assert env.client.get("/api/v2/hosts/nas01/enrolment").json()["state"] == "expired"
     r = env.client.post("/api/hosts/nas01/enrolment/regenerate", json={}, headers=hdr)
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
     body = r.json()
@@ -225,7 +225,7 @@ def test_regenerate_after_expiry_issues_a_working_token_and_kills_the_old_one(en
     assert body["command"].startswith("# Observe install for nas01 (TrueNAS).")
     assert body["ttl_s"] == enrol.TOKEN_TTL_S
     assert body["expires_at"] == env.clock() + enrol.TOKEN_TTL_S
-    prog = env.client.get("/api/hosts/nas01/enrolment").json()
+    prog = env.client.get("/api/v2/hosts/nas01/enrolment").json()
     assert prog["state"] == "waiting" and prog["expired"] is False
     assert redeem(env, old) is None
     got = redeem(env, new)
@@ -280,8 +280,8 @@ def test_regenerated_enrolment_expiry_is_audited_again(env):
     hdr = admin(env)
     create(env, hdr)
     env.clock.now += enrol.TOKEN_TTL_S
-    env.client.get("/api/hosts/nas01/enrolment")
+    env.client.get("/api/v2/hosts/nas01/enrolment")
     env.client.post("/api/hosts/nas01/enrolment/regenerate", json={}, headers=hdr)
     env.clock.now += enrol.TOKEN_TTL_S
-    env.client.get("/api/hosts/nas01/enrolment")
+    env.client.get("/api/v2/hosts/nas01/enrolment")
     assert audit_kinds(env).count("enrol_expired") == 2

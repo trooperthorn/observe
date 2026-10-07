@@ -297,18 +297,18 @@ async def test_link_routes_need_admin_and_csrf_and_audit(web):
     payload = {"switch_id": sid, "monitor": "ping-dist"}
     assert web.client.post("/api/admin/infra/link", json=payload).status_code == 401
     csrf = await web.login("bob", admin=False)
-    assert web.client.get("/api/admin/infra/unlinked").status_code == 403
+    assert web.client.get("/api/v2/admin/infra/unlinked").status_code == 403
     assert web.client.post("/api/admin/infra/link", json=payload, headers=csrf).status_code == 403
     web.client.cookies.clear()
     csrf = await web.login("root", admin=True)
-    assert [s["switch_id"] for s in web.client.get("/api/admin/infra/unlinked").json()] == [sid]
+    assert [s["switch_id"] for s in web.client.get("/api/v2/admin/infra/unlinked").json()["items"]] == [sid]
     assert web.client.post("/api/admin/infra/link", json=payload).status_code == 403
     assert web.client.post("/api/admin/infra/link", json={"switch_id": sid},
                            headers=csrf).status_code == 422
     assert web.client.post("/api/admin/infra/link", json={**payload, "monitor": "nope"},
                            headers=csrf).status_code == 422
     assert web.client.post("/api/admin/infra/link", json=payload, headers=csrf).status_code == 200
-    assert web.client.get("/api/admin/infra/unlinked").json() == []
+    assert web.client.get("/api/v2/admin/infra/unlinked").json() == {"items": []}
     kinds = [r[0] for r in await web.infra.read(lambda d: d.execute(
         "SELECT kind FROM audit WHERE kind LIKE 'infra_%' ORDER BY id").fetchall())]
     assert kinds == ["infra_switch_link_failed", "infra_switch_linked"]

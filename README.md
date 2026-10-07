@@ -455,7 +455,7 @@ between steps puts focus on the step heading and announces it to screen readers.
 control allowlist. It returns an install command headed with the host name and
 platform, backed by a single-use token that lasts 30 minutes and is stored only
 as a digest. The host's `wpi` and `wpc` keys are created when the token is
-redeemed. `GET /api/hosts/{name}/enrolment` reports progress: script fetched,
+redeemed. `GET /api/v2/hosts/{name}/enrolment` reports progress: script fetched,
 first data, control first pull, ready or expired, plus `token_state` (valid, used or
 expired) and `guard`, the reason the script last refused to run on a machine. Control is not offered for
 Windows yet, and not for TrueNAS. `GET /i/{token}` serves a guarded install script
@@ -715,7 +715,8 @@ plugin_settings:
 
 A listed plugin that is not installed, or that does not support this Observe
 version, stops startup with a message naming it (`--validate` checks this too).
-Plugin routes live under `/api/plugins/<name>/` and need a login
+A plugin's data is read from `/api/v2/<name>/...` (a session or a read token); its change routes live under
+`/api/plugins/<name>/` and need a login
 session, the CSRF token for anything but a read, and count against
 `server.plugin_rate_per_minute`; state changes and refusals are written to the
 audit log. A plugin may also declare a route that takes a key of its own scope
@@ -762,7 +763,7 @@ savepoint per item, so one bad device or report skips itself and the rest is kep
 map is kept in `map_nodes`, `map_edges` and `port_current` at write time. A switch is matched to a
 monitor by chassis MAC, management address or sysName, and a port to an SNMP interface monitor
 or a UniFi device port. Matching never creates a monitor, and an ambiguous match is left for
-an admin. Switches that match nothing are listed at `GET /api/admin/infra/unlinked` and an
+an admin. Switches that match nothing are listed at `GET /api/v2/admin/infra/unlinked` and an
 admin links one with `POST /api/admin/infra/link` (audited). `GET /api/v2/findings` lists
 conflicts between field results and live state: speed above live, VLAN mismatch, PoE verified
 but no power, and re-patched. It also lists field changes between the last two reports of a
@@ -777,7 +778,7 @@ rebuilds it; the live state is refreshed by the scheduler once a minute. A link 
 uplink closes the old link at once. Dependencies are inferred from the links: when
 `map.auto_depends` is true (the default), an edge confirmed by LLDP or CDP within
 `stale_days` is applied and feeds the rollup, so everything behind a DOWN switch shows
-UNREACHABLE and only the switch alerts. Weaker edges are listed at `GET /api/infra/dependencies`
+UNREACHABLE and only the switch alerts. Weaker edges are listed at `GET /api/v2/infra/dependencies`
 until an admin accepts or rejects them (`POST /api/admin/infra/depends/accept` and `/reject`,
 audited). An edge that would create a cycle is refused and listed.
 
@@ -895,7 +896,8 @@ names are unverified against a live console.
 Everything the console shows, and every script that reads Observe, uses `/api/v2`. The legacy read
 routes (`/api/monitors`, `/api/monitors/<slug>/history`, `/api/groups`, `/api/forecasts`,
 `/api/events`, `GET /api/hosts` and `GET /api/hosts/<host>`, and since slice r6 `/api/infra/map`,
-`/api/infra/port`, `/api/infra/findings`, `/api/audit` and `/api/plugins`) were removed with no
+`/api/infra/port`, `/api/infra/findings`, `/api/audit` and `/api/plugins`, and since slice r8 the
+settings, enrolment, dependency and unlinked-switch reads and the UniFi and Pockethernet page routes) were removed with no
 adapter and no deprecation period; use the table below. The schema is `docs/openapi-v2.json`, also served at
 `/api/v2/openapi.json`, and a test fails when the code and the file differ (regenerate with
 `python -m observe.api.schema`).

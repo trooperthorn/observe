@@ -371,13 +371,13 @@ async def login(web: World, name: str, admin: bool) -> dict[str, str]:
 async def test_map_routes_need_a_session_and_decisions_need_admin_and_csrf(web):
     await web.build()
     await web.uplink(source="field_report")
-    for path in ("/api/v2/map", "/api/infra/dependencies"):
+    for path in ("/api/v2/map", "/api/v2/infra/dependencies"):
         assert web.client.get(path).status_code == 401
     csrf = await login(web, "bob", admin=False)
     body = web.client.get("/api/v2/map?site=nowhere").json()
     assert body["nodes"] == [] and body["filter"]["site"] == "nowhere"
     assert len(web.client.get("/api/v2/map").json()["nodes"]) >= 2
-    deps = web.client.get("/api/infra/dependencies").json()
+    deps = web.client.get("/api/v2/infra/dependencies").json()
     assert [(e["child"], e["parent"]) for e in deps["pending"]] == [("edge-sw", "core-sw")]
     pay = {"child": "edge-sw", "parent": "core-sw"}
     accept, reject = "/api/admin/infra/depends/accept", "/api/admin/infra/depends/reject"
@@ -389,6 +389,6 @@ async def test_map_routes_need_a_session_and_decisions_need_admin_and_csrf(web):
     assert web.client.post(accept, json={"child": "a", "parent": "b"},
                            headers=csrf).status_code == 422
     assert web.client.post(accept, json=pay, headers=csrf).status_code == 200
-    assert web.client.get("/api/infra/dependencies").json()["applied"][0]["by"] == "admin"
+    assert web.client.get("/api/v2/infra/dependencies").json()["applied"][0]["by"] == "admin"
     assert web.client.post(reject, json=pay, headers=csrf).status_code == 200
-    assert web.client.get("/api/infra/dependencies").json()["applied"] == []
+    assert web.client.get("/api/v2/infra/dependencies").json()["applied"] == []

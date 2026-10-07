@@ -176,7 +176,12 @@ def test_the_removed_legacy_reads_answer_not_found_for_an_admin(env):
     _admin(env)
     for path in ("/api/session", "/api/admin/users", "/api/admin/keys", "/api/admin/retention",
                  "/api/admin/recheck", "/api/admin/tiers", "/api/plugins/control/commands",
-                 "/api/plugins/control/capabilities"):
+                 "/api/plugins/control/capabilities", "/api/infra/dependencies",
+                 "/api/admin/infra/unlinked", "/api/enrol/public-url", "/api/hosts/nas01/enrolment",
+                 "/api/hosts/nas01/settings", "/api/plugins/unifi/devices",
+                 "/api/plugins/unifi/clients", "/api/plugins/unifi/protect",
+                 "/api/plugins/pockethernet/reports", "/api/plugins/pockethernet/report",
+                 "/api/plugins/pockethernet/jack"):
         assert env.client.get(path).status_code in (404, 405), path
 
 
@@ -260,8 +265,29 @@ def test_a_refresh_that_fails_throws_so_the_poller_can_back_off():
         assert "throw e;" in code and "observe unreachable, retrying" in code, rel
 
 
-def test_the_plugin_pages_still_read_their_own_page_routes():
+def test_the_plugin_pages_read_the_v2_resources_through_the_client():
     unifi = _code(ROOT / "plugins/unifi/observe_unifi/static/unifi.js")
-    assert "/api/plugins/unifi" in unifi and "whoami" in unifi
+    assert "/api/v2/unifi" in unifi and "whoami" in unifi and "/api/plugins" not in unifi
+    field = _code(ROOT / "plugins/pockethernet/observe_pockethernet/static/pockethernet.js")
+    assert "/api/v2/pockethernet" in field and "/api/plugins" not in field
     assert (STATIC / "js" / "v2.js").exists() is False
     assert PLUGIN_SCRIPTS
+    for path in PLUGIN_SCRIPTS:
+        assert not re.search(r"fetch\(|setInterval\s*\(", _code(path)), path.name
+
+
+# A change still goes to the route that makes it; every read is /api/v2. The pattern catches a
+# GET named as a method, a bare read helper and a raw fetch with a path that is not v2.
+LEGACY_READ = re.compile(
+    r"""(?:api\(\s*["']GET["']\s*,|getAll?\(|fetch\()\s*["'`]/api/(?!v2/)""")
+
+
+def test_no_script_reads_from_a_route_that_is_not_v2():
+    for path in PAGE_SCRIPTS + PLUGIN_SCRIPTS:
+        if path.name == "login.js":  # the sign-in is a POST, not a read
+            continue
+        assert not LEGACY_READ.search(_code(path)), path.name
+    assert LEGACY_READ.search('api("GET", "/api/hosts/x/settings")')
+    assert LEGACY_READ.search("fetch(`/api/plugins/unifi/devices`)")
+    assert not LEGACY_READ.search('api("GET", `/api/v2/hosts/x/settings`)')
+    assert not LEGACY_READ.search('api("PUT", "/api/enrol/public-url", csrf, body)')

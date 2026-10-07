@@ -30,7 +30,6 @@ from typing import Any
 from observe.storage import Conn
 from observe.store import Store
 
-MAX_ROWS = 5000  # the most clients or cameras a page request returns
 _HEX = frozenset("0123456789abcdef")
 
 
@@ -258,72 +257,3 @@ async def save_cameras(store: Store, cams: Iterable[Camera], now: float) -> int:
     items = list(cams)
     return await store.storage.write(lambda db: _write_cameras(db, items, now),
                                      touches=("unifi",))
-
-
-# ---- reads for the pages ----
-
-def read_devices(store: Store) -> list[dict[str, Any]]:
-    keys = ("site_id", "device_id", "mac", "name", "model", "state", "ip", "firmware",
-            "firmware_updatable", "last_seen")
-    rows = store.storage.read_sync(lambda db: db.execute(
-        f"SELECT {', '.join(keys)} FROM unifi_devices "
-        "ORDER BY name COLLATE NOCASE, mac LIMIT ?", (MAX_ROWS,)).fetchall())
-    out = [dict(zip(keys, r)) for r in rows]
-    for d in out:
-        fu = d["firmware_updatable"]
-        d["firmware_updatable"] = None if fu is None else bool(fu)
-    return out
-
-
-def _stale(connected: bool | None, seen: float, now: float | None, after: float | None) -> bool:
-    """True when a row says connected but the collector has not refreshed it within `after`."""
-    return bool(connected) and now is not None and after is not None and now - seen > after
-
-
-def read_clients(store: Store, now: float | None = None,
-                 stale_after: float | None = None) -> dict[str, Any]:
-    """Clients with the name of the device they sit on, connected first. Capped at MAX_ROWS.
-
-    With `now` and `stale_after`, a connected row whose last_seen is older than that is flagged
-    `stale`, so a stopped collector is not shown as current."""
-    def query(db: Conn) -> tuple[int, list[Any]]:
-        total = db.execute("SELECT COUNT(*) FROM unifi_clients").fetchone()[0]
-        rows = db.execute(
-            """SELECT c.client_id, c.mac, c.name, c.ip, c.kind, c.connected, c.connected_at,
-               c.ssid, c.sw_port, c.enriched, c.last_seen, c.uplink_device_id, c.uplink_mac,
-               d.name, d.mac, c.classic_seen FROM unifi_clients c
-               LEFT JOIN unifi_devices d ON d.site_id = c.site_id
-                 AND ((c.uplink_device_id != '' AND d.device_id = c.uplink_device_id)
-                      OR (c.uplink_device_id = '' AND c.uplink_mac != '' AND d.mac = c.uplink_mac))
-               ORDER BY c.connected DESC, c.name COLLATE NOCASE, c.mac LIMIT ?""",
-            (MAX_ROWS,)).fetchall()
-        return total, rows
-
-    total, rows = store.storage.read_sync(query)
-    out = []
-    for (cid, mac, name, ip, kind, conn, cat, ssid, port, enr, seen, up_id, up_mac, up_name,
-         up_dev_mac, classic_seen) in rows:
-        out.append({"client_id": cid, "mac": mac, "name": name, "ip": ip, "kind": kind,
-                    "connected": None if conn is None else bool(conn), "connected_at": cat,
-                    "ssid": ssid, "sw_port": port, "enriched": bool(enr), "last_seen": seen,
-                    "classic_seen": classic_seen,
-                    "stale": _stale(conn, seen, now, stale_after),
-                    "uplink_device_id": up_id, "uplink_name": up_name or "",
-                    "uplink_mac": up_dev_mac or up_mac})
-    return {"total": total, "truncated": total > len(out), "clients": out}
-
-
-def read_cameras(store: Store, now: float | None = None,
-                 stale_after: float | None = None) -> dict[str, Any]:
-    keys = ("camera_id", "mac", "name", "model", "state", "connected", "recording", "last_seen")
-    rows = store.storage.read_sync(lambda db: db.execute(
-        f"SELECT {', '.join(keys)} FROM unifi_cameras "
-        "ORDER BY name COLLATE NOCASE, camera_id LIMIT ?", (MAX_ROWS,)).fetchall())
-    cams = []
-    for r in rows:
-        c = dict(zip(keys, r))
-        for k in ("connected", "recording"):
-            c[k] = None if c[k] is None else bool(c[k])
-        c["stale"] = bool(c["connected"] or c["recording"]) and now is not None             and stale_after is not None and now - c["last_seen"] > stale_after
-        cams.append(c)
-    return {"cameras": cams}

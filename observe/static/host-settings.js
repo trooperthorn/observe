@@ -23,10 +23,11 @@ const $ = (id) => document.getElementById(id);
 const msg = $("msg");
 const host = hostFromPath(window.location.pathname);
 const when = (ts) => (ts ? new Date(ts * 1000).toLocaleTimeString() : "");
-const hostUrl = (tail) => `/api/hosts/${encodeURIComponent(host)}${tail}`;
+const hostUrl = (tail) => `/api/hosts/${encodeURIComponent(host)}${tail}`;       // changes
+const hostRead = (tail) => `/api/v2/hosts/${encodeURIComponent(host)}${tail}`;  // reads
 
 let csrf = "";
-let settings = null;     // the last GET /api/hosts/{host}/settings
+let settings = null;     // the last GET /api/v2/hosts/{host}/settings
 let draft = null;        // the editable allowlist
 let shown = null;        // { kind: "update" | "cleanup" | "install", made } the command on screen
 let install = null;      // the last enrolment progress while an install command is being watched
@@ -340,7 +341,7 @@ function stopPoll() {
 }
 
 async function load() {
-  settings = await api("GET", hostUrl("/settings"));
+  settings = await api("GET", hostRead("/settings"));
   drawIdentity();
   drawInstallCard();
   drawCommand();
@@ -363,8 +364,8 @@ function poll() {
     const watching = !!shown && shown.kind === "install" && !shown.finished;
     if (!shouldPoll(settings, watching)) { handle.stop(); return; }
     const [next, prog] = await Promise.all([
-      api("GET", hostUrl("/settings")),
-      watching ? api("GET", hostUrl("/enrolment")) : Promise.resolve(null),
+      api("GET", hostRead("/settings")),
+      watching ? api("GET", hostRead("/enrolment")) : Promise.resolve(null),
     ]);
     if (signal.aborted) return;
     settings = next;

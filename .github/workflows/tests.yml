@@ -24,7 +24,7 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - name: The committed /api/v2 schema matches the code
         run: python -m observe.api.schema --check
-      - run: python -m pytest -q -p no:cacheprovider
+      - run: python -m pytest -q -p no:cacheprovider -n auto
 
   postgres:
     name: suite on PostgreSQL (${{ matrix.name }})
@@ -68,4 +68,4 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libkrb5-dev
       - run: pip install -r requirements-dev.txt
       - name: Run the whole suite, with the storage contract cases on PostgreSQL
-        run: python -m pytest -q -p no:cacheprovider
+        run: python -m pytest -q -p no:cacheprovider -n auto

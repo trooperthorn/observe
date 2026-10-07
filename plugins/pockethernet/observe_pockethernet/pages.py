@@ -1,10 +1,9 @@
-"""The data behind the report list, report detail and jack pages.
+"""The queries behind the report list, report detail and jack pages.
 
-These are read-only routes for a logged-in user; the core mounts them behind its session check
-(observe/web.py), so nothing here handles authentication. Every string in a report came from a
-phone, so the pages write it with textContent only (static/pockethernet.js) and this module only
-hands it over as JSON. A report body dropped by retention is reported as `body: null` with the
-summary row still present.
+The v2 resources in api.py call these; the core mounts those behind its session check, so nothing
+here handles authentication. Every string in a report came from a phone, so the pages write it
+with textContent only (static/pockethernet.js) and this module only hands it over as JSON. A
+report body dropped by retention is reported as `body: null` with the summary row still present.
 
 A report is joined to the ports it produced through the port property rows that carry its
 report id. A jack is joined to its history through its `jack_label` property rows, which is how
@@ -16,13 +15,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
-
 from observe.storage import Conn
 
 from .derive import SOURCE
 
-MAX_LIMIT = 200
 _SUMMARY = ("source, report_id, revision, taken_at_ms, reported_taken_at_ms, clock_corrected, "
             "received_at, updated_at, revisions_seen, tester_serial, status, site, port_id, "
             "body_pruned_at")
@@ -48,17 +44,6 @@ def _verdict_of(db: Any, report_id: str) -> str | None:
         "SELECT value FROM port_properties WHERE source=? AND report_id=? AND name='cable_verdict' "
         "ORDER BY id DESC LIMIT 1", (SOURCE, report_id)).fetchone()
     return json.loads(row[0]) if row else None
-
-
-def _list(db: Conn, limit: int, offset: int) -> dict[str, Any]:
-    total = db.execute("SELECT COUNT(*) FROM field_reports").fetchone()[0]
-    rows = db.execute(
-        f"SELECT {_SUMMARY} FROM field_reports "
-        "ORDER BY updated_at DESC, source, report_id LIMIT ? OFFSET ?",
-        (limit, offset)).fetchall()
-    reports = [{**_summary(r), "ports": _ports_of(db, r[1]), "verdict": _verdict_of(db, r[1])}
-               for r in rows]
-    return {"total": total, "reports": reports}
 
 
 def _detail(db: Conn, source: str, report_id: str) -> dict[str, Any] | None:
@@ -100,31 +85,3 @@ def _jack(db: Conn, key: str) -> dict[str, Any] | None:
         "links": [{"port": b, "source": s, "confidence": c, "first_seen": f, "last_seen": ls,
                    "closed_at": cl} for b, s, c, f, ls, cl in links],
     }
-
-
-def build_pages_router() -> APIRouter:
-    router = APIRouter()
-
-    @router.get("/reports")
-    async def report_list(request: Request, limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        limit = max(1, min(limit, MAX_LIMIT))
-        return await request.app.state.plugin_store.storage.read(
-            lambda db: _list(db, limit, max(0, offset)))
-
-    @router.get("/report")
-    async def report_detail(request: Request, source: str, report_id: str) -> dict[str, Any]:
-        got = await request.app.state.plugin_store.storage.read(
-            lambda db: _detail(db, source[:128], report_id[:128]))
-        if got is None:
-            raise HTTPException(404, "unknown report")
-        return got
-
-    @router.get("/jack")
-    async def jack_detail(request: Request, key: str) -> dict[str, Any]:
-        got = await request.app.state.plugin_store.storage.read(
-            lambda db: _jack(db, key[:256]))
-        if got is None:
-            raise HTTPException(404, "unknown jack")
-        return got
-
-    return router

@@ -86,11 +86,11 @@ def test_pages_are_served_with_the_csp_and_hold_no_data(web):
 
 async def test_data_behind_every_page_needs_a_login(web):
     await web.seed()
-    r = web.client.get("/api/infra/dependencies")
-    assert r.status_code == 401 and "www-authenticate" not in r.headers
+    r = web.client.get("/api/v2/infra/dependencies")
+    assert r.status_code == 401
     for path in ("/api/v2/map", "/api/v2/ports/x/y", "/api/v2/ports", "/api/v2/findings"):
         assert web.client.get(path).status_code == 401, path
-    for path in ("/api/admin/infra/unlinked",):
+    for path in ("/api/v2/admin/infra/unlinked",):
         assert web.client.get(path).status_code == 401
     # Each page script sends a visitor without a session to the login page.
     for files in PAGES.values():
@@ -101,7 +101,7 @@ async def test_data_behind_every_page_needs_a_login(web):
     assert web.client.get("/api/v2/map").status_code == 200
     assert web.port()["port_key"] == "gi1/0/5"
     assert web.client.get(f"/api/v2/ports/{SID}/gi9").status_code == 404
-    assert web.client.get("/api/admin/infra/unlinked").status_code == 403
+    assert web.client.get("/api/v2/admin/infra/unlinked").status_code == 403
 
 
 def test_static_files_use_no_innerhtml_and_no_inline_script_or_style():
@@ -186,7 +186,7 @@ async def test_decisions_and_link_from_the_admin_page_need_admin_and_csrf(web):
                       ("/api/admin/infra/depends/accept", {"child": "a", "parent": "b"}),
                       ("/api/admin/infra/depends/reject", {"child": "a", "parent": "b"})):
         assert web.client.post(url, json=body).status_code == 403
-    assert unlinked in [r["switch_id"] for r in web.client.get("/api/admin/infra/unlinked").json()]
+    assert unlinked in [r["switch_id"] for r in web.client.get("/api/v2/admin/infra/unlinked").json()["items"]]
     assert web.client.post("/api/admin/infra/link",
                            json={"switch_id": unlinked, "monitor": "edge-sw"},
                            headers=csrf).status_code == 200

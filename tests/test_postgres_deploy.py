@@ -65,6 +65,14 @@ def test_the_workflow_runs_the_suite_on_sqlite_and_on_a_timescaledb_service_cont
     assert WORKFLOW["permissions"] == {"contents": "read"}
 
 
+def test_both_suite_runs_use_every_core_through_xdist():
+    for job in WORKFLOW["jobs"].values():
+        runs = [step["run"] for step in job["steps"] if "pytest" in step.get("run", "")]
+        assert runs and all(r.endswith("-n auto") for r in runs)
+    dev = (Path(__file__).parent.parent / "requirements-dev.txt").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^pytest-xdist==\d", dev)
+
+
 def test_the_workflow_runs_on_every_push_and_pull_request():
     triggers = WORKFLOW.get("on", WORKFLOW.get(True))
     assert "push" in triggers and "pull_request" in triggers

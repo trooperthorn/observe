@@ -741,8 +741,9 @@ reports.
 
 The address in every command, and the `OBSERVE_URL` in every script, is never taken from the
 request's Host header, which the sender controls. It is `server.public_url`, or the address an
-admin confirmed in the wizard and saved in `app_settings` (`GET` and `PUT /api/enrol/public-url`,
-admin, CSRF; the file wins and a `PUT` is then 409). `config.normalise_public_url` accepts only
+admin confirmed in the wizard and saved in `app_settings` (`PUT /api/enrol/public-url`,
+admin, CSRF; the file wins and a `PUT` is then 409; the host settings document shows the address
+and where it came from). `config.normalise_public_url` accepts only
 `http(s)://host[:port]` with no path or shell metacharacters and never a loopback or wildcard
 name. With no address, create, regenerate, reissue and the task commands answer 409 with
 `code: public_url_required` before a token is made or a key revoked, and the wizard asks once.
@@ -771,9 +772,9 @@ the hostwatch source archive to a temporary folder, runs its `deploy/windows/ins
 with `-IngestKey` as a SecureString (after its `uninstall.ps1` when the service already
 exists, which keeps the data folder), checks the service runs, and deletes the
 folder. `POST /api/enrol/step` (Bearer step key, valid two hours after the fetch) stores
-each step report, which `GET /api/hosts/{name}/enrolment` returns as `install`.
+each step report, which `GET /api/v2/hosts/{name}/enrolment` returns as `install`.
 
-`GET /api/hosts/{name}/enrolment` (admin session) returns the state machine:
+`GET /api/v2/hosts/{name}/enrolment` (admin session) returns the state machine:
 steps `script` (fetched), `data` (first batch, which is the `hosts` row),
 `control` (the `wpc` key's first authenticated pull, from its last-use time)
 and `ready`, each `done`, `waiting`, `skipped` or `expired`, with the time.
@@ -812,7 +813,7 @@ choices, never the token or a key. The audit redactor also recognises `wpc_`,
 back the host settings page (`GET /hosts/{name}/settings`, the static `host-settings.html`,
 `host-settings.js`, `js/settings-logic.js` and `css/settings.css`, admin only like the wizard).
 
-- **Reading.** `GET /api/hosts/{name}/settings` (admin session) returns the identity, the saved
+- **Reading.** `GET /api/v2/hosts/{name}/settings` (admin session) returns the identity, the saved
   allowlist, `allowlist_status`, which of the update and cleanup commands the platform has, the
   number of active keys and the newest task with its state and step reports. It never returns a
   token or a key. A host that was not added through the console is readable (`enrolled: false`)
@@ -987,7 +988,8 @@ every 10 seconds, and the enrolment and host settings pages while a command is b
 refresh that fails throws after it writes "observe unreachable, retrying", so the poller backs off. The
 shell reads `/api/v2/session` and `/api/v2/plugins`. The legacy `GET /api/session`, `GET
 /api/admin/users`, `GET /api/admin/keys`, the `GET` of the tiers, retention and re-check settings and
-the control plugin's `GET /commands` and `/capabilities` were removed with no adapter.
+the control plugin's `GET /commands` and `/capabilities` were removed with no adapter, and so were the
+reads listed below.
 
 The admin settings pages share `js/settings-page.js` (sign in, require an admin, read the document from
 `/api/v2/admin/settings/<name>`, draw it, save the whole form with the page's `PUT`, draw the response)
@@ -1003,12 +1005,30 @@ next read and not after `server.api_auth_cache_s`. A session that the v2 read fi
 marked revoked (`auth.revoke_dead_session`), as the older routes always did, so it stays dead if the
 clock moves back. A cookie that names no session writes nothing.
 
-Not moved: the UniFi and Pockethernet pages still read `/api/plugins/unifi/*` and
-`/api/plugins/pockethernet/*`, because those routes carry derived fields (stale flags, totals, last
-update) that the v2 resources do not, and the Pockethernet pages page by offset; the host settings,
-enrolment and map admin pages read `/api/hosts/*`, `/api/infra/dependencies` and
-`/api/admin/infra/unlinked`, which have no v2 resource yet. They use the same client for the session,
-the CSRF header and the poller.
+The UniFi and Pockethernet pages read `/api/v2/unifi/*` and `/api/v2/pockethernet/*` through the same
+client, and the host settings, enrolment and map admin pages read their documents from
+`/api/v2/hosts/{name}/settings`, `/api/v2/hosts/{name}/enrolment`, `/api/v2/infra/dependencies` and
+`/api/v2/admin/infra/unlinked` (`observe/api/console.py`). Those four are served by the services
+that `observe/web.py` already built (the enrolment store, the dependency mapper, the switch matcher),
+which it hands to the API as `runtime.console` and `runtime.infra`, so the logic has one
+implementation. They send no ETag, because an enrolment moves with a script fetch or a first report
+and no change domain counts that. The legacy routes `GET /api/hosts/{name}/settings`, `GET
+/api/hosts/{name}/enrolment`, `GET /api/enrol/public-url`, `GET /api/infra/dependencies`, `GET
+/api/admin/infra/unlinked` and the plugin page routes `/api/plugins/unifi/{devices,clients,protect}`
+and `/api/plugins/pockethernet/{reports,report,jack}` were removed with no adapter. What stays on the
+old paths is every change (a `POST`, `PUT` or `DELETE`), because v2 has no write routes for them yet,
+and the control plugin's request and cancel routes, whose answers the page shows as text. A test
+(`tests/test_ui_v2_client.py`) fails when any script reads from a path that is not `/api/v2`.
+
+The UniFi status resource, `GET /api/v2/unifi/status`, replaces the stale flags and notes the old page
+routes computed. It returns the server clock, the time of the last good devices poll and whether that
+is older than twice the interval, the windows after which a connected client or a camera that was not
+refreshed is stale, whether Protect and the classic account are set up and the classic note. The page
+marks the rows stale itself (`markClientsStale` and `markCamerasStale` in `vlist-core.js`) against
+the server clock, so a browser with a wrong clock shows the same state as another. It sends no ETag,
+because it depends on the clock. The lists are read with `getAll`, so the old 5,000 row cap and the
+`truncated` note are gone. The Pockethernet list pages by cursor (newest first, an Older link) instead
+of by offset, so it no longer shows a total.
 
 ## Plugin host
 
@@ -1044,7 +1064,9 @@ Monitor type names must start with the plugin name and a dot, and key scope
 markers are three to eight lower-case letters that may not be `wpi`.
 
 The core mounts every plugin router under `/api/plugins/<name>/` and chooses
-the dependencies itself (`create_app` in `observe/web.py`):
+the dependencies itself (`create_app` in `observe/web.py`). A plugin reads through
+`register_api` (resources under `/api/v2/<name>`, which get the v2 sign-in, role check, rate limit and
+ETag); its routers are for changes and for routes that take a key of the plugin's own scope:
 
 1. a per-peer rate limit (`server.plugin_rate_per_minute`, default 300). A route
    that takes a plugin key counts valid keys per key and per peer, and failed or
@@ -1144,9 +1166,11 @@ replays each report through `derive_report` in `updated_at` order. Plugin schema
 
 ### Pockethernet pages
 
-`pages.py` builds one plugin router with three read-only routes, `GET /reports`, `/report` and
-`/jack`, which the core mounts under `/api/plugins/pockethernet/` behind the session check and
-the rate limit. They read `field_reports`, `port_properties` and `infra_jacks` through the
+`pages.py` holds the queries (the report summary, the report with its body and ports, the jack with its
+history, links and reports), and `api.py` serves them as the v2 resources `GET /api/v2/pockethernet/reports`,
+`/reports/{source}/{report_id}` and `/jacks/{key}` behind the core's session check and rate limit. The old
+plugin router with `GET /reports`, `/report` and `/jack` under `/api/plugins/pockethernet/` was removed.
+They read `field_reports`, `port_properties` and `infra_jacks` through the
 store's lock and return JSON, never markup. A report is joined to its ports through the
 property rows that carry its report id, and a jack to its history through its `jack_label`
 rows. The plugin's `pages()` hook registers three static files from `pages/` at
@@ -1264,7 +1288,7 @@ index. Nothing creates a monitor. Switches with no match form the unlinked queue
 An unknown live value never produces a finding. The kinds are `speed_above_live`,
 `vlan_mismatch`, `poe_no_power` (all warnings) and `repatched` (info, from a jack label that
 moved to another port). `observe/infra_changes.py` adds the field change kinds `speed_drop`, `cable_fault`, `length_change`, `poe_drop`, `dhcp_fail` and `verdict_worse` (warnings) and `vlan_change` (info). `Matcher.findings` reads the newest two rows of each tracked property in one window query and passes them to the pure function `port_changes`, so a change needs two history rows and clears when the value is restored. Findings are not stored and never reach the alerter. Routes:
-`GET /api/admin/infra/unlinked` (admin session), `POST /api/admin/infra/link` (admin session and
+`GET /api/v2/admin/infra/unlinked` (admin session), `POST /api/admin/infra/link` (admin session and
 CSRF token) and `GET /api/v2/findings` (session).
 
 `observe/infra_map.py` (`MapService`) builds the map and the effective dependency set.
@@ -1278,13 +1302,13 @@ refuses any edge that would close a cycle with the YAML plus the edges applied s
 `refresh` hands the applied edges to `Config.set_applied_dependencies`; `Config.parents` then
 returns the YAML parents plus those edges, so `Rollup` and the scheduler need no change. The
 web layer registers `MapService.tick` (`refresh`, then `rebuild`) as a scheduler hook that runs
-once a minute; `GET /api/infra/dependencies` still computes the plan on request, and
+once a minute; `GET /api/v2/infra/dependencies` still computes the plan on request, and
 `GET /api/v2/map` never rebuilds anything. `map_data` reads `map_nodes` and `map_edges` in
 two statements (it took 259 per request before) and applies the `site` and `building` filter
 and the `anchor` flag in memory, so its cost does not depend on the number of ports.
 `rebuild` computes each port's matches once per pass instead of once per port per request.
 `decide` records an admin decision and audits it. Routes:
-`GET /api/v2/map` and `GET /api/infra/dependencies` (session), and
+`GET /api/v2/map` and `GET /api/v2/infra/dependencies` (session), and
 `POST /api/admin/infra/depends/accept` and `/reject` (admin session and CSRF token).
 
 Map pages. `observe/infra_port.py` (`PortPages`) builds `GET /api/v2/ports/{switch_id}/{port}`
@@ -1411,10 +1435,10 @@ its own backoff, so a rejected Protect key does not pause the network collectors
 stored only when it is a boolean, because `recordingSettings.mode` on other firmwares is unverified.
 
 `pages.py` and `pages/unifi.html` with `static/unifi.js`, `vlist-core.js` and `unifi.css` are the UniFi
-page, mounted by the plugin host at `/plugins/unifi` with the nav entry UniFi under Network. The routes
-`/api/plugins/unifi/devices`, `/clients` and `/protect` need a login session. `/devices` also
-returns `last_update` (the last good devices poll, or the newest stored `last_seen` after a restart)
-and `stale`, true when that is older than twice `interval`; the Devices tab shows both. The Clients table is
+page, mounted by the plugin host at `/plugins/unifi` with the nav entry UniFi under Network. The page reads
+`/api/v2/unifi/status`, `/devices`, `/clients` and `/cameras` (the core's session check applies). The status
+carries `devices_updated` (the last good devices poll, or the newest stored `last_seen` after a restart)
+and `devices_stale`, true when that is older than twice `interval`; the Devices tab shows both. The Clients table is
 windowed: rows are one fixed height, only the rows in view and a margin are drawn, and spacer rows
 set through a `height` attribute stand for the rest, because the static guard forbids inline styles.
 `vlist-core.js` holds the pure window and filter rules, tested by `tests/js/unifi.test.mjs`. Every

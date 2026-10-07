@@ -83,7 +83,7 @@ def test_viewer_is_refused_every_admin_api_the_pages_use(env):
                  "/api/v2/admin/config", "/api/v2/admin/settings/tiers",
                  "/api/v2/admin/settings/storage", "/api/v2/admin/settings/retention",
                  "/api/v2/admin/settings/recheck", "/api/v2/admin/settings/rules",
-                 "/api/admin/infra/unlinked"):
+                 "/api/v2/admin/infra/unlinked"):
         assert env.client.get(path).status_code == 403, path
     # The pages are static, so a viewer who opens them gets the "admin account needed" card.
     for rel in ("admin.js", "audit.js", "infra-admin.js"):

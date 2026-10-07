@@ -158,13 +158,13 @@ def test_duplicates_are_refused(env):
 
 
 def test_admin_only_and_basic_auth_refused(env):
-    for method, path in [("POST", "/api/hosts"), ("GET", "/api/hosts/nas01/enrolment")]:
+    for method, path in [("POST", "/api/hosts"), ("GET", "/api/v2/hosts/nas01/enrolment")]:
         assert env.client.request(method, path).status_code == 401
         assert env.client.request(method, path, headers=BASIC).status_code == 401
     env.user("bob")
     bob = env.csrf(env.login("bob"))
     assert env.client.post("/api/hosts", json=GOOD, headers=bob).status_code == 403
-    assert env.client.get("/api/hosts/nas01/enrolment").status_code == 403
+    assert env.client.get("/api/v2/hosts/nas01/enrolment").status_code == 403
     assert env.rows("SELECT COUNT(*) FROM enrolments") == [(0,)]
 
 
@@ -179,9 +179,9 @@ def test_create_needs_csrf(env):
 def test_enrolment_route_is_not_shadowed_by_the_host_page_route(env):
     hdr = admin(env)
     create(env, hdr)
-    r = env.client.get("/api/hosts/nas01/enrolment")
+    r = env.client.get("/api/v2/hosts/nas01/enrolment")
     assert r.status_code == 200 and r.json()["host"] == "nas01"
-    assert env.client.get("/api/hosts/ghost/enrolment").status_code == 404
+    assert env.client.get("/api/v2/hosts/ghost/enrolment").status_code == 404
 
 
 def test_token_is_single_use_and_mints_bound_keys(env):
@@ -224,7 +224,7 @@ def test_progress_follows_fake_ingest_and_control_pull(env):
     token = token_of(create(env, hdr))
 
     def steps():
-        r = env.client.get("/api/hosts/nas01/enrolment").json()
+        r = env.client.get("/api/v2/hosts/nas01/enrolment").json()
         return r["state"], {s["id"]: s["status"] for s in r["steps"]}
 
     assert steps() == ("waiting", {"script": "waiting", "data": "waiting",
@@ -237,7 +237,7 @@ def test_progress_follows_fake_ingest_and_control_pull(env):
     assert asyncio.run(verify_key(env.store, got.control_key, "nas01", scope="wpc"))
     state, st = steps()
     assert state == "ready" and set(st.values()) == {"done"}
-    final = env.client.get("/api/hosts/nas01/enrolment").json()
+    final = env.client.get("/api/v2/hosts/nas01/enrolment").json()
     assert final["ready"] is True and final["expired"] is False
     assert all(s["at"] is not None for s in final["steps"])
 
@@ -247,7 +247,7 @@ def test_progress_for_agent_only_skips_control(env):
     token = token_of(create(env, hdr, control=False, allowlist=None))
     got = redeem(env, token)
     ingest_for(env, "nas01", got.agent_key)
-    r = env.client.get("/api/hosts/nas01/enrolment").json()
+    r = env.client.get("/api/v2/hosts/nas01/enrolment").json()
     assert r["state"] == "ready"
     assert {s["id"]: s["status"] for s in r["steps"]}["control"] == "skipped"
 
@@ -256,7 +256,7 @@ def test_control_pull_before_data_reports_control_pulled(env):
     hdr = admin(env)
     got = redeem(env, token_of(create(env, hdr)))
     asyncio.run(verify_key(env.store, got.control_key, "nas01", scope="wpc"))
-    assert env.client.get("/api/hosts/nas01/enrolment").json()["state"] == "control_pulled"
+    assert env.client.get("/api/v2/hosts/nas01/enrolment").json()["state"] == "control_pulled"
 
 
 def test_expiry_is_reported_and_audited_once(env):
@@ -264,7 +264,7 @@ def test_expiry_is_reported_and_audited_once(env):
     create(env, hdr)
     env.clock.now += 1800
     for _ in range(3):
-        r = env.client.get("/api/hosts/nas01/enrolment").json()
+        r = env.client.get("/api/v2/hosts/nas01/enrolment").json()
         assert r["state"] == "expired" and r["expired"] is True and r["ready"] is False
         assert r["steps"][0]["status"] == "expired"
     assert audit_kinds(env).count("enrol_expired") == 1
@@ -275,7 +275,7 @@ def test_a_fetched_enrolment_never_reports_expired(env):
     redeem(env, token_of(create(env, hdr)))
     env.clock.now += 5000
     env.login("root")  # the idle session timed out; the enrolment has not changed
-    r = env.client.get("/api/hosts/nas01/enrolment").json()
+    r = env.client.get("/api/v2/hosts/nas01/enrolment").json()
     assert r["state"] == "script_fetched" and r["expired"] is False
     assert "enrol_expired" not in audit_kinds(env)
 
@@ -302,9 +302,9 @@ def test_token_and_keys_never_reach_logs_or_audit(env, caplog):
     got = redeem(env, token)
     redeem(env, token)
     ingest_for(env, "nas01", got.agent_key)
-    progress = env.client.get("/api/hosts/nas01/enrolment")
+    progress = env.client.get("/api/v2/hosts/nas01/enrolment")
     env.clock.now += 1800
-    env.client.get("/api/hosts/nas01/enrolment")
+    env.client.get("/api/v2/hosts/nas01/enrolment")
     audit_dump = " ".join(str(x) for row in env.rows("SELECT * FROM audit") for x in row)
     enrol_dump = repr(env.rows("SELECT * FROM enrolments"))
     secrets_ = [token, secret, got.agent_key, got.agent_key.split("_", 2)[2],

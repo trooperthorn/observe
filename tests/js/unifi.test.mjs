@@ -3,7 +3,7 @@
 // same cases through node when it is installed.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { windowFor, filterClients, attachment, clientState } from "../../plugins/unifi/observe_unifi/static/vlist-core.js";
+import { windowFor, filterClients, attachment, clientState, markClientsStale, markCamerasStale } from "../../plugins/unifi/observe_unifi/static/vlist-core.js";
 
 const rows = Array.from({ length: 500 }, (_, i) => ({
   name: `c${i}`, mac: `m${i}`, ip: "", ssid: "", uplink_name: i % 2 ? "AP" : "SW",
@@ -29,4 +29,29 @@ test("a client with no state is unknown and attachment names the port", () => {
   assert.equal(clientState({ connected: null }), "unknown");
   assert.equal(attachment(rows[0]), "SW port 3");
   assert.equal(attachment(rows[1]), "AP");
+});
+
+test("a connected client not refreshed within the window is stale, judged by the server clock", () => {
+  const now = "2026-10-07T12:00:00.000Z";
+  const fresh = { connected: true, last_seen: "2026-10-07T11:50:00.000Z" };
+  const old = { connected: true, last_seen: "2026-10-07T11:40:00.000Z" };
+  const off = { connected: false, last_seen: "2026-10-07T01:00:00.000Z" };
+  const unknown = { connected: null, last_seen: "2026-10-07T01:00:00.000Z" };
+  const got = markClientsStale([fresh, old, off, unknown], now, 750);
+  assert.deepEqual(got.map((c) => c.stale), [false, true, false, false]);
+  assert.equal(clientState(got[1]), "stale");
+  assert.equal(markClientsStale([old], now, null)[0].stale, false);
+  assert.equal(markClientsStale([{ connected: true, last_seen: "bad" }], now, 750)[0].stale, false);
+  assert.equal(markClientsStale([fresh], Date.parse(now) / 1000 + 600, 750)[0].stale, true);  // unix seconds work too
+});
+
+test("a camera is stale when it is connected or recording and not refreshed in time", () => {
+  const now = "2026-10-07T12:00:00.000Z";
+  const old = "2026-10-07T11:00:00.000Z";
+  const got = markCamerasStale([
+    { connected: true, recording: null, last_seen: old },
+    { connected: null, recording: true, last_seen: old },
+    { connected: false, recording: false, last_seen: old },
+    { connected: true, recording: true, last_seen: "2026-10-07T11:59:00.000Z" }], now, 300);
+  assert.deepEqual(got.map((c) => c.stale), [true, true, false, false]);
 });

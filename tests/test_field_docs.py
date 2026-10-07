@@ -32,7 +32,7 @@ DOCS = {name: (ROOT / name).read_text(encoding="utf-8")
         for name in ("README.md", "THREAT-MODEL.md", "docs/ARCHITECTURE.md",
                      "docs/FIELD-DATA.md")}
 ROUTES = ("/plugins/pockethernet", "/plugins/pockethernet/report", "/plugins/pockethernet/jack",
-          "/api/plugins/pockethernet/reports")
+          "/api/v2/pockethernet/reports")
 OWNED = [ROOT / "observe" / "infra_changes.py", PLUGIN / "pages.py",
          PLUGIN / "static" / "pockethernet.js", *sorted((PLUGIN / "pages").glob("*.html"))]
 

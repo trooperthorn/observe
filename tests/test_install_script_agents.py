@@ -340,5 +340,5 @@ def test_progress_steps_from_the_new_scripts_are_accepted(env):
                             headers={"Authorization": f"Bearer {step}"})
         assert r.status_code in (200, 204), (name, r.text)
     got = {i["step"]: i["status"]
-           for i in env.client.get("/api/hosts/tn01/enrolment", headers=hdr).json()["install"]}
+           for i in env.client.get("/api/v2/hosts/tn01/enrolment", headers=hdr).json()["install"]}
     assert got == {"pool": "ok", "compose": "ok", "app": "skipped", "download": "ok"}

@@ -43,7 +43,7 @@ def guard(env, token, step="hostname", found="ai-pi"):
 
 
 def progress(env, host="nas01"):
-    return env.client.get(f"/api/hosts/{host}/enrolment").json()
+    return env.client.get(f"/api/v2/hosts/{host}/enrolment").json()
 
 
 # ------------------------------------------------------------------ 1. fetch is not redeem
@@ -85,10 +85,10 @@ def test_a_running_install_is_not_offered_regenerate_until_it_stalls(env):
 def test_the_settings_page_data_shows_the_refusal_and_the_command_state(env):
     hdr = admin(env)
     token = token_of(create(env, hdr))
-    before = env.client.get("/api/hosts/nas01/settings").json()["enrolment"]
+    before = env.client.get("/api/v2/hosts/nas01/settings").json()["enrolment"]
     assert before["token_state"] == "valid" and before["guard"] is None
     guard(env, token, step="observe_host", found="")
-    got = env.client.get("/api/hosts/nas01/settings").json()["enrolment"]
+    got = env.client.get("/api/v2/hosts/nas01/settings").json()["enrolment"]
     assert got["guard"]["step"] == "observe_host"
     assert "Observe host" in got["guard"]["reason"] and "nas01" in got["guard"]["reason"]
     assert got["token_state"] == "valid"
@@ -239,7 +239,6 @@ def test_a_missing_address_is_asked_for_and_costs_no_token(bare):
     assert r.status_code == 409 and r.json()["code"] == "public_url_required"
     assert "address" in r.json()["detail"]
     assert bare.rows("SELECT COUNT(*) FROM enrolments") == [(0,)]
-    assert bare.client.get("/api/enrol/public-url").json() == {"url": "", "source": ""}
 
 
 def test_the_admin_confirms_the_address_once_and_commands_use_it(bare):
@@ -251,9 +250,10 @@ def test_the_admin_confirms_the_address_once_and_commands_use_it(bare):
                             headers={**hdr, "Host": "evil.example"})
     assert saved.status_code == 200 and saved.json() == {"url": "https://observe.lab:8443",
                                                          "source": "saved"}
-    assert bare.client.get("/api/enrol/public-url").json()["source"] == "saved"
     made = bare.client.post("/api/hosts", json=body, headers={**hdr, "Host": "evil.example"})
     assert made.status_code == 200
+    seen = bare.client.get("/api/v2/hosts/nas01/settings").json()
+    assert seen["public_url"] == {"url": "https://observe.lab:8443", "source": "saved"}
     assert made.json()["command"].splitlines()[1].startswith(
         "curl -fsSL 'https://observe.lab:8443/i/wpe_")
     assert "enrol_public_url_set" in audit_kinds(bare)
@@ -288,7 +288,8 @@ def test_the_address_route_is_admin_only_and_needs_csrf(bare):
     bare.user("bob")
     bob = bare.csrf(bare.login("bob"))
     assert bare.client.put(url, json={"url": "https://observe.lab"}, headers=bob).status_code == 403
-    assert bare.client.get(url).status_code == 403
+    assert bare.client.get(url).status_code == 405  # the address is read from the host settings
+    assert bare.client.get("/api/v2/hosts/nas01/settings").status_code == 403
     assert bare.rows("SELECT COUNT(*) FROM app_settings") == [(0,)]
 
 
@@ -296,12 +297,12 @@ def test_a_configured_address_wins_and_cannot_be_changed_in_the_console(tmp_path
     e = Env(tmp_path, public_url="https://observe.example.org")
     try:
         hdr = admin(e)
-        assert e.client.get("/api/enrol/public-url").json() == {
-            "url": "https://observe.example.org", "source": "config"}
         r = e.client.put("/api/enrol/public-url", json={"url": "https://other.lab"}, headers=hdr)
         assert r.status_code == 409 and "server.public_url" in r.json()["detail"]
         made = create(e, hdr)
         assert "https://observe.example.org/i/wpe_" in made.json()["command"]
+        assert e.client.get("/api/v2/hosts/nas01/settings").json()["public_url"] == {
+            "url": "https://observe.example.org", "source": "config"}
     finally:
         e.client.close()
         e.store.close()
@@ -359,13 +360,13 @@ def test_progress_names_the_command_state_valid_used_or_expired(env):
     asyncio.run(env.store.execute("UPDATE enrolments SET expires_at=?", (env.clock() - 1,)))
     expired = progress(env)
     assert expired["token_state"] == "expired" and expired["expired"] is True
-    assert env.client.get("/api/hosts/nas01/settings").json()["enrolment"]["token_state"] == "expired"
+    assert env.client.get("/api/v2/hosts/nas01/settings").json()["enrolment"]["token_state"] == "expired"
     made = env.client.post("/api/hosts/nas01/enrolment/regenerate", json={}, headers=hdr)
     assert made.status_code == 200 and progress(env)["token_state"] == "valid"
     run_install(env, token_of(made))
     used = progress(env)
     assert used["token_state"] == "used" and not used["expired"]
-    assert env.client.get("/api/hosts/nas01/settings").json()["enrolment"]["token_state"] == "used"
+    assert env.client.get("/api/v2/hosts/nas01/settings").json()["enrolment"]["token_state"] == "used"
     # Used: Regenerate is the reissue route, which revokes the keys the old command made.
     again = env.client.post("/api/hosts/nas01/enrolment/reissue", json={"confirmed": True},
                             headers=hdr)

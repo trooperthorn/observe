@@ -585,11 +585,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         scheduler.hooks.append(prune_plugins)
         scheduler.add_collectors(plugins)
 
-    @app.get("/api/infra/dependencies", include_in_schema=False)
-    async def infra_dependencies(_: authmod.Session = Depends(guards.session)) -> dict[str, Any]:
-        """Applied, pending, refused and rejected dependency edges, computed now."""
-        return (await mapper.refresh()).as_dict()
-
     async def decide_dependency(request: Request, sess: authmod.Session,
                                 decision: str) -> Response:
         try:
@@ -616,12 +611,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     async def admin_depends_reject(
             request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
         return await decide_dependency(request, sess, "rejected")
-
-    @app.get("/api/admin/infra/unlinked", include_in_schema=False)
-    async def admin_infra_unlinked(
-            _: authmod.Session = Depends(guards.admin)) -> list[dict[str, Any]]:
-        """Switches seen in the field that match no monitor, waiting for an admin to link."""
-        return await matcher.unlinked()
 
     @app.post("/api/admin/infra/link", include_in_schema=False)
     async def admin_infra_link(
@@ -711,14 +700,6 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
 
     URL_NEEDED = {"detail": "Observe does not know the address hosts should use to reach it. "
                             "Confirm it, then try again.", "code": "public_url_required"}
-
-    @app.get("/api/enrol/public-url", include_in_schema=False)
-    async def get_public_url(_: authmod.Session = Depends(guards.admin)) -> dict[str, Any]:
-        """The Observe address install commands use and where it came from: "config" (set in the
-        file, so it cannot be changed here), "saved" (confirmed in the wizard) or "" (not set).
-        Admin session."""
-        url, source = await enrol.get_public_url(store, config.server.public_url)
-        return {"url": url, "source": source}
 
     @app.put("/api/enrol/public-url", include_in_schema=False)
     async def put_public_url(
@@ -877,21 +858,18 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             "expires_at": now + enrol.TOKEN_TTL_S, "ttl_s": enrol.TOKEN_TTL_S,
             "command": enrol.command_text(spec.name, spec.platform, base, token, pool)})
 
-    @app.get("/api/hosts/{host}/enrolment", include_in_schema=False)
-    async def host_enrolment(host: str, request: Request,
-                             sess: authmod.Session = Depends(guards.admin)) -> Response:
+    async def enrolment_state(host: str, actor: str, remote: str) -> dict[str, Any] | None:
         """Progress of one enrolment: script fetched, first data, control first pull, ready, or
-        expired. Admin session. It never returns the token or a key."""
+        expired, or None when the host has no enrolment. It never returns the token or a key.
+        The first read that sees an expiry audits it once."""
         now = auth_clock()
         state = await enrol.progress(store, host, now)
-        if state is None:
-            raise HTTPException(404, "no enrolment for this host")
-        if state["expired"] and await enrol.claim_expiry_audit(store, host, now):
-            await audit.record(store, "enrol_expired", actor=sess.username, method="GET",
-                               path=f"/api/hosts/{host[:64]}/enrolment", status=200,
-                               remote=request.client.host if request.client else "",
-                               detail={"host": host[:MAX_NAME]})
-        return JSONResponse(state)
+        if state is not None and state["expired"] and await enrol.claim_expiry_audit(
+                store, host, now):
+            await audit.record(store, "enrol_expired", actor=actor, method="GET",
+                               path=f"/api/v2/hosts/{host[:64]}/enrolment", status=200,
+                               remote=remote, detail={"host": host[:MAX_NAME]})
+        return state
 
     @app.post("/api/hosts/{host}/enrolment/regenerate", include_in_schema=False)
     async def regenerate_enrolment(
@@ -1142,11 +1120,10 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         # The page holds no data; host-settings.js needs an admin session for everything it does.
         return FileResponse(STATIC / "host-settings.html")
 
-    @app.get("/api/hosts/{host}/settings", include_in_schema=False)
-    async def host_settings(host: str, _: authmod.Session = Depends(guards.admin)) -> Response:
+    async def host_settings_doc(host: str) -> dict[str, Any] | None:
         """What the settings page shows for one host: identity, the saved allowlist, whether the
-        host has picked it up, and the newest update or cleanup task. Admin session. It never
-        returns a token or a key."""
+        host has picked it up, and the newest update or cleanup task, or None for a host nobody
+        knows. It never returns a token or a key."""
         now = auth_clock()
         row = await enrolment_row(host)
         reporting = {r["host"]: r for r in await store.host_rows()}.get(host)
@@ -1154,7 +1131,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             "SELECT COUNT(*) FROM ingest_keys WHERE host=? AND scope IN ('wpi', 'wpc') "
             "AND revoked_at IS NULL", (host,))
         if row is None and reporting is None and host not in pushed and not keys[0][0]:
-            raise HTTPException(404, "unknown host")
+            return None
         out: dict[str, Any] = {
             "host": host, "enrolled": row is not None, "in_config": host in pushed,
             "reporting": reporting is not None, "active_keys": keys[0][0],
@@ -1186,10 +1163,12 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             if task is not None and task["state"] == "expired" \
                     and await hosttasks.claim_expiry_audit(store, task["id"], now):
                 await audit.record(store, "host_task_expired", method="GET",
-                                   path="/api/hosts/[host]/settings", status=200,
+                                   path="/api/v2/hosts/[host]/settings", status=200,
                                    detail={"host": host[:MAX_NAME], "kind": task["kind"]})
             out["task"] = task
-        return JSONResponse(out)
+        return out
+
+    runtime.console = SimpleNamespace(enrolment=enrolment_state, host_settings=host_settings_doc)
 
     @app.put("/api/hosts/{host}/allowlist", include_in_schema=False)
     async def save_allowlist(

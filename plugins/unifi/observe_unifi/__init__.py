@@ -34,7 +34,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from observe.plugins import (Collector, Migration, NavEntry, PluginBase, PluginError,
-                             PluginPage, PluginRouter)
+                             PluginPage)
 from observe.store import Store
 
 from .classic import (ClassicClient, ClassicForbidden, parse_devices, parse_offline_clients,
@@ -44,7 +44,7 @@ from .clients import (device_index, enrich, offline_clients, parse_active_client
 from .feed import feed_classic, feed_integration
 from .api import register as register_resources
 from .client import AuthRejected, IntegrationClient, UniFiError
-from .pages import PAGE_PATH, build_pages_router, page_files
+from .pages import PAGE_PATH, page_files
 from .records import MIGRATIONS, parse_device, prune_unseen
 
 __version__ = "0.1.0"
@@ -187,10 +187,7 @@ class UniFiPlugin(PluginBase):
 
     def register_api(self, api: Any) -> None:
         """The /api/v2/unifi resources (docs/DATA-API-DESIGN.md section 4.10)."""
-        register_resources(api)
-
-    def routers(self) -> list[PluginRouter]:
-        return [PluginRouter(build_pages_router(self))]  # a login session, enforced by the core
+        register_resources(api, self)
 
     def pages(self) -> list[PluginPage]:
         return page_files()

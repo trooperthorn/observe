@@ -36,3 +36,28 @@ export function attachment(c) {
   if (!where) return "";
   return Number.isInteger(c.sw_port) ? `${where} port ${c.sw_port}` : where;
 }
+
+// A time from the API is an RFC 3339 string; a number is taken as unix seconds.
+function toSeconds(v) {
+  if (typeof v === "number") return v;
+  const t = typeof v === "string" ? Date.parse(v) : NaN;
+  return Number.isNaN(t) ? null : t / 1000;
+}
+
+// A row is stale when it says it is up but was not refreshed within `after` seconds of `now`
+// (the server clock from /unifi/status, so the browser clock does not matter). A missing time or
+// window never makes a row stale.
+function isStale(up, seenAt, now, after) {
+  const seen = toSeconds(seenAt);
+  const at = toSeconds(now);
+  return up && seen !== null && at !== null && typeof after === "number" && at - seen > after;
+}
+
+export function markClientsStale(rows, now, after) {
+  return rows.map((c) => ({ ...c, stale: isStale(c.connected === true, c.last_seen, now, after) }));
+}
+
+export function markCamerasStale(rows, now, after) {
+  return rows.map((c) => ({ ...c,
+    stale: isStale(c.connected === true || c.recording === true, c.last_seen, now, after) }));
+}

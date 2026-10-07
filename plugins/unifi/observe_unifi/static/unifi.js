@@ -1,24 +1,18 @@
 // The UniFi page: Devices, Clients and Protect tabs. Every string came from the console or from a
 // client on the network, so it is written with textContent only, never as markup. Helpers come
 // from the shared console modules.
-import { el, whoami, when } from "/static/infra-common.js";
+import { el, get, getAll, whoami, when } from "/static/infra-common.js";
+import { seconds } from "/static/js/api.js";
 import { statusChip, monoTag } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
-import { attachment, clientState, filterClients, windowFor } from "/plugins/unifi/static/vlist-core.js";
+import { attachment, clientState, filterClients, markCamerasStale, markClientsStale, windowFor } from "/plugins/unifi/static/vlist-core.js";
 
 const page = document.getElementById("page");
 const footer = document.getElementById("footer");
-const API = "/api/plugins/unifi";
+const API = "/api/v2/unifi";
 const TABS = [["devices", "Devices"], ["clients", "Clients"], ["protect", "Protect"]];
 const DEVICE_STATES = { ONLINE: ["up", "Online"], OFFLINE: ["down", "Offline"],
   UPDATING: ["warn", "Updating"], PENDING_ADOPTION: ["pending", "Pending adoption"] };
-
-async function get(path) {
-  const r = await fetch(`${API}${path}`);
-  if (r.status === 401) { location.assign("/login"); throw new Error("not signed in"); }
-  if (!r.ok) throw new Error(`request failed (${r.status})`);
-  return r.json();
-}
 
 function kpi(value, label) {
   const k = el("div", "kpi");
@@ -178,7 +172,6 @@ function clientsView(d) {
   state.addEventListener("change", refilter);
 
   const notes = [];
-  if (d.truncated) notes.push(note(`Showing the first ${all.length} of ${d.total} clients.`));
   if (d.classic_configured && d.classic_note) notes.push(note(d.classic_note));
   if (!d.classic_configured) notes.push(note("Offline clients, switch ports and Wi-Fi names need the optional classic controller account."));
   frag.append(section("Clients", filters, scroll, empty, ...notes));
@@ -222,7 +215,25 @@ function protectView(d) {
 
 // ---- shell ----
 
-const LOADERS = { devices: ["/devices", devicesView], clients: ["/clients", clientsView], protect: ["/protect", protectView] };
+// Each tab reads the status (the clock and the stale windows) and its list, then hands its view
+// the shape it draws.
+const LOADERS = {
+  devices: async () => {
+    const [status, devices] = await Promise.all([get(`${API}/status`), getAll(`${API}/devices`)]);
+    return devicesView({ devices, stale: status.devices_stale, last_update: seconds(status.devices_updated) });
+  },
+  clients: async () => {
+    const [status, clients] = await Promise.all([get(`${API}/status`), getAll(`${API}/clients`)]);
+    return clientsView({ clients: markClientsStale(clients, status.now, status.clients_stale_after),
+      classic_configured: status.classic_configured, classic_note: status.classic_note });
+  },
+  protect: async () => {
+    const status = await get(`${API}/status`);
+    const cameras = status.protect_enabled ? await getAll(`${API}/cameras`) : [];
+    return protectView({ enabled: status.protect_enabled,
+      cameras: markCamerasStale(cameras, status.now, status.protect_stale_after) });
+  },
+};
 
 function tabFromHash() {
   const h = location.hash.replace("#", "");
@@ -246,11 +257,10 @@ async function show(tab) {
   panel.setAttribute("role", "tabpanel");
   frag.append(crumbs, el("h1", null, "UniFi"), tabs, panel);
   page.replaceChildren(frag);
-  const [path, view] = LOADERS[tab];
   try {
-    panel.append(view(await get(path)));
+    panel.append(await LOADERS[tab]());
   } catch (err) {
-    panel.append(el("p", "empty muted", err.message === "not signed in" ? "Signing in." : "The UniFi data could not be loaded."));
+    panel.append(el("p", "empty muted", err.status === 401 ? "Signing in." : "The UniFi data could not be loaded."));
   }
 }
 

@@ -563,7 +563,7 @@ Token bucket per principal (session user or token) and per peer for anonymous: 2
 ### 4.9 Versioning and deprecation of /api
 
 * `/api/v2` is stable: additive changes only (new fields, new resources, new optional parameters). A breaking change means `/api/v3`.
-* *Superseded by section 11 and built in slices r5-api-v2-core and r6-api-v2-resources:* the legacy `/api/*` read routes for monitors, groups, forecasts, events, monitor history and hosts were removed outright, with no adapter, no `Deprecation` or `Sunset` headers and no window. Slice r6 did the same for the map, ports, findings, audit and plugin list reads (`/api/infra/map`, `/api/infra/port`, `/api/infra/findings`, `/api/audit`, `/api/plugins`) and for the finding acknowledgement route. The reads left on legacy routes (the user and key lists the admin page draws, the session read, the settings reads next to their `PUT`) moved with the admin pages in slice r8-ui-client, section 5.4, which removed them with no adapter.
+* *Superseded by section 11 and built in slices r5-api-v2-core and r6-api-v2-resources:* the legacy `/api/*` read routes for monitors, groups, forecasts, events, monitor history and hosts were removed outright, with no adapter, no `Deprecation` or `Sunset` headers and no window. Slice r6 did the same for the map, ports, findings, audit and plugin list reads (`/api/infra/map`, `/api/infra/port`, `/api/infra/findings`, `/api/audit`, `/api/plugins`) and for the finding acknowledgement route. The reads left on legacy routes (the user and key lists the admin page draws, the session read, the settings reads next to their `PUT`, the host settings and enrolment documents, the dependency and unlinked-switch lists and the UniFi and Pockethernet page routes) moved with the pages in slice r8-ui-client, section 5.4, which removed them with no adapter.
 * Ingest routes (`/internal/v1/ingest`, `/api/ingest`, `/api/v1/field-reports`) and the control API (`/api/v1/control/*`) are not part of v2 and follow the producer window in section 7.
 
 ### 4.10 Plugin API resources
@@ -660,7 +660,8 @@ What differs from the text above, and what is left:
 * **Prefixes.** A plugin may mount only under its own name, so the Pockethernet reports are under `/pockethernet` (not `/field-reports`) and the control resources under `/control`. There is no Home Assistant plugin, so `/ha` is a core resource built from the host view.
 * **Finding acknowledgement** needs the admin role, as the route it replaces did, and not the operator role of section 4.7, because an acknowledgement is a change made in the name of a person and a read token has none.
 * **Settings are read only on v2.** The `PUT` routes of the tiers, retention and re-check settings stay on `/api/admin/*` beside their pages, and the rules have no write route yet. A write there bumps the `admin` domain, so the ETag of a settings document changes with it.
-* **Not done here:** `/admin/sessions`, `/admin/exporter` and `/admin/maintenance/*` (the exporter and the maintenance jobs do not exist yet), `PATCH` on monitors and host settings, writes to keys and users through v2, `/hosts/{name}/settings`, and the dependency and link routes of the infrastructure admin page. Slice r8-ui-client moved the admin page onto `/admin/keys` and `/admin/users` and the control page onto `/control/*`, and removed the legacy lists, the session read and the control plugin reads. The UniFi and Pockethernet pages still read their `/api/plugins/<name>/` page routes (section 5.4).
+* **Not done here:** `/admin/sessions`, `/admin/exporter` and `/admin/maintenance/*` (the exporter and the maintenance jobs do not exist yet), `PATCH` on monitors and host settings, writes to keys and users through v2, and writes to the dependency, link and host settings routes (the reads of those are done, below). Slice r8-ui-client moved the admin page onto `/admin/keys` and `/admin/users`, the control page onto `/control/*` and the UniFi and Pockethernet pages onto their v2 resources, and removed the legacy lists, the session read, the control plugin reads and the plugin page routes (section 5.4).
+* **Added in r8-ui-client.** The reads the admin pages needed: `GET /infra/dependencies` (any signed-in caller, like the map), `GET /admin/infra/unlinked`, `GET /hosts/{host}/enrolment` and `GET /hosts/{host}/settings` (admin), all in `observe/api/console.py` and all without an ETag, and `GET /unifi/status` from the UniFi plugin (the clock, the stale windows and the settings the page needs). They are registered before `/hosts/{name:path}`, which would otherwise answer them as a host name. The host documents keep unix seconds for their times, as the console always sent them. The address install commands use is part of the settings document (`public_url`), so there is no separate read.
 * **Schema.** The committed schema lists the core resources only, as before. The plugin resources are in the live schema of a running Observe that loaded the plugins.
 
 ---
@@ -714,7 +715,7 @@ the text above, and what is left:
   more often than the interval, and only after a change or `maxAge`". The failure delay is the
   `Retry-After` of a 429 or 503, else 2 seconds doubling to 60.
 * **Types.** No JSDoc types are generated from the schema; `scripts/gen_api_types.py` was not written.
-* **Pages on v2.** Dashboard, host, port, map, audit and the control box poll through the client. The
+* **Pages on v2.** Dashboard, host, port, map, audit and the control box poll through the client. Every read of every console page and plugin page is `/api/v2`. The
   admin page reads `/admin/keys` and `/admin/users`. The shell reads `/session` and `/plugins`. The
   enrolment and host settings pages use the poller for their status reads.
 * **New admin pages.** `/admin/tiers`, `/admin/retention`, `/admin/recheck`, `/admin/rules` and
@@ -725,14 +726,20 @@ the text above, and what is left:
   is still not wired, so the rules page says that saved rules are stored and evaluated by nothing.
 * **Removed with no adapter.** `GET /api/session`, `GET /api/admin/users`, `GET /api/admin/keys`, the
   `GET` of `/api/admin/tiers`, `/retention` and `/recheck`, the server-written pages behind the last
-  two, and the control plugin's `GET /commands` and `/capabilities`.
-* **Not done.** The UniFi and Pockethernet pages keep their `/api/plugins/<name>/` page routes: those
-  carry stale flags, totals and notes that the v2 resources do not, and Pockethernet pages by offset,
-  so moving them needs those fields added to the resources first. The host settings, enrolment and
-  map admin pages keep `/api/hosts/*`, `/api/infra/dependencies` and `/api/admin/infra/unlinked`, for
-  which section 4.12 lists no resource yet. No Playwright test runs: the repo has no browser harness,
-  so the page tests check the served markup, the module wiring and the guards, and `node --test`
-  covers the client and the form logic.
+  two, the control plugin's `GET /commands` and `/capabilities`, `GET /api/hosts/{name}/settings`, `GET
+  /api/hosts/{name}/enrolment`, `GET /api/enrol/public-url`, `GET /api/infra/dependencies`, `GET
+  /api/admin/infra/unlinked`, and the UniFi and Pockethernet page routes under `/api/plugins/`.
+* **Plugin pages.** The UniFi and Pockethernet pages read their v2 resources. The stale flags, last
+  update and notes that the old routes computed come from `GET /unifi/status` and from the page (the
+  rows are marked stale against the server clock), the 5,000 row cap and the total are gone because
+  the page reads every item with `getAll`, and the Pockethernet list pages by cursor. The legacy
+  `GET /api/plugins/<name>/` page routes were deleted, and a test fails when a script reads from a path
+  that is not `/api/v2`.
+* **Not done.** Writes: the keys, users, tiers, retention, re-check, rules, dependency, link,
+  enrolment, host settings and control request routes are still `POST` or `PUT` on `/api/...`, because
+  v2 has no write resources for them (section 4.12). No Playwright test runs: the repo has no browser
+  harness, so the page tests check the served markup, the module wiring and the guards, and `node
+  --test` covers the client and the pure rules of the pages.
 
 ---
 

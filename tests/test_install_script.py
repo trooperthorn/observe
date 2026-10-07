@@ -345,7 +345,7 @@ def test_step_reports_need_the_step_key_and_show_in_progress(env):
         assert env.client.post(url, json=bad, headers=auth).status_code == 401
     note = f"leaked {agent_key} and {step_key}"
     env.client.post(url, json={"step": "agent", "status": "failed", "note": note}, headers=auth)
-    state = env.client.get("/api/hosts/nas01/enrolment").json()
+    state = env.client.get("/api/v2/hosts/nas01/enrolment").json()
     assert [r["step"] for r in state["install"]] == ["hostname", "agent"]
     dump = repr(state) + repr(env.rows("SELECT * FROM enrolments")) + repr(
         env.rows("SELECT * FROM audit"))

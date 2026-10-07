@@ -2,6 +2,7 @@
 // report, a switch or a monitor name, so it is written with textContent only, never as markup.
 import { el } from "/static/js/dom.js";
 import { statusChip } from "/static/js/chips.js";
+import { seconds } from "/static/js/api.js";
 
 export { el };
 export { api, get, getAll, poller, whoami } from "/static/js/api.js";
@@ -21,8 +22,10 @@ export function stateChip(node) {
   return statusChip(node.state || "pending", stateText(node));
 }
 
+// A time from the API: an RFC 3339 string, or unix seconds.
 export function when(ts) {
-  return ts ? new Date(ts * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" }) : "never";
+  const s = seconds(ts);
+  return s ? new Date(s * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" }) : "never";
 }
 
 export function portHref(switchId, portKey) {
