@@ -116,6 +116,26 @@ def test_revoked_token_stops_within_the_cache_window(env):
     assert env.get("/monitors", headers=headers).status_code == 401
 
 
+def test_admin_revocation_evicts_the_cached_token_at_once(env):
+    headers = env.token()
+    assert env.get("/monitors", headers=headers).status_code == 200  # now remembered
+    prefix = headers["Authorization"].split("_")[1]
+    env.login("alice", admin=True)
+    r = env.client.post(f"/api/admin/keys/{prefix}/revoke", headers=env.csrf)
+    assert r.status_code == 200, r.text
+    env.client.cookies.clear()
+    assert env.get("/monitors", headers=headers).status_code == 401  # no wait for the cache time
+
+
+def test_forget_token_drops_only_that_token(env):
+    first, second = env.token(label="one"), env.token(label="two")
+    for h in (first, second):
+        assert env.get("/monitors", headers=h).status_code == 200
+    auth = env.app.state.v2_runtime.auth
+    auth.forget_token(first["Authorization"].split("_")[1])
+    assert len(auth._seen) == 1
+
+
 def test_logout_ends_the_session_for_v2_at_once(env):
     env.login("alice", admin=False)
     assert env.get("/monitors").status_code == 200

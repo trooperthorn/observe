@@ -10,6 +10,7 @@ An unresolved reference is a startup error, never a silent empty string.
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 from pathlib import Path
 from typing import Annotated, Any, Literal, Union
@@ -18,7 +19,6 @@ import yaml
 from pydantic import (BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, field_validator,
                       model_validator)
 
-from . import compat
 from .storage.pg_dsn import check_dsn, read_password
 
 _REF = re.compile(r"\$\{([^}]+)\}")
@@ -45,7 +45,7 @@ def _resolve_refs(value: Any, path: str = "") -> Any:
                 return file_path.read_text(encoding="utf-8").strip()
             except OSError as err:
                 raise ConfigError(f"{path}: cannot read secret file {file_path}: {err}") from err
-        value = compat.getenv(ref)
+        value = os.environ.get(ref)
         if value is None:
             raise ConfigError(f"{path}: environment variable {ref} is not set")
         return value

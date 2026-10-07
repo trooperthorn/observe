@@ -49,7 +49,6 @@ from .config import Config
 log = logging.getLogger("observe")
 
 GROUP = "observe.plugins"
-LEGACY_GROUP = "watchpost.plugins"  # compatibility: the entry point group of the old name
 ROUTE_PREFIX = "/api/plugins"
 PAGE_PREFIX = "/plugins"  # plugin pages and static files: /plugins/<name>/...
 RESERVED_SCOPES = frozenset({"wpi", "wpr"})  # the core's own ingest and read token scopes
@@ -283,20 +282,8 @@ EntryPoints = Callable[[], Iterable[importlib.metadata.EntryPoint]]
 
 
 def installed_entry_points() -> list[importlib.metadata.EntryPoint]:
-    """Entry points in `GROUP`, plus any still published under the legacy group.
-
-    A plugin published under the legacy group keeps loading, and one warning is logged naming
-    it. A name that is also published under `GROUP` is taken from there only.
-    """
-    found = list(importlib.metadata.entry_points(group=GROUP))
-    current = {ep.name for ep in found}
-    legacy = [ep for ep in importlib.metadata.entry_points(group=LEGACY_GROUP)
-              if ep.name not in current]
-    if legacy:
-        log.warning("plugins %s are published under the legacy entry point group %s; "
-                    "republish them under %s",
-                    ", ".join(sorted(ep.name for ep in legacy)), LEGACY_GROUP, GROUP)
-    return found + legacy
+    """The entry points published in `GROUP`."""
+    return list(importlib.metadata.entry_points(group=GROUP))
 
 
 def _check_core_version(plugin: Any, core: str) -> None:

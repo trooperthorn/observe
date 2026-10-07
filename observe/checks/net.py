@@ -14,6 +14,7 @@ from icmplib import async_ping
 from icmplib.exceptions import ICMPLibError, SocketPermissionError
 
 from ..config import Thresholds
+from ..httpclient import http_client
 from .base import Check, CheckResult, Result
 
 
@@ -93,9 +94,8 @@ class HttpCheck(Check):
         if m.verify_tls and m.ca_bundle:
             verify = ssl.create_default_context(cafile=m.ca_bundle)
         try:
-            async with httpx.AsyncClient(
-                verify=verify, timeout=self.timeout, follow_redirects=m.follow_redirects
-            ) as client:
+            async with http_client(verify, self.timeout,
+                                   follow_redirects=m.follow_redirects) as client:
                 resp = await client.request(m.method, m.url, headers=m.headers)
         except httpx.HTTPError as err:
             return CheckResult.fail(f"{type(err).__name__}: {err}", unreachable=True)

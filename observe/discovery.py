@@ -50,12 +50,13 @@ import os
 import asyncssh
 
 from .checks.mqtt import MqttCheck
+from .httpclient import http_client
 from cryptography.hazmat.primitives import hashes, serialization
 
 from .checks.platforms import (DS_PATHS, HOST_PATHS, VM_PATHS, AuthFailed, TrueNASClient,
                                api_ssl_context, vsphere_collect)
 from .checks.apps import unifi_list_all
-from .checks.platforms import VSPHERE_POOL
+from .checks.platforms import VSPHERE_POOL, proxmox_resources
 from .checks.ssh import docker_argv, ssh_connect, ssh_run
 from .checks.snmp import (HR_PROCESSOR_LOAD, HR_STORAGE_RAM, HR_STORAGE_TYPE, IF_HIGH_SPEED,
                           IF_NAME, IF_OPER_STATUS, SnmpCheck, SnmpError)
@@ -443,8 +444,7 @@ class Discoverer:
 
     async def _http_status(self, url: str, verify: bool | ssl.SSLContext) -> int | None:
         try:
-            async with httpx.AsyncClient(verify=verify, timeout=self.s.timeout + 2,
-                                         follow_redirects=False) as c:
+            async with http_client(verify, self.s.timeout + 2) as c:
                 return (await c.get(url)).status_code
         except httpx.HTTPError:
             return None
@@ -698,7 +698,7 @@ class Discoverer:
 
             async def attempt() -> Any:
                 h = {"Authorization": f"Bearer {cred.token}"}
-                async with httpx.AsyncClient(verify=verify, timeout=self.s.timeout + 5) as c:
+                async with http_client(verify, self.s.timeout + 5) as c:
                     r = await c.get(base + "/api/", headers=h)
                     if r.status_code in (401, 403):
                         raise AuthFailed(f"HTTP {r.status_code}")
@@ -733,7 +733,7 @@ class Discoverer:
             async def attempt() -> Any:
                 h = {"X-API-KEY": cred.api_key, "Accept": "application/json"}
                 net = base + "/proxy/network/integration/v1"
-                async with httpx.AsyncClient(verify=ctx, timeout=self.s.timeout + 5) as c:
+                async with http_client(ctx, self.s.timeout + 5) as c:
                     try:
                         sites = await unifi_list_all(c, net + "/sites", h)
                     except LookupError:
@@ -778,7 +778,7 @@ class Discoverer:
             cred = self.config.credentials[cred_name]
 
             async def attempt() -> Any:
-                async with httpx.AsyncClient(verify=verify, timeout=self.s.timeout + 5) as c:
+                async with http_client(verify, self.s.timeout + 5) as c:
                     r = await c.get(base + "/api/dashboard/stats/get",
                                     headers={"Authorization": f"Bearer {cred.token}"},
                                     params={"type": "LastHour", "utc": "true"})
@@ -837,14 +837,8 @@ class Discoverer:
             cred = self.config.credentials[cred_name]
 
             async def attempt() -> Any:
-                async with httpx.AsyncClient(verify=ctx, timeout=self.s.timeout + 5) as c:
-                    r = await c.get(f"https://{host}:{port}/api2/json/cluster/resources",
-                                    headers={"Authorization":
-                                             f"PVEAPIToken={cred.token_id}={cred.secret}"})
-                if r.status_code == 401:
-                    raise AuthFailed("401")
-                r.raise_for_status()
-                return r.json().get("data") or []
+                async with http_client(ctx, self.s.timeout + 5) as c:
+                    return await proxmox_resources(c, host, port, cred)
 
             items = await self._with_cred(f, cred_name, "Proxmox", attempt)
             if items is None:
@@ -878,7 +872,7 @@ class Discoverer:
         """Unauthenticated fingerprint: ESXi and vCenter serve the SOAP version
         document that pyVmomi itself reads. No credential is sent."""
         try:
-            async with httpx.AsyncClient(verify=False, timeout=self.s.timeout + 2) as c:
+            async with http_client(False, self.s.timeout + 2) as c:
                 r = await c.get(f"https://{f.address}:{port}/sdk/vimServiceVersions.xml")
             return r.status_code == 200 and "urn:vim25" in r.text
         except httpx.HTTPError:

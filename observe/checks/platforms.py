@@ -35,6 +35,7 @@ import httpx
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import WebSocketException
 
+from ..httpclient import http_client
 from .base import Check, CheckResult, Result
 
 VSPHERE_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="vsphere")
@@ -183,19 +184,24 @@ class TrueNASCheck(Check):
 # =================================================================== Proxmox
 
 
+async def proxmox_resources(client: httpx.AsyncClient, host: str, port: int,
+                            cred: Any) -> list[dict[str, Any]]:
+    """GET /cluster/resources with an API token. A 401 raises AuthFailed; the list may be empty."""
+    r = await client.get(f"https://{host}:{port}/api2/json/cluster/resources",
+                         headers={"Authorization": f"PVEAPIToken={cred.token_id}={cred.secret}"})
+    if r.status_code == 401:
+        raise AuthFailed("token rejected (401)")
+    r.raise_for_status()
+    return r.json().get("data") or []
+
+
 class ProxmoxCheck(Check):
     async def resources(self) -> list[dict[str, Any]]:
         m = self.monitor
         cred = self.credential()
         verify: Any = api_ssl_context(m.verify_tls, m.ca_bundle)
-        async with httpx.AsyncClient(verify=verify, timeout=self.timeout) as c:
-            r = await c.get(f"https://{m.host}:{m.port}/api2/json/cluster/resources",
-                            headers={"Authorization":
-                                     f"PVEAPIToken={cred.token_id}={cred.secret}"})
-        if r.status_code == 401:
-            raise AuthFailed("token rejected (401)")
-        r.raise_for_status()
-        data = r.json().get("data")
+        async with http_client(verify, self.timeout) as c:
+            data = await proxmox_resources(c, m.host, m.port, cred)
         if not data:
             raise AuthFailed("token authenticated but sees no resources; grant PVEAuditor "
                              "(or disable privilege separation on the token)")

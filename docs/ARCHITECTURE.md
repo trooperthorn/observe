@@ -926,8 +926,9 @@ without detail. Lists use opaque cursors (`observe/api/cursor.py`) that carry th
 last item, so an insert does not move a page.
 
 The credential lookup is remembered for `server.api_auth_cache_s` (5 seconds), so a 304 needs no
-database read; logout forgets a session at once, and a revoked session or token stops working
-within that time. A session's `last_seen` is written at most once a minute and never by a 304.
+database read; logout forgets a session at once, disabling or demoting a user forgets that user's
+sessions (`forget_user`), revoking a key on the admin page forgets that token (`forget_token`),
+and a session or token revoked any other way stops working within that time. A session's `last_seen` is written at most once a minute and never by a 304.
 A read token is a row in `ingest_keys` with scope `wpr` and a `role` column (schema version 19);
 its last use is also written at most once a minute.
 
@@ -1044,6 +1045,51 @@ the server clock, so a browser with a wrong clock shows the same state as anothe
 because it depends on the clock. The lists are read with `getAll`, so the old 5,000 row cap and the
 `truncated` note are gone. The Pockethernet list pages by cursor (newest first, an Older link) instead
 of by offset, so it no longer shows a total.
+
+## Performance, before and after
+
+Slice r10-cleanup reran the architecture review's benchmark on synthetic data with the SQLite
+backend. The script is `tests/bench_synthetic.py` (run it with `python -m tests.bench_synthetic
+--days 7 --dir <scratch folder> --out <result.json>`; pytest does not collect it). It builds four
+pushed hosts with 40 series each at a 30 second push interval, 36 pull monitors with a day of poll
+rows, and one admin session, writes the history through `Store.ingest_batch`, and times the paths
+through the FastAPI test client on the loopback interface. The "before" column is the review's
+measurement of the build it reviewed (30 days of history, x86, Windows). The "after" column is this
+build (7 days of history, 80,640 batches, a 112 MB database, the same machine and the same
+Windows). Times are p50 in milliseconds.
+
+| Path | Before | After | Note |
+| --- | --- | --- | --- |
+| One pushed-host poll | 8,365 | 1.8 | reads the latest table inside a window |
+| Poll cycle, 40 monitors (36 stubs) | 34,645 | 35.6 | |
+| One pull monitor poll (stub) | 1.48 | 1.2 | |
+| `Store.ingest_batch`, 40 samples | 0.76 | 2.6 | now also updates the latest table and the three summary levels in the same transaction; p95 14.0 |
+| Host list | 41,433 | 7.0 | after a new batch (cold); 2.5 when served from the response cache |
+| Host page | 10,292 | 4.1 | cold |
+| Monitor list | 3.1 | 3.8 | cold |
+| Events, 25 | 3.1 | 3.3 | cold |
+| Findings | 13.7 | 2.5 | cold |
+| Map | 80.5 | 2.6 | cold, with the empty map of this data set; the review's map held 384 ports |
+| Audit, 500 | 5.5 | 2.6 | cold |
+| Monitor or metric history, 24 h | 5.8 | 12.0 | 5 minute level, 288 points for each of 8 series, 87 KB |
+| Metric history, 7 days | 18.5 | 8.6 | hourly level, 58 KB |
+| Dashboard refresh, four reads | 41,453 | 16.7 | sum of the cold reads |
+
+How to read the table. A cold read is the first request after a batch and a poll row arrived, so
+the change counters moved and the page was rebuilt; a warm read (the same request again) is a
+response cache hit and a 304 costs the same, both 2.3 to 2.5 ms here, which is the floor of the
+test client and the gate. The rows that were many seconds long in the review (the pushed-host
+poll, the host list and the host page) no longer read the whole history, so their cost does not
+grow with retention: they read the `latest` table, one row per series. That is why a 7 day history
+is a fair stand-in for the 30 days of the review for those rows; the metric history rows do grow
+with the range and are bounded by the 1,000 point cap and the level chosen from the step. The
+ingest row is slower than the review's because the write now maintains the latest table and the
+summary levels, which is what removed the read cost; at 2.6 ms it leaves room for about 380
+batches a second on this machine. The review's numbers for the UniFi classic feed (392 ms and
+1,817 commits for 60 devices), the HTTP ingest request and the Raspberry Pi estimates were not
+rerun here: the benchmark does not drive the plugins, and the Pi was not available. The after
+numbers are for one machine and one run of 30 repetitions each (5 for the pushed-host poll), so
+treat differences of a millisecond or two as noise.
 
 ## Plugin host
 

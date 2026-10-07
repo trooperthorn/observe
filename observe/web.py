@@ -543,6 +543,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                                path=path, status=404, remote=remote,
                                detail={**detail, "reason": "unknown or already revoked"})
             return JSONResponse({"detail": "unknown or already revoked key"}, status_code=404)
+        runtime.auth.forget_token(key_id)  # the revocation must show on the next v2 read
         await audit.record(store, "key_revoked", actor=sess.username, method="POST", path=path,
                            status=200, remote=remote, detail=detail)
         return JSONResponse({"ok": True})

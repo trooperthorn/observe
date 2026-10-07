@@ -469,7 +469,7 @@ async def record_step(store: Store, step_key: str, step: str, status: str, note:
     if not rows:
         return None
     host, raw = rows[0]
-    note = "".join(c for c in audit.redact_secrets(note) if c.isprintable())[:MAX_NOTE]
+    note = audit.clean_note(note, MAX_NOTE)
     reports = [r for r in json.loads(raw) if r["step"] != step]
     reports.append({"step": step, "status": status, "note": note, "at": now})
     await store.execute("UPDATE enrolments SET reports=? WHERE host=?", (json.dumps(reports), host))

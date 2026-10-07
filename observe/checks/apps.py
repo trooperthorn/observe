@@ -27,6 +27,7 @@ from typing import Any
 
 import httpx
 
+from ..httpclient import http_client
 from . import ha_host
 from .base import Check, CheckResult, Result
 from .platforms import AuthFailed, api_ssl_context, pct
@@ -80,8 +81,7 @@ class _HttpApiCheck(Check):
                   limit: int | None = None) -> Any:
         m = self.monitor
         verify: Any = api_ssl_context(m.verify_tls, m.ca_bundle)
-        async with httpx.AsyncClient(verify=verify, timeout=self.timeout,
-                                     follow_redirects=False) as c:
+        async with http_client(verify, self.timeout) as c:
             return await read_json_capped(c, self.base_url() + path, self.headers(), params,
                                           self.body_limit() if limit is None else limit, path)
 
@@ -229,8 +229,7 @@ class _UniFiCheck(_HttpApiCheck):
     async def list_all(self, path: str) -> list[dict[str, Any]]:
         m = self.monitor
         verify: Any = api_ssl_context(m.verify_tls, m.ca_bundle)
-        async with httpx.AsyncClient(verify=verify, timeout=self.timeout,
-                                     follow_redirects=False) as c:
+        async with http_client(verify, self.timeout) as c:
             return await unifi_list_all(c, self.base_url() + m.base_path + path, self.headers())
 
     async def get_capped(self, path: str, limit: int | None = None) -> Any:

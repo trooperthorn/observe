@@ -51,6 +51,12 @@ def redact_secrets(text: str) -> str:
     return _SECRET_SHAPES.sub(REDACTED, text)
 
 
+def clean_note(note: str, limit: int) -> str:
+    """A free-text report note: secret-shaped text redacted, unprintable characters dropped,
+    capped at `limit`. Redaction runs before the cap so a secret cannot survive by being cut."""
+    return "".join(c for c in redact_secrets(str(note)) if c.isprintable())[:limit]
+
+
 def sanitize_audit_path(path: str) -> str:
     """Secret-shaped text is redacted, control characters become "?", and the result is capped
     at AUDIT_PATH_MAX. Redaction runs before the cap so a secret cannot survive by being cut."""

@@ -1,4 +1,4 @@
-"""The old product name appears only in compatibility code, its tests and the upgrade notes."""
+"""The old product name appears nowhere in the repository except this guard."""
 
 from __future__ import annotations
 
@@ -8,46 +8,37 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Files that may mention the old name anywhere: the upgrade notes, the compatibility
-# code that reads old names, and the tests that exercise that code.
-ALLOWED_FILES = {
-    "docs/UPGRADING-FROM-WATCHPOST.md",
-    "observe/compat.py",
-    "observe/plugins.py",
-    "tests/test_name_guard.py",
-    "tests/test_rename.py",
-    "tests/test_rename_runtime.py",
-    "tests/test_control_keys.py",
-}
-# Other files may mention it only on a line that says it is the old or legacy name.
-MARKERS = ("legacy", "old name", "compat", "formerly")
+# The guard itself has to spell the name it forbids.
+ALLOWED_FILES = {"tests/test_name_guard.py"}
+OLD_NAME = "watch" + "post"
 
 
 def _tracked() -> list[str]:
     out = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True,
                          check=True).stdout.decode()
-    return [p for p in out.split("\0") if p]
+    return [p for p in out.split(chr(0)) if p and (ROOT / p).exists()]
 
 
-def test_old_name_is_confined_to_compatibility_code():
-    pattern = re.compile("watchpost", re.IGNORECASE)
+def test_old_name_is_gone():
+    pattern = re.compile(OLD_NAME, re.IGNORECASE)
     offenders = []
     for rel in _tracked():
-        if pattern.search(rel):
-            if rel not in ALLOWED_FILES:
-                offenders.append(f"{rel} (file name)")
-            continue
         if rel in ALLOWED_FILES:
             continue
-        path = ROOT / rel
+        if pattern.search(rel):
+            offenders.append(f"{rel} (file name)")
+            continue
         try:
-            text = path.read_text(encoding="utf-8")
+            text = (ROOT / rel).read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        for number, line in enumerate(text.splitlines(), 1):
-            if pattern.search(line) and not any(m in line.lower() for m in MARKERS):
-                offenders.append(f"{rel}:{number}")
+        offenders += [f"{rel}:{n}" for n, line in enumerate(text.splitlines(), 1)
+                      if pattern.search(line)]
     assert not offenders, offenders
+
+
+def test_compat_module_is_gone():
+    assert not (ROOT / "observe" / "compat.py").exists()
 
 
 def test_pages_title_says_observe():

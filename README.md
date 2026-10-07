@@ -113,9 +113,41 @@ docker compose run --rm observe --config /config/observe.yaml --once
 docker compose up -d
 ```
 
-Upgrading a deployment that still uses the old name watchpost: see
-`docs/UPGRADING-FROM-WATCHPOST.md`. The legacy environment variables, config path and
-database path are still read with a warning.
+### A fresh deployment and re-enrolment
+
+Observe has no upgrade path from earlier builds and keeps no old-name compatibility: a build
+made before the data redesign (or under the old product name) is destroyed and deployed again
+from an empty database, and every agent is enrolled again. A database that an earlier build
+created (one that still has a `host_samples` table) is refused at start. Nothing here deletes
+data for you; each removal below is a step you run yourself after you have decided you no longer
+need the old history.
+
+1. Stop the container: `docker compose down`.
+2. Choose the backend, because it cannot be changed later without starting empty.
+   - SQLite (the default, and the right choice for a Raspberry Pi): remove the old database file
+     in `./data` (it is named by `server.db_path`, `/data/observe.db` by default) and leave
+     `storage.backend` unset.
+   - PostgreSQL with TimescaleDB: put the password in a file under `./secrets`, set
+     `storage.backend: postgres`, `storage.dsn` (no password in it) and `storage.password_file`
+     in `config/observe.yaml`, remove the old database volume if one exists, and start the
+     database with `docker compose --profile postgres up -d` before Observe.
+3. Use the `OBSERVE_*` environment variables and `/config/observe.yaml`. The environment
+   variables, config and database file names and plugin entry point group of the old product
+   name are no longer read; Observe starts without them and reports a missing secret reference
+   as a configuration error.
+4. Check the file with `docker compose run --rm observe --config /config/observe.yaml --validate`,
+   create the first admin with `--create-admin USERNAME` (the password comes from a prompt, or from
+   `OBSERVE_ADMIN_PASSWORD`), set
+   `server.public_url`, and run `docker compose up -d`. The first start creates the whole schema.
+5. Enrol each host again through Hosts, Add host (`/hosts/new`). The new install command mints new
+   `wpi` and `wpc` keys, and the agent installer replaces the agent container that was already
+   running. Keys issued by the old deployment do not exist in the new database, so an agent that
+   still holds one is refused until it is enrolled again. A host that is already registered can be
+   enrolled again from its settings page (Regenerate command), which revokes its old agent and
+   control keys.
+6. Issue new read tokens for scripts and kiosks from the admin page, and keep the control signing
+   key (`plugin_settings.control.signing_key_file`), or create a new one with `--control-keygen`
+   and enrol the control hosts again so they pin the new public key.
 
 `--validate` checks the config and every secret reference, then exits.
 `--once` polls every monitor a single time and prints the result, which is the
@@ -703,9 +735,7 @@ admin only) shows the newest 500 rows in a sortable table with filters for actor
 
 Observe can load plugins, which are Python packages installed into the image
 that publish an entry point in the group `observe.plugins`. Installing one
-does nothing until you list it in the config. For compatibility, a plugin still
-published under the legacy group `watchpost.plugins` (the old name) also loads, and
-one warning names it. Plugin names in the config are unchanged:
+does nothing until you list it in the config:
 
 ```yaml
 plugins: [pockethernet]

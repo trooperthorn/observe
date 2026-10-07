@@ -17,13 +17,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 import time
 
 import uvicorn
 
-from . import __version__, compat
+from . import __version__
 from .alerts import Alerter
 from .config import ConfigError, load_config
 from .otlp.export import Exporter
@@ -31,6 +32,8 @@ from .plugins import PluginError, load_plugins
 from .scheduler import Scheduler
 from .store import Store
 from .web import create_app
+
+DEFAULT_CONFIG = "/config/observe.yaml"
 
 log = logging.getLogger("observe")
 
@@ -197,7 +200,7 @@ def _create_admin(config, args) -> int:  # type: ignore[no-untyped-def]
     from . import audit
     from .auth import AuthError, create_user
 
-    password = compat.getenv("OBSERVE_ADMIN_PASSWORD")
+    password = os.environ.get("OBSERVE_ADMIN_PASSWORD")
     if password is None:
         password = getpass.getpass("Password: ")
         if getpass.getpass("Repeat password: ") != password:
@@ -255,7 +258,7 @@ def _plugins(config):  # type: ignore[no-untyped-def]
 def main() -> int:
     ap = argparse.ArgumentParser(prog="observe")
     ap.add_argument("--config", default=None,
-                    help="config file (default /config/observe.yaml, or the legacy name)")
+                    help=f"config file (default {DEFAULT_CONFIG})")
     ap.add_argument("--validate", action="store_true", help="validate config and exit")
     ap.add_argument("--once", action="store_true", help="poll every monitor once and exit")
     ap.add_argument("--only", help="with --once, poll only this monitor slug")
@@ -299,9 +302,8 @@ def main() -> int:
     if args.control_keygen:
         return _control_keygen(args.control_keygen)  # needs no config file
     try:
-        config = load_config(compat.resolve_config_path(args.config))
-        config.server.db_path = compat.resolve_db_path(config.server.db_path)
-    except (ConfigError, compat.DatabaseMissing) as err:
+        config = load_config(args.config or DEFAULT_CONFIG)
+    except ConfigError as err:
         print(f"config error: {err}", file=sys.stderr)
         return 2
     if args.validate:

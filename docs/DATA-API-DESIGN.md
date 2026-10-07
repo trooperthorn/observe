@@ -1046,6 +1046,7 @@ Built in slice r3-state-and-rules.3: the polling tiers in `observe/tiers.py` (av
   - protocol selection and fallback in producers: hostwatch, ha_Int_soc and the Pockethernet app send OTLP only (H-3 and P-2 become OTLP-only clients);
   - old-name compatibility (old product names, old config and database paths, old env vars, the legacy plugin entry point group) may be removed.
 - Observe starts from an empty database with the new schema, and agents are re-enrolled through the Add host wizard after the redeploy.
+- **Built in slice r10-cleanup:** `observe/compat.py`, the old environment prefix, config and database names, the MQTT default prefix warning, the legacy plugin entry point group and the upgrade notes for the old name are deleted, and `tests/test_name_guard.py` fails the build if the old name appears anywhere else. The outbound HTTP client is built in one place (`observe/httpclient.py`), the Proxmox resource read is shared by the monitor and discovery, and report notes are cleaned by `audit.clean_note`. Revoking a key on the admin page evicts that token from the authentication cache at once (`Authenticator.forget_token`). The deployment steps for either backend and the re-enrolment steps are in the README, "A fresh deployment and re-enrolment". The benchmark of the review was rerun on synthetic data with SQLite and the numbers are in `docs/ARCHITECTURE.md`, "Performance, before and after".
 
 ## 12. Database backends (owner decision 2026-10-06)
 
