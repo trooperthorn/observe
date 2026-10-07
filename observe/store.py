@@ -13,6 +13,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .checks.base import CheckResult, Result
@@ -31,6 +32,15 @@ ABSENT_REASON = "not present on this host"
 # value of a series or freeze boot state. The allowance is small because the latest row only
 # moves forward in time: a point stamped further ahead would hold it for that long.
 MAX_FUTURE_SKEW_S = 5.0
+
+
+@dataclass
+class IngestOutcome:
+    """Why points of a batch were not stored, filled in by Store.ingest_batch for the caller
+    that has to say so to the sender."""
+
+    capped: int = 0  # points refused by the series cardinality guard
+    late: int = 0  # points older than the raw retention boundary
 
 
 class IdempotencyConflict(Exception):
@@ -276,7 +286,8 @@ class Store:
         return lambda metric: compaction.cuts_for(levels, metric, now).raw
 
     def _ingest_unit(self, db: Conn, batch: Batch, boots: dict[int, tuple[str, int | None]],
-                     now: float, body_hash: str = "") -> tuple[int, int, bool]:
+                     now: float, body_hash: str = "",
+                     outcome: IngestOutcome | None = None) -> tuple[int, int, bool]:
         # Adapted from hostwatch's Store.ingest_batch (hostwatch, same owner): one
         # transaction for the batch id, host row, sources, samples and events.
         # A batch without batch_id is identified by a hash of its content, so a
@@ -347,10 +358,13 @@ class Store:
                     "UPDATE hosts SET boot_id=?, boot_ts=?, clean_shutdown=? "
                     "WHERE host=? AND (boot_ts IS NULL OR boot_ts <= ?)",
                     (ev.boot_id, ev_ts, clean, batch.host, ev_ts))
+        if outcome is not None:
+            outcome.capped, outcome.late = recorded.dropped, recorded.late
         return len(batch.samples) - recorded.dropped - recorded.late, stored, False
 
     async def ingest_batch(self, batch: Batch, boots: dict[int, tuple[str, int | None]],
-                           now: float | None = None, body_hash: str = ""
+                           now: float | None = None, body_hash: str = "",
+                           outcome: IngestOutcome | None = None
                            ) -> tuple[int, int, bool]:
         """Store a pushed batch. boots maps an event index to (classification,
         clean_shutdown flag). Returns (samples stored, events stored, duplicate).
@@ -359,7 +373,7 @@ class Store:
         reused for another body and IdempotencyConflict is raised (nothing is stored)."""
         at = time.time() if now is None else now
         return await self.storage.write(
-            lambda db: self._ingest_unit(db, batch, boots, at, body_hash))
+            lambda db: self._ingest_unit(db, batch, boots, at, body_hash, outcome))
 
     @staticmethod
     def _latest_host_unit(db: Conn, host: str, since: float, newest_fallback: bool,

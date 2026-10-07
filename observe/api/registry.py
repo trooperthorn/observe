@@ -472,7 +472,8 @@ class ApiRegistry:
 
 
 def _dump(data: Any) -> bytes:
-    return json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return json.dumps(data, separators=(",", ":"), ensure_ascii=False,
+                      allow_nan=False).encode("utf-8")
 
 
 class Problem(BaseModel):

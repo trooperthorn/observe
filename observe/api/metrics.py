@@ -52,6 +52,13 @@ TIERS = (
 )
 
 
+def finite(v: Any) -> Any:
+    """The number, or None when it is infinite or not a number."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    return v
+
+
 def _like(text: str) -> str:
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -278,9 +285,9 @@ def latest_metrics(db: Any, request: Request, page: PageParams,
         ts, value, pts, pval = latest[row[0]]
         items.append({"series_id": row[0], "scope": row[1], "metric": row[2], "unit": row[3],
                       "resource": {"id": row[5], "kind": row[6], "name": row[7]},
-                      "attrs": json.loads(row[4]), "ts": ts / 1000.0, "value": value,
+                      "attrs": json.loads(row[4]), "ts": ts / 1000.0, "value": finite(value),
                       "previous_ts": None if pts is None else pts / 1000.0,
-                      "previous_value": pval})
+                      "previous_value": finite(pval)})
     return {"items": items, "next_cursor": encode([next_id]) if next_id is not None else None}
 
 
@@ -324,7 +331,10 @@ def _aggregate(db: Any, name: str, table: str | None, ids: list[int], step: int,
     out: dict[int, list[list[Any]]] = {i: [] for i in ids}
 
     def pack(n: int, total: Any, lo: Any, hi: Any) -> dict[str, Any]:
-        return {"avg": (total / n if n else None), "min": lo, "max": hi, "sum": total,
+        # A sum of large values can overflow to infinity; JSON has no such number, so an
+        # aggregate that is not finite is null.
+        avg = finite(total / n) if n else None
+        return {"avg": avg, "min": finite(lo), "max": finite(hi), "sum": finite(total),
                 "count": n}
 
     if "last" in aggs:

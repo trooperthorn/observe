@@ -476,8 +476,29 @@ def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
             f"no batch for {age:.0f}s (limit {stale_after:.0f}s)"
     else:
         out["status"] = worst(levels)
-        out["status_reason"] = ""
+        out["status_reason"] = "" if out["status"] == GOOD else _cause(out)
     return out
+
+
+def _cause(view: dict[str, Any]) -> str:
+    """Why a host that is not stale is not good: the section and the first item that carry the
+    worst level, so a warning or critical summary always names its cause."""
+    top = worst([view[n]["status"] for n in (*SECTIONS, "alerts")])
+    for name in (*SECTIONS, "alerts"):
+        sec = view[name]
+        if sec["status"] != top:
+            continue
+        for item in sec["items"]:
+            if name == "alerts":
+                if item.get("severity") == ("critical" if top == CRITICAL else "warning"):
+                    return f"alerts: {item.get('title', '')}"[:240]
+            elif item["status"] == top and item["reason"]:
+                label = f"{item['source']} {item['metric']}"
+                return f"{name}: {label}: {item['reason']}"[:240]
+        if sec["note"]:
+            return f"{name}: {sec['note']}"[:240]
+        return f"{name} is {top}"
+    return f"status is {top}"
 
 
 def summarize(view: dict[str, Any]) -> dict[str, Any]:

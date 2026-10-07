@@ -59,6 +59,22 @@ _COMPONENT_NUM = {"good": 0, "warning": 1, "critical": 2}
 _EFF_NUM ={**_STATE_NUM, "unreachable": 3}
 
 
+LOGIN_MAX_BODY = 4096  # bytes of a login request, however it is framed
+
+
+async def _read_limited(request: Request, limit: int) -> bytes | None:
+    """The request body, or None as soon as more than `limit` bytes have arrived. A chunked
+    request has no Content-Length, so the stream is counted and never read past the cap."""
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _label(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
@@ -317,10 +333,13 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         if not login_limiter.allow(peer):
             return await login_failed(peer, 429, "rate limit exceeded")
         declared = request.headers.get("content-length", "")
-        if declared.isdigit() and int(declared) > 4096:
+        if declared.isdigit() and int(declared) > LOGIN_MAX_BODY:
+            return JSONResponse({"detail": "body too large"}, status_code=413)
+        raw = await _read_limited(request, LOGIN_MAX_BODY)
+        if raw is None:
             return JSONResponse({"detail": "body too large"}, status_code=413)
         try:
-            body = await request.json()
+            body = json.loads(raw)
         except (ValueError, RecursionError):
             body = None
         name = body.get("username") if isinstance(body, dict) else None

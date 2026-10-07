@@ -46,7 +46,7 @@ from ..ingest.keys import key_host, verify_key
 from ..ingest.schema import MAX_BODY_BYTES, MAX_JSON_DEPTH
 from ..plugins import LoadedPlugins, LogContext, LogRejected
 from ..storage import StorageBusy, series
-from ..store import IdempotencyConflict, MAX_FUTURE_SKEW_S, Store
+from ..store import IdempotencyConflict, IngestOutcome, MAX_FUTURE_SKEW_S, Store
 from . import normalize, wire
 
 log = logging.getLogger("observe.otlp")
@@ -164,6 +164,22 @@ def _batch_id(signal: str, idem: str | None) -> str:
 def _body_hash(signal: str, body: bytes) -> str:
     """The hash of the (inflated) body an idempotency record is made from."""
     return hashlib.sha256(signal.encode() + b"\0" + body).hexdigest()[:40]
+
+
+def drop_reason(capped: int, late: int) -> str:
+    """The partial success text for points that were valid but not stored."""
+    parts = []
+    if capped:
+        parts.append(f"{capped} points dropped: series limit reached (at most "
+                     f"{series.MAX_SERIES_PER_RESOURCE} series per resource and "
+                     f"{series.MAX_SERIES_TOTAL} in all)")
+    if late:
+        parts.append(f"{late} points ignored: older than the raw retention")
+    return "; ".join(parts)
+
+
+def _join(first: str, second: str) -> str:
+    return "; ".join(t for t in (first, second) if t)[:512]
 
 
 def _reply(content_type: str, signal: str, rejected: int, message: str) -> Response:
@@ -293,12 +309,15 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
             return await guard.deny(request, 403, "key is bound to another host", prefix,
                                     {"bound_host": bound, "rejected": rejects.count})
         dropped = 0
+        drop_reasons = ""
         if result.batch is not None:
             batch = result.batch
             batch.batch_id = batch_id
+            outcome = IngestOutcome()
             try:
                 stored, _events, duplicate = await store.ingest_batch(
-                    batch, classify_events(batch.events), now=now, body_hash=body_hash)
+                    batch, classify_events(batch.events), now=now, body_hash=body_hash,
+                    outcome=outcome)
             except IdempotencyConflict:
                 return await conflict(request, prefix, bound)
             except Exception as err:
@@ -309,9 +328,11 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
                 raise
             if not duplicate:
                 dropped = len(batch.samples) - stored
+                drop_reasons = drop_reason(outcome.capped, outcome.late)
                 if on_samples is not None and batch.samples:
                     await on_samples(bound, batch.samples, now)  # the threshold rules
-        return _reply(ctype, signal, rejects.count + dropped, rejects.message())
+        return _reply(ctype, signal, rejects.count + dropped,
+                      _join(drop_reasons, rejects.message()))
 
     async def field_push(request: Request, signal: str, req: Any, ctype: str, prefix: str,
                          device: str, now: float) -> Response:
@@ -321,13 +342,14 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
         if signal == "metrics":
             points, rejects = await asyncio.to_thread(normalize.normalize_field_metrics,
                                                       req, device, now)
-            dropped = await store.storage.write(
+            capped, late = await store.storage.write(
                 lambda db: _write_field_points(db, points, now, store.storage.incremental_rollups,
                                                store.raw_cut(db, now)),
-                touches=("metrics",)) if points else 0
+                touches=("metrics",)) if points else (0, 0)
+            dropped = capped + late
             detail.update(points=len(points) - dropped)
             rejected = rejects.count + dropped
-            message = rejects.message()
+            message = _join(drop_reason(capped, late), rejects.message())
         else:
             records, rejects = await asyncio.to_thread(normalize.field_records, req, now)
             sent = request.headers.get(SENT_HEADER)
@@ -382,9 +404,11 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
 
 
 def _write_field_points(db: Any, points: list[normalize.FieldPoint], now: float,
-                        rollups: bool, raw_cut: Callable[[str], int] | None = None) -> int:
+                        rollups: bool, raw_cut: Callable[[str], int] | None = None
+                        ) -> tuple[int, int]:
     """Store the points of a field key's request, one resource at a time. Returns the number
-    refused by the series cardinality guard or ignored as older than the raw retention."""
+    refused by the series cardinality guard and the number ignored as older than the raw
+    retention."""
     groups: dict[tuple[str, str], tuple[dict[str, Any], list[series.Point]]] = {}
     now_ms = series.to_ms(now)
     ahead = now_ms + series.to_ms(MAX_FUTURE_SKEW_S)
@@ -392,9 +416,10 @@ def _write_field_points(db: Any, points: list[normalize.FieldPoint], now: float,
         attrs, pts = groups.setdefault((p.kind, p.name), (p.attrs, []))
         ts_ms = now_ms if p.ts_ms > ahead else p.ts_ms  # a clock far ahead is stored at receipt
         pts.append(series.Point(p.scope, p.metric, p.unit, p.labels, ts_ms, p.value))
-    dropped = 0
+    capped = late = 0
     for (kind, name), (attrs, pts) in groups.items():
         rec = series.record_points(db, kind=kind, name=name, points=pts, now=now,
                                    rollups=rollups, attrs=attrs, raw_cut=raw_cut)
-        dropped += rec.dropped + rec.late
-    return dropped
+        capped += rec.dropped
+        late += rec.late
+    return capped, late

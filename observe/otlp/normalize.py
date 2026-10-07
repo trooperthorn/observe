@@ -43,9 +43,9 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from ..ingest.schema import (MAX_DETAIL_BYTES, MAX_DETAIL_KEYS, MAX_EVENTS, MAX_LABELS, MAX_NAME,
-                             MAX_SAMPLES, MAX_TEXT, Batch, Event, Sample, SourceStatus,
-                             normalize_severity)
+from ..ingest.schema import (MAX_ABS_VALUE, MAX_DETAIL_BYTES, MAX_DETAIL_KEYS, MAX_EVENTS,
+                             MAX_LABELS, MAX_NAME, MAX_SAMPLES, MAX_TEXT, Batch, Event, Sample,
+                             SourceStatus, normalize_severity)
 
 MAX_RESOURCE_ATTRS = 64
 MAX_POINT_ATTRS = 32
@@ -210,7 +210,11 @@ def _number(raw: dict[str, Any]) -> tuple[float | None, str]:
         v = raw["asDouble"]
         if isinstance(v, bool) or not isinstance(v, (int, float)):
             return None, "a value is not a number"
-        return (float(v), "") if math.isfinite(v) else (None, "a value is not finite")
+        if not math.isfinite(v):
+            return None, "a value is not finite"
+        if abs(v) > MAX_ABS_VALUE:
+            return None, "a value is too large to store"
+        return float(v), ""
     if "asInt" in raw:
         v = raw["asInt"]
         if isinstance(v, bool):
@@ -371,7 +375,10 @@ def normalize_metrics(req: Any, bound_host: str, now: float) -> Normalized:
                 pairs.append((name + ".count", float(c)))
             if isinstance(total, (int, float)) and not isinstance(total, bool) \
                     and math.isfinite(total):
-                pairs.append((name + ".sum", float(total)))
+                if abs(total) > MAX_ABS_VALUE:
+                    rejects.add("a value is too large to store")
+                else:
+                    pairs.append((name + ".sum", float(total)))
             if not pairs:
                 rejects.add("a histogram point has no count or sum")
             built = [(n, v) for n, v in pairs if len(n) <= MAX_NAME]

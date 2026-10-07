@@ -52,6 +52,11 @@ def normalize_severity(raw: str) -> str:
     return _SEVERITY_ALIASES.get(raw.strip().lower(), WARNING)
 
 
+# The largest magnitude a stored value may have. Rollups add values up, and two values near the
+# float limit sum to infinity, which JSON cannot carry; 1e300 leaves room for 1e8 additions.
+MAX_ABS_VALUE = 1e300
+
+
 class _Wire(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -61,7 +66,7 @@ class Sample(_Wire):
                         description="collector id, e.g. rapl, mdraid")
     metric: str = Field(min_length=1, max_length=MAX_NAME,
                         description="metric name within the source, e.g. package_watts")
-    value: float | None = Field(allow_inf_nan=False)
+    value: float | None = Field(allow_inf_nan=False, ge=-MAX_ABS_VALUE, le=MAX_ABS_VALUE)
     unit: str = Field(default="", max_length=32)
     labels: dict[str, str] = Field(default_factory=dict, max_length=MAX_LABELS)
     ts: float = Field(allow_inf_nan=False, description="unix epoch seconds when the value was read")

@@ -96,6 +96,17 @@ point, record or resource is rejected on its own and counted. The answer is a 20
 that groups the reasons with counts; an empty request is a 200 that stores nothing, which is the
 cheap probe an agent uses to check its key.
 
+A value whose magnitude is above 1e300 is rejected per point ("a value is too large to store"),
+because rollups add values up and two values near the float limit sum to infinity, which JSON
+cannot carry. The pushed-batch schema refuses such a value the same way as a non-finite one. The
+metrics query and the latest values also turn any aggregate that is still not finite into `null`,
+and the JSON encoder of the v2 routes is run with `allow_nan=False`, so no response holds
+`Infinity` or `NaN`. A valid point that is not stored is named in the partial success message:
+"N points dropped: series limit reached (at most 2000 series per resource and 50000 in all)" for
+the cardinality guard, and "N points ignored: older than the raw retention" for late points. Both
+count in `rejected_data_points`. `Store.ingest_batch` fills an `IngestOutcome` with the two counts
+for the route to word.
+
 The models live in `observe/ingest/schema.py` (Batch, Sample, SourceStatus, Event). They are the
 normalized form every producer is reduced to: the OTLP normalizer builds them, and so do the pull
 checks that run inside Observe (Home Assistant host mode and SNMP). They limit each batch to 256
@@ -725,7 +736,13 @@ boundary: `session` (any user), `mutating` (session plus CSRF), `admin`, and
 auth credentials get 401 there. `/metrics` accepts a session or, when
 configured, basic auth; the v2 read routes accept a session or a read token. Login is `POST /api/login` (JSON), logout is
 `POST /api/logout`, and `GET /api/v2/session` returns the current user, the role and the CSRF token.
-The first admin is created from the command line (`--create-admin`). Failed
+A host view that is not stale and not good sets `status_reason` from the worst section: the first
+item at that level (`temperatures: <source> <metric>: <item reason>`), the first alert event, or the
+section note, so a warning or critical summary is never unexplained.
+
+A login body is at most 4096 bytes however it is framed: a declared Content-Length over the cap
+and a chunked body that grows past it (counted as it streams, never fully read) both get 413
+before any JSON is parsed. The first admin is created from the command line (`--create-admin`). Failed
 logins lock the account (`login_max_failures`, `login_lock_s`) and are limited
 per peer, with an unknown account taking the same time and answer as a wrong
 password. Settings live under `server:` in the config.
