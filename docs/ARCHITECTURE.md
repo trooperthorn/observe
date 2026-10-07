@@ -129,6 +129,21 @@ sums (a sum is stored as the value it reports), writing points older than raw re
 summary levels only, the `observe.ingest.clock_skew` counter, and returning the stored response
 for a repeat (the repeat gets an empty 200).
 
+### OTLP export
+
+Observe can also push to an external collector (docs/DATA-API-DESIGN.md section 6.6). It is off
+until `export.otlp.endpoint` is set. `observe/otlp/export.py` runs as one task beside the
+scheduler, started in `observe/__main__.py` and reachable as `store.exporter`. It reads committed
+rows after a cursor kept in `export_cursor` (raw samples in `(ts, series_id)` order, `host_events`
+and optionally `audit` by id), builds an OTLP request grouped by resource and scope, encodes it
+with `observe/otlp/encode.py` (protobuf or JSON, always gzip) and posts it with one long-lived
+`httpx.AsyncClient` that never follows redirects. The cursor moves only after the collector
+answers, so a crash or an outage repeats at most one batch. Network errors and 429, 502, 503 and
+504 back off exponentially with full jitter and honour `Retry-After`; any other answer drops the
+batch and counts it. Samples are read `settle_s` behind the clock, and a cursor that falls behind
+raw retention resumes from the oldest retained sample and reports an `observe.export.gap` log
+record and audit row. Counters are in `/metrics` and `GET /api/v2/admin/exporter`.
+
 ## Storage
 
 ### Storage interface

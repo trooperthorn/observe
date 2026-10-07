@@ -317,6 +317,33 @@ async def storage_status(ctx: ApiContext) -> dict[str, Any]:
             "change_seqs": storage.change_seqs()}
 
 
+class ExporterOut(BaseModel):
+    enabled: bool
+    endpoint: str | None = None
+    protocol: str | None = None
+    signals: list[str] = []
+    interval: float | None = None
+    max_batch_points: int | None = None
+    sent: int = 0
+    failed: int = 0
+    dropped: int = 0
+    rejected: int = 0
+    lag_seconds: float = 0.0
+    last_success: Ts | None = None
+    last_error: str = ""
+    consecutive_failures: int = 0
+    gaps: int = 0
+
+
+def exporter_status(ctx: ApiContext) -> dict[str, Any]:
+    """The OTLP exporter's counters and settings. Header values are never part of it; the
+    exporter is set in the configuration file, not through the API."""
+    exporter = getattr(ctx.store, "exporter", None)
+    if exporter is None:
+        return {"enabled": False}
+    return exporter.status()
+
+
 # ---- raw resources --------------------------------------------------------------------------
 
 class ResourceOut(BaseModel):
@@ -444,6 +471,9 @@ def register(api: ApiRegistry) -> None:
     api.resource("/admin/settings/storage", storage_status, StorageOut, tags=("settings",),
                  roles=("admin",), anonymous=False, etag=False,
                  summary="Storage backend status", operation_id="settings_storage")
+    api.resource("/admin/exporter", exporter_status, ExporterOut, tags=("settings",),
+                 roles=("admin",), anonymous=False, etag=False,
+                 summary="OTLP exporter status")
     api.resource("/resources", list_resources, ResourcePage, domains=("metrics",),
                  tags=("resources",), paginate=True, filters=ResourceFilters, anonymous=False,
                  summary="List resources")

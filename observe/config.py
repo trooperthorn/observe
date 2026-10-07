@@ -795,6 +795,99 @@ class StorageConfig(Strict):
                               f"{type(err).__name__}") from None
 
 
+_HEADER_NAME = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$")
+# Headers the exporter sets itself; a configured value for one of them would only break the request.
+_MANAGED_HEADERS = frozenset({"content-type", "content-encoding", "content-length", "host",
+                              "transfer-encoding", "connection", "user-agent"})
+EXPORT_KINDS = ("host", "network_device", "port", "ha_instance", "unifi_client", "monitor",
+                "field_tester", "service")
+
+
+class OtlpExportConfig(Strict):
+    """The optional OTLP/HTTP exporter (docs/DATA-API-DESIGN.md section 6.6). It is off until an
+    endpoint is set. The endpoint is the collector's base address; the exporter adds /v1/metrics
+    and /v1/logs. Header values are secrets, so they are written as ${file:/run/secrets/name}
+    references and never appear in the config, a log line or an API response."""
+
+    endpoint: str | None = None
+    protocol: Literal["http/protobuf", "http/json"] = "http/protobuf"
+    headers: dict[str, SecretStr] = Field(default_factory=dict)
+    ca_file: str | None = None  # a private CA bundle that signs the collector's certificate
+    client_cert_file: str | None = None  # mutual TLS: the certificate and its key
+    client_key_file: str | None = None
+    allow_plaintext: bool = False  # http to a host that is not loopback
+    signals: list[Literal["metrics", "logs"]] = Field(default_factory=lambda: ["metrics", "logs"])
+    interval: float = Field(default=60.0, ge=1.0, le=3600.0)
+    max_batch_points: int = Field(default=2000, ge=1, le=20000)
+    settle_s: float = Field(default=30.0, ge=0.0, le=3600.0)
+    timeout_s: float = Field(default=15.0, ge=1.0, le=120.0)
+    include_audit: bool = False
+    resource_filter: list[str] = Field(default_factory=list)
+
+    @property
+    def enabled(self) -> bool:
+        return self.endpoint is not None
+
+    @field_validator("endpoint")
+    @classmethod
+    def _endpoint(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from urllib.parse import urlsplit
+        parts = urlsplit(value.strip())
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError("export.otlp.endpoint must be an http or https URL")
+        if parts.username is not None or parts.password is not None or parts.query                 or parts.fragment:
+            raise ValueError("export.otlp.endpoint must not carry credentials, a query or a "
+                             "fragment; put credentials in export.otlp.headers")
+        return value.strip().rstrip("/")
+
+    @field_validator("headers")
+    @classmethod
+    def _headers(cls, value: dict[str, SecretStr]) -> dict[str, SecretStr]:
+        for name, secret in value.items():
+            if not _HEADER_NAME.match(name) or name.lower() in _MANAGED_HEADERS:
+                raise ValueError(f"export.otlp.headers: {name[:32]!r} is not a usable header name")
+            text = secret.get_secret_value()
+            if not text or any(ord(c) < 32 or ord(c) == 127 for c in text):
+                raise ValueError(f"export.otlp.headers.{name} must be a non-empty single line")
+        return value
+
+    @field_validator("resource_filter")
+    @classmethod
+    def _kinds(cls, value: list[str]) -> list[str]:
+        bad = [k for k in value if k not in EXPORT_KINDS]
+        if bad:
+            raise ValueError(f"export.otlp.resource_filter: unknown kind {bad[0][:32]!r}")
+        return value
+
+    @field_validator("signals")
+    @classmethod
+    def _signals(cls, value: list[str]) -> list[str]:
+        if not value or len(set(value)) != len(value):
+            raise ValueError("export.otlp.signals must list metrics, logs or both, once each")
+        return value
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "OtlpExportConfig":
+        if self.endpoint is None:
+            return self
+        from urllib.parse import urlsplit
+        host = urlsplit(self.endpoint)
+        loopback = host.hostname in ("localhost", "127.0.0.1", "::1")
+        if host.scheme == "http" and not loopback and not self.allow_plaintext:
+            raise ValueError("export.otlp.endpoint uses http to a host that is not loopback; "
+                             "use https, or set allow_plaintext to accept that the data and the "
+                             "headers cross the network unencrypted")
+        if (self.client_cert_file is None) != (self.client_key_file is None):
+            raise ValueError("export.otlp.client_cert_file and client_key_file go together")
+        return self
+
+
+class ExportConfig(Strict):
+    otlp: OtlpExportConfig = Field(default_factory=OtlpExportConfig)
+
+
 class ForecastSettings(Strict):
     lookback_days: float = 7.0  # history window fitted
     min_points: int = 24  # hourly buckets required before projecting
@@ -886,6 +979,7 @@ class Defaults(Strict):
 class Config(Strict):
     server: ServerConfig = Field(default_factory=ServerConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    export: ExportConfig = Field(default_factory=ExportConfig)
     defaults: Defaults = Field(default_factory=Defaults)
     forecast: ForecastSettings = Field(default_factory=ForecastSettings)
     discovery: DiscoverySettings = Field(default_factory=DiscoverySettings)

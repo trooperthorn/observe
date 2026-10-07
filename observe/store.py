@@ -85,6 +85,7 @@ class Store:
         # How long an unconfirmed link stays drawn (config `map.stale_days`). The map tables are
         # rebuilt inside write units that have no config, so the value lives here.
         self.map_stale_days = 90
+        self.exporter: Any = None  # the OTLP exporter when it is on (observe/otlp/export.py)
 
     @classmethod
     def from_config(cls, config: Any, plugins: LoadedPlugins | None = None) -> "Store":

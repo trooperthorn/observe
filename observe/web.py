@@ -1441,6 +1441,20 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             for name, level in sorted(last.detail.get("components", {}).items()):
                 comp.append(f'observe_host_component_state{{{labels},component="{_label(name)}"}} '
                             f"{_COMPONENT_NUM[level]}")
-        return "\n".join(lines + values + eff + fcl + grp + age + comp) + "\n"
+        export: list[str] = []
+        exporter = getattr(store, "exporter", None)
+        if exporter is not None:
+            s = exporter.stats
+            for name, kind, text, value in (
+                    ("sent_total", "counter", "Points and records the OTLP collector accepted.",
+                     s.sent),
+                    ("failed_total", "counter", "OTLP requests that failed.", s.failed),
+                    ("dropped_total", "counter", "Points and records skipped after a final "
+                     "refusal.", s.dropped),
+                    ("lag_seconds", "gauge", "Seconds the OTLP export is behind.", s.lag_s)):
+                export += [f"# HELP observe_export_{name} {text}",
+                           f"# TYPE observe_export_{name} {kind}",
+                           f"observe_export_{name} {value}"]
+        return "\n".join(lines + values + eff + fcl + grp + age + comp + export) + "\n"
 
     return app

@@ -13,6 +13,13 @@
 #   password_file: /run/secrets/observe_db_password
 #   timescaledb: auto   # auto uses TimescaleDB when the database has it; on requires it; off never
 
+# Optional OTLP export to a collector (README, "Exporting to an OpenTelemetry collector").
+# export:
+#   otlp:
+#     endpoint: https://collector.example.net:4318
+#     headers:
+#       Authorization: ${file:/run/secrets/otlp_authorization}
+
 server:
   listen: 0.0.0.0
   port: 8080

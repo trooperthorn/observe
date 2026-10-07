@@ -152,6 +152,17 @@ WinRM password.
 volume) holds hostnames, check messages, and values, not credentials. Protect it like the
 config, and keep the PostgreSQL password file under `./secrets`, not in the config.
 
+**OTLP export leaves the lab.** When `export.otlp.endpoint` is set, Observe sends every sample
+and host event (and the audit log if `include_audit` is on) to that collector: hostnames, metric
+names, values and event titles. The endpoint comes only from the configuration file, never from
+an API call, so a session or a token cannot point the exporter at another host. Header values
+are `${file:...}` secrets, sent only in the request, and the exporter logs the status code and
+the exception class and never a header, a URL or an exception message. Plain `http` to a
+non-loopback host needs an explicit `allow_plaintext`. Redirects are not followed, so a
+collector cannot bounce the bearer token to another host. Certificate checking cannot be turned
+off. A wrong token drops batches (4xx is final), which the drop counter and the log show. The
+status route is admin only and shows no header.
+
 **Alert payloads leave the lab.** A public ntfy topic or webhook receives
 monitor names and messages. Use a self-hosted or authenticated target if that
 matters.

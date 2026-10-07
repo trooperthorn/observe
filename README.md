@@ -918,6 +918,7 @@ adapter and no deprecation period; use the table below. The schema is `docs/open
 | `GET /api/v2/unifi/devices`, `/unifi/clients`, `/unifi/cameras` | the UniFi plugin's devices, clients (`site`, `connected`, `q`) and Protect cameras |
 | `GET /api/v2/pockethernet/reports`, `/reports/{source}/{report_id}`, `/jacks/{key}` | the Pockethernet plugin's field reports and jacks |
 | `GET /api/v2/audit`, `/admin/keys`, `/admin/users`, `/admin/config` | admin only: the audit log, keys by prefix, users, and the effective configuration with secrets shown only as set or not set |
+| `GET /api/v2/admin/exporter` | admin only: the OTLP exporter's counters, lag and last error |
 | `GET /api/v2/admin/settings/tiers`, `/retention`, `/recheck`, `/rules`, `/storage` | admin only: the polling, retention, re-check and rule settings, and the storage backend status (backend, TimescaleDB, last compaction and rollup runs) |
 | `GET /api/v2/control/commands`, `/control/capabilities` | admin only: the control plugin's signed command history, and what a host can be asked to do |
 
@@ -941,6 +942,34 @@ seconds, the 5 minute level under an hour, the hourly level under a day and the 
 that, moving to a coarser level when the finer one no longer holds the start of the range. It
 returns min, max and average for a summarised level, at most 1,000 points per series (the step is
 raised to fit) and at most 50 series.
+
+## Exporting to an OpenTelemetry collector
+
+Observe can forward what it stores to an OTLP/HTTP collector. It is off by default. Add a block
+like this to the configuration:
+
+```yaml
+export:
+  otlp:
+    endpoint: https://collector.example.net:4318   # Observe adds /v1/metrics and /v1/logs
+    protocol: http/protobuf                         # or http/json
+    headers:
+      Authorization: ${file:/run/secrets/otlp_authorization}   # the file holds "Bearer <token>"
+    signals: [metrics, logs]
+    interval: 60            # seconds between passes
+    max_batch_points: 2000  # per request
+    include_audit: false    # true also sends the audit log as log records
+    resource_filter: []     # for example [host, network_device]; empty sends every kind
+    # ca_file: /run/secrets/collector_ca.pem          # a private CA
+    # client_cert_file and client_key_file: mutual TLS
+```
+
+Requests are gzip compressed. Observe remembers its position in the database, so a restart or a
+collector outage loses nothing that raw retention still holds. Plain `http` is accepted only for
+a loopback address unless `allow_plaintext: true`. A refused batch (any 4xx except 429) is
+skipped and counted, so check the counters after changing the token: `GET /api/v2/admin/exporter`
+(admin) and `observe_export_sent_total`, `_failed_total`, `_dropped_total` and
+`observe_export_lag_seconds` in `/metrics`.
 
 ## Not implemented
 

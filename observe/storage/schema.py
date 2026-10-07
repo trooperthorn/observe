@@ -301,6 +301,15 @@ MAP_TABLES = (
 ) WITHOUT ROWID""",
 )
 
+# The OTLP exporter's position in each signal (docs/DATA-API-DESIGN.md section 6.6): the last
+# sample (millisecond, series id), host event id or audit id it sent, kept in the database so a
+# restart resumes where it stopped.
+EXPORT_TABLES = (
+    """CREATE TABLE IF NOT EXISTS export_cursor (
+  signal TEXT PRIMARY KEY, ts INTEGER NOT NULL, last_id INTEGER NOT NULL, updated REAL NOT NULL
+)""",
+)
+
 # Read tokens (docs/DATA-API-DESIGN.md section 4.7): a key of scope wpr carries the role it reads
 # with, viewer or operator. The column is empty for every other scope.
 def _add_key_role(db: sqlite3.Connection) -> None:
@@ -336,6 +345,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     17: ROLLUP_TABLES + METRIC_VIEWS,
     18: MAP_TABLES,
     19: KEY_ROLE_TABLES,
+    20: EXPORT_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

@@ -26,6 +26,7 @@ import uvicorn
 from . import __version__, compat
 from .alerts import Alerter
 from .config import ConfigError, load_config
+from .otlp.export import Exporter
 from .plugins import PluginError, load_plugins
 from .scheduler import Scheduler
 from .store import Store
@@ -65,6 +66,11 @@ async def _serve(config, plugins) -> None:  # type: ignore[no-untyped-def]
     # The history copy can be long on a small board, so it runs beside polling and the web app
     # and logs its progress instead of holding the start.
     backfill = asyncio.create_task(store.backfill_monitor_series())
+    exporting: asyncio.Task[None] | None = None
+    if config.export.otlp.enabled:
+        store.exporter = Exporter(config.export.otlp, store)
+        exporting = asyncio.create_task(store.exporter.run())
+        log.info("OTLP export to %s", config.export.otlp.endpoint)
     log.info("Observe %s: %d monitors, %d alert targets, listening on %s:%d",
              __version__, len(sched.monitors), len(config.alerts),
              config.server.listen, config.server.port)
@@ -72,7 +78,11 @@ async def _serve(config, plugins) -> None:  # type: ignore[no-untyped-def]
         await server.serve()
     finally:
         backfill.cancel()
-        await asyncio.gather(backfill, return_exceptions=True)
+        tasks = [backfill]
+        if exporting is not None:
+            exporting.cancel()
+            tasks.append(exporting)
+        await asyncio.gather(*tasks, return_exceptions=True)
         await sched.stop()
         store.close()
 
