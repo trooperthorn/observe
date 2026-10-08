@@ -21,7 +21,7 @@ from observe.scheduler import Scheduler
 from observe.storage import open_storage
 from observe.state import MonitorState, State, Transition
 
-from .conftest import make_config
+from .conftest import enqueue_stub, make_config
 from .dbq import settle
 from .fakes.pg_fake import PgFakeStorage
 from .test_storage import _store_on, live_pg
@@ -89,7 +89,7 @@ class Env:
         async def record(monitor, tr):
             self.sent.append((monitor.slug, tr.current.value, tr.degraded))
 
-        self.sched.alerter.notify = record
+        self.sched.alerter.enqueue = enqueue_stub(record)
 
     async def poll(self, slug, advance=0.0):
         self.clock.now += advance
@@ -502,7 +502,7 @@ async def test_a_problem_that_was_alerted_before_a_restart_is_not_alerted_again(
     async def record(monitor, tr):
         sent.append(tr.current.value)
 
-    fresh.alerter.notify = record
+    fresh.alerter.enqueue = enqueue_stub(record)
     fresh.checks["a"] = env.probes["a"]
     await fresh.restore(fresh.by_slug["a"])
     assert fresh.states["a"].state is State.DOWN and fresh.states["a"].alert_open
@@ -527,7 +527,7 @@ async def test_a_problem_whose_alert_never_went_out_alerts_after_a_restart(stora
     async def record(monitor, tr):
         sent.append(tr.current.value)
 
-    fresh.alerter.notify = record
+    fresh.alerter.enqueue = enqueue_stub(record)
     fresh.checks["a"] = env.probes["a"]
     await fresh.restore(fresh.by_slug["a"])
     await fresh.poll_once(fresh.by_slug["a"])

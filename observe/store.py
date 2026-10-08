@@ -272,11 +272,14 @@ class Store:
     async def outbox_due(self, now: float, limit: int = 100) -> list[tuple[Any, ...]]:
         """Queued alerts that are due, oldest first: (id, target, body, created, attempts). An
         alert is due only when no older alert of its target is still waiting for its next try,
-        so the alerts of a target are delivered in the order they were queued."""
+        so the alerts of a target are delivered in the order they were queued. `limit` applies
+        to each target, so a large backlog for one target never delays another's alerts."""
         return await self.fetch(
-            "SELECT id, target, body, created, attempts FROM alert_outbox o WHERE next_at<=? "
-            "AND NOT EXISTS (SELECT 1 FROM alert_outbox p WHERE p.target=o.target "
-            "AND p.id<o.id AND p.next_at>?) ORDER BY id LIMIT ?", (now, now, limit))
+            "SELECT id, target, body, created, attempts FROM ("
+            "SELECT id, target, body, created, attempts, "
+            "ROW_NUMBER() OVER (PARTITION BY target ORDER BY id) AS rn FROM alert_outbox o "
+            "WHERE next_at<=? AND NOT EXISTS (SELECT 1 FROM alert_outbox p WHERE p.target=o.target "
+            "AND p.id<o.id AND p.next_at>?)) AS due WHERE rn<=? ORDER BY id", (now, now, limit))
 
     async def outbox_done(self, ids: list[int]) -> None:
         """Remove alerts that were delivered, or that are no longer wanted."""

@@ -320,6 +320,8 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
                     outcome=outcome)
             except IdempotencyConflict:
                 return await conflict(request, prefix, bound)
+            except StorageBusy:
+                raise  # a refusal, not a failure: no audit row, push() answers 503 at once
             except Exception as err:
                 # Nothing was stored, so record that the batch failed partway.
                 await audit.record(store, "ingest_failed", actor=prefix, method=request.method,
@@ -372,6 +374,8 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
                 except LogRejected as err:
                     rejects.add(str(err)[:200] or "the record was refused")
                     continue
+                except StorageBusy:
+                    raise  # a refusal, not a plugin failure: answered 503 without an audit row
                 except Exception as err:
                     await audit.record(store, "plugin_failed", actor=prefix, method=request.method,
                                        path=request.url.path, status=500,

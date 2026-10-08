@@ -69,3 +69,15 @@ if os.environ.get("OBSERVE_REQUIRE_SERVICES") == "1":
 
 needs_snmpd = pytest.mark.skipif(not _snmpd_up(), reason="test snmpd not running")
 needs_mqtt = pytest.mark.skipif(not _mqtt_up(), reason="test mosquitto not running")
+
+
+def enqueue_stub(record):
+    """Replace Alerter.enqueue by a recorder: `record(monitor, tr)` runs when the scheduler hands
+    over an alert, and the delivery it returns does nothing."""
+    async def enqueue(monitor, tr):
+        await record(monitor, tr)
+
+        async def delivered() -> None:
+            return None
+        return delivered
+    return enqueue

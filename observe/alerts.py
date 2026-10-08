@@ -6,7 +6,8 @@ delivery is logged, recorded on the dashboard (last_error per target) and retrie
 delay, so an outage of the target or a restart of Observe loses nothing. Delivery is at least
 once: a crash between the target's answer and the delete sends that one alert again. An alert
 older than ALERT_MAX_AGE_S is dropped, because a page about a day-old state is noise. Without a
-store (the one-shot check command and a few tests) an alert is tried twice and then dropped.
+store (a few tests) an alert is tried twice and then dropped. The one-shot check command binds an
+in-memory store, so its alerts get one attempt and are lost when the process exits.
 Alerts of one target are delivered in the order they were queued, so a recovery never overtakes
 the problem it ends. Nothing here blocks polling.
 """
@@ -19,7 +20,7 @@ import logging
 import smtplib
 import ssl
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from email.message import EmailMessage
 from typing import TYPE_CHECKING, Any
 
@@ -75,30 +76,44 @@ class Alerter:
             a.name: {"type": a.type, "sent": 0, "last_error": None} for a in config.alerts
         }
 
-    async def notify(self, monitor: Any, tr: Transition) -> None:
+    def _targets(self, monitor: Any, tr: Transition) -> list[Any]:
         if not tr.alertable:
-            return
+            return []
         # A degraded notice (the start or the end of a fast re-check) goes only to a target that
         # opted in with notify_degraded, whatever its notify_on says.
-        targets = [a for a in self.config.alerts
-                   if (monitor.alerts is None or a.name in monitor.alerts)
-                   and (a.notify_degraded if tr.degraded else tr.current.value in a.notify_on)]
-        if self.store is None:
+        return [a for a in self.config.alerts
+                if (monitor.alerts is None or a.name in monitor.alerts)
+                and (a.notify_degraded if tr.degraded else tr.current.value in a.notify_on)]
+
+    async def enqueue(self, monitor: Any, tr: Transition) -> Callable[[], Awaitable[Any]]:
+        """Write the alert to the outbox and return the coroutine function that delivers it.
+        The caller can therefore record that the alert is open only once it is queued, so a
+        crash in between repeats an alert instead of losing it. Without a store, or when the
+        outbox can not take the alert, the returned function delivers it directly."""
+        targets = self._targets(monitor, tr)
+
+        async def nothing() -> None:
+            return None
+
+        async def direct() -> None:
             await asyncio.gather(*(self._deliver(a, monitor, tr) for a in targets))
-            return
+
         if not targets:
-            return
-        data = payload(monitor, tr)
-        body = json.dumps(data, separators=(",", ":"))
+            return nothing
+        if self.store is None:
+            return direct
+        body = json.dumps(payload(monitor, tr), separators=(",", ":"))
         try:
             await self.store.outbox_add([(a.name, body) for a in targets], self.clock())
         except Exception:  # noqa: BLE001 - an alert is never dropped because the queue failed
             # The outbox could not take it, so try the targets directly (twice, as without a
             # store) rather than lose the alert.
             log.exception("could not queue the alert for %s, delivering it directly", monitor.name)
-            await asyncio.gather(*(self._deliver(a, monitor, tr) for a in targets))
-            return
-        await self.flush()
+            return direct
+        return self.flush
+
+    async def notify(self, monitor: Any, tr: Transition) -> None:
+        await (await self.enqueue(monitor, tr))()
 
     def bind(self, store: Store | None) -> None:
         """Use `store` for the outbox, unless one is already bound."""

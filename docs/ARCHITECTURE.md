@@ -199,13 +199,21 @@ sets `next_at` to `retry_delay(attempts)` (10 s doubling to 300 s). `Alerter.run
 `Scheduler.start`, flushes every 5 s, which also delivers what a previous run left behind. A row
 for a target that is no longer configured, or older than 24 h, is dropped with a log line.
 Delivery is at least once: a crash between the target's answer and the delete repeats that alert.
-The Scheduler binds its store to the alerter; without a store (the one-shot check) an alert is
-tried twice and dropped.
+The Scheduler binds its store to the alerter. Without a store (a few tests) an alert is tried
+twice and dropped. The one-shot check command builds a Scheduler on an in-memory store, so it
+gets a single attempt and a failed alert is lost when the process exits.
 
-`Scheduler._set_open` writes `alert_open` before the alert is queued, and `restore` reads it: a
-monitor with an open alert comes back in that state with `alert_open` set, so a restart does not
-alert again and the recovery still does. The two writes are separate units, so a crash between
-them loses the one problem alert; the recovery alert is still sent.
+`Scheduler._send` queues the alert with `Alerter.enqueue` first, then `_set_open` writes
+`alert_open`, then delivery runs in the background; `restore` reads the mark, so a monitor with an
+open alert comes back in that state with `alert_open` set. A restart does not alert again and the
+recovery still does. The two writes are separate units, but the outbox row comes first, so a crash
+between them repeats the problem alert after the restart instead of losing it. Stopping the
+scheduler cancels delivery tasks; their alerts are already in the outbox and go out on the next
+start. `outbox_due` limits each target to 100 rows, so one target's backlog never delays another's.
+
+A host or field push refused with `StorageBusy` is answered 503 at once and writes no audit row,
+so a refused push adds no unit to the full queue. Writes made by plugin collectors run with
+`SERVER_WORK` set and are critical like the other pollers, so a full queue never drops a cycle.
 
 `WriteGate` (`observe/storage/base.py`) counts the units submitted to the single writer from
 submission until they finish. A submission past `WRITE_QUEUE_LIMIT` (256) raises `StorageBusy`

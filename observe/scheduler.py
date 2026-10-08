@@ -46,6 +46,7 @@ from .otelnames import legacy_rule_metric, rule_metric
 from .rollup import Rollup
 from .state import MonitorState, State, Transition
 from .storage import series
+from .storage.base import SERVER_WORK
 from .store import MONITOR_SCOPE, Store
 
 log = logging.getLogger("observe.scheduler")
@@ -313,8 +314,14 @@ class Scheduler:
         except Exception:  # noqa: BLE001 - a storage fault must not stop the alert itself
             log.exception("could not store the alert state of %s", monitor.name)
 
-    def _send(self, monitor: Any, tr: Transition) -> None:
-        task = asyncio.create_task(self.alerter.notify(monitor, tr))
+    async def _send(self, monitor: Any, tr: Transition, mark: bool | None = None) -> None:
+        """Queue the alert in the outbox, then (mark True) record it as open or (mark False)
+        clear that record, then deliver in the background. The outbox row comes first, so a
+        crash leaves a repeated alert at worst, never a lost one."""
+        deliver = await self.alerter.enqueue(monitor, tr)
+        if mark is not None:
+            await self._set_open(monitor, tr if mark else None)
+        task = asyncio.create_task(deliver())
         self._pending_alerts.add(task)  # hold a reference until delivery finishes
         task.add_done_callback(self._alert_done)
 
@@ -326,7 +333,7 @@ class Scheduler:
     async def _on_transition(self, monitor: Any, tr: Transition) -> None:
         st = self.states[monitor.slug]
         if tr.degraded and tr.current is State.WARN:
-            self._send(monitor, tr)  # only targets that opted in to degraded notices get it
+            await self._send(monitor, tr)  # only targets that opted in to degraded notices get it
         elif tr.current in _PROBLEM:
             blocker = self.rollup.blocking_parent(monitor.slug)
             if blocker is None and monitor.depends_on:
@@ -338,15 +345,13 @@ class Scheduler:
             elif holding:
                 tr.message += f" [alert held: {holding} is being re-checked]"
             else:
-                await self._set_open(monitor, tr)
-                self._send(monitor, tr)
+                await self._send(monitor, tr, mark=True)
         elif tr.current is State.UP:
             if st.alert_open:
-                await self._set_open(monitor, None)
                 tr.degraded = False
-                self._send(monitor, tr)
+                await self._send(monitor, tr, mark=False)
             elif tr.degraded:
-                self._send(monitor, tr)
+                await self._send(monitor, tr)
 
         log.info("%s: %s -> %s (%s)", monitor.name, tr.previous.value, tr.current.value,
                  tr.message)
@@ -376,8 +381,7 @@ class Scheduler:
             tr = Transition(cst.state, cst.state, time.time(),
                             f"still {cst.state.value} after {monitor.name} recovered: "
                             f"{res.message}")
-            await self._set_open(child, tr)
-            self._send(child, tr)
+            await self._send(child, tr, mark=True)
             await self.store.record_event(child.slug, tr)
 
     # --------------------------------------------------------------- forecast
@@ -451,6 +455,7 @@ class Scheduler:
         """Run one plugin collector forever. A failure is logged once per streak."""
         label = f"{plugin}.{collector.name}"
         failing = False
+        SERVER_WORK.set(True)  # this task's own context: its writes are never refused as busy
         while True:
             try:
                 await asyncio.wait_for(collector.run(self.store), collector.timeout)

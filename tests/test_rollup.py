@@ -9,7 +9,7 @@ from observe.checks.base import CheckResult, Result
 from observe.scheduler import Scheduler
 from observe.store import Store
 
-from .conftest import make_config
+from .conftest import enqueue_stub, make_config
 
 
 class Scripted:
@@ -39,7 +39,7 @@ def build(monitors, f2d=1):
     async def record(monitor, tr):
         sent.append((monitor.slug, tr.current.value, tr.message))
 
-    sched.alerter.notify = record
+    sched.alerter.enqueue = enqueue_stub(record)
     for slug in sched.checks:
         sched.checks[slug] = Scripted()
     return sched, sent

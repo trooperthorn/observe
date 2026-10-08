@@ -17,7 +17,7 @@ from observe.scheduler import Scheduler
 from observe.store import Store
 from observe.web import create_app
 
-from .conftest import make_config
+from .conftest import enqueue_stub, make_config
 
 PASSWORD = "correct horse battery"
 CHASSIS = "aa:bb:cc:dd:ee:01"
@@ -257,7 +257,7 @@ class Web:
 
         async def spy(*a: Any, **k: Any) -> None:
             self.calls.append(a)
-        self.alerter.notify = spy  # type: ignore[method-assign]
+        self.alerter.enqueue = enqueue_stub(spy)  # type: ignore[method-assign]
         self.alerter._deliver = spy  # type: ignore[method-assign]
         self.sched = Scheduler(self.cfg, self.store, self.alerter)
         self.client = TestClient(create_app(self.cfg, self.store, self.sched, self.alerter),

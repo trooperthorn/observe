@@ -18,7 +18,7 @@ from observe.scheduler import Scheduler
 from observe.store import Store
 from observe.web import create_app
 
-from .conftest import make_config
+from .conftest import enqueue_stub, make_config
 
 T0 = 10_000.0
 COMPONENTS = [{"source": "hostwatch.collector.hwmon", "metric": "hw.temperature", "direction": "above",
@@ -69,7 +69,7 @@ class Env:
         async def record(monitor, tr):
             self.sent.append((monitor.slug, tr.current.value))
 
-        self.sched.alerter.notify = record
+        self.sched.alerter.enqueue = enqueue_stub(record)
 
     async def push(self, **kw):
         await self.store.ingest_batch(batch(ts=self.clock.now, **kw), {}, now=self.clock.now)

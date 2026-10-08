@@ -11,6 +11,7 @@ placeholders; a backend whose driver differs adapts it.
 from __future__ import annotations
 
 import threading
+from contextvars import ContextVar
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Executor, Future
 from contextlib import contextmanager
@@ -42,6 +43,10 @@ class StorageTimeout(StorageError):
     """A read ran past its deadline and was interrupted."""
 
 
+# True inside the server's own background work (a plugin collector): its writes are critical, as
+# a poller's already are, because a refused one would drop that cycle's reading.
+SERVER_WORK: ContextVar[bool] = ContextVar("observe_server_work", default=False)
+
 # Write units that may wait for the single writer at once (docs/DATA-API-DESIGN.md section 9).
 WRITE_QUEUE_LIMIT = 256
 
@@ -70,7 +75,7 @@ class WriteGate:
         denial), produced by a bounded number of pollers and by requests that are already being
         answered, so it can not grow without bound the way a flood of pushes can."""
         with self._lock:
-            if not critical and self._pending >= self.limit:
+            if not (critical or SERVER_WORK.get()) and self._pending >= self.limit:
                 raise StorageBusy(f"the write queue is full ({self.limit} units waiting)")
             self._pending += 1
         try:

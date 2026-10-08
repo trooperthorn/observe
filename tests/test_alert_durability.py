@@ -349,6 +349,94 @@ def test_ingest_answers_503_with_retry_after_while_the_writer_queue_is_full(tmp_
         env.close()
 
 
+def test_a_refused_push_from_a_warm_key_is_a_503_that_adds_no_write(tmp_path):
+    """Audit finding: with the key already verified, the refusal comes from ingest_batch itself.
+    It used to be audited as a 500 through a critical write that waited behind the full queue."""
+    env = IngestEnv(tmp_path)
+    try:
+        key = env.key("nas01")
+        assert env.push(simple(), key).status_code == 200  # verifies the key, warms last_used
+        before = len(env.rows("SELECT id FROM audit"))
+        gate = env.store.storage._gate
+        gate.limit = 2
+        release = threading.Event()
+        held = [gate.submit(env.store.storage._writer, release.wait, 30) for _ in range(2)]
+        seen: list[int] = []
+        real = gate.submit
+
+        def spy(*a, **k):
+            seen.append(gate.pending)
+            return real(*a, **k)
+
+        gate.submit = spy  # type: ignore[method-assign]
+        r = env.push(simple(), key)
+        gate.submit = real  # type: ignore[method-assign]
+        assert r.status_code == 503 and r.headers["retry-after"] == "5"
+        assert seen == [2] and gate.pending == 2  # the one refused submission, no audit unit
+        release.set()
+        for f in held:
+            f.result(timeout=10)
+        assert len(env.rows("SELECT id FROM audit")) == before  # no ingest_failed row
+        assert env.rows("SELECT id FROM audit WHERE kind='ingest_failed'") == []
+    finally:
+        env.close()
+
+
+async def test_a_collectors_writes_are_not_refused_while_the_queue_is_full(tmp_path):
+    cfg = config()
+    store = Store(str(tmp_path / "o.db"))
+    store.storage._gate._pending = store.storage._gate.limit
+    wrote: list[int] = []
+
+    class Collector:
+        name, interval, timeout = "c", 60, 5
+
+        async def run(self, st):
+            await st.storage.write(lambda db: wrote.append(1))
+            raise asyncio.CancelledError
+
+    sched = Scheduler(cfg, store, Alerter(cfg, None, Clock()))
+    with pytest.raises(asyncio.CancelledError):
+        await sched._collector_loop("p", Collector())
+    assert wrote == [1]
+    store.close()
+
+
+async def test_the_open_mark_is_written_after_the_alert_is_queued(tmp_path):
+    cfg, clock = config(), Clock()
+    store = Store(str(tmp_path / "o.db"))
+    sched = Scheduler(cfg, store, Alerter(cfg, None, clock), clock=clock)
+    order: list[str] = []
+    add, mark = store.outbox_add, store.set_alert_open
+
+    async def add_spy(*a, **k):
+        order.append("outbox")
+        return await add(*a, **k)
+
+    async def mark_spy(*a, **k):
+        order.append("mark")
+        return await mark(*a, **k)
+
+    store.outbox_add, store.set_alert_open = add_spy, mark_spy  # type: ignore[method-assign]
+    sched.alerter._send = Target().send  # type: ignore[method-assign]
+    mon = cfg.monitors[0]
+    sched.checks[mon.slug] = Failing()
+    await sched.poll_once(mon)
+    await asyncio.gather(*sched._pending_alerts)
+    assert order[:2] == ["outbox", "mark"]
+    store.close()
+
+
+async def test_one_targets_backlog_does_not_hide_another_targets_due_alerts(tmp_path):
+    store = Store(str(tmp_path / "o.db"))
+    await store.outbox_add([("slow", "{}")] * 150 + [("fast", "{}")], T0)
+    due = await store.outbox_due(T0, limit=100)
+    assert sorted({r[1] for r in due}) == ["fast", "slow"]
+    assert sum(r[1] == "slow" for r in due) == 100
+    assert [r[0] for r in due] == sorted(r[0] for r in due)  # oldest first
+    store.close()
+
+
 @pytest.mark.parametrize("limit", [0, -1])
 def test_the_queue_limit_must_be_positive(limit):
     with pytest.raises(ValueError):
