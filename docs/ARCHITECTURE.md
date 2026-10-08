@@ -646,6 +646,13 @@ Each pushed host has a page at `/host?name=HOST`, linked from the dashboard
 row of its `pushed_host` monitor. It is served by two v2 routes, `GET /api/v2/hosts`
 (one summary row per host, paged by name) and `GET /api/v2/hosts/{name:path}` (host names may contain slashes; the full document), both
 built by `observe/hostview.py` (through `observe/api/hosts.py`, which finds the monitor behind the host and writes the timestamps as RFC 3339) from the newest sample per series in the store.
+The list builds its page in a constant number of statements: `Store.host_list_inputs` reads the host rows, then in one read unit
+the host resources, every latest row, every source status and the warning and critical events of the alert window (the 50 newest per host, by
+`ROW_NUMBER`), and the window, newest-row and silent-series rules of `latest_host` are applied in Python. Measured on 50 hosts with
+alerts, a silent host and a configured component, the list took 414 statements with the per host build and takes 5 now (the same 5 for 10 hosts); the single host
+document `GET /api/v2/hosts/{name}` still reads one host the old way, and a test compares both builds on the same data byte for byte. The list's ETag is the digest of the shown rows without
+`last_seen` and `age_seconds`, plus the 10 second clock bucket, instead of the `hosts`, `metrics` and `events` counters that every batch moves, so a batch that changes nothing the list shows
+leaves the ETag, and the cached body, alone. The digest is rebuilt only when a counter, the scheduler fingerprint or the bucket moved.
 A reading is matched to its section by the scope name `hostwatch.collector.<source>` and the
 OpenTelemetry metric name of docs/DATA-API-DESIGN.md section 3.2, and the point attributes are its
 labels; utilization, charge and wear are ratios from 0 to 1, so the built-in limits and a monitor's
@@ -1082,7 +1089,8 @@ a query costs five); then the ETag. The ETag is built from the route, the full p
 role, the committed counters of the resource's change domains (`Storage.change_seqs`, read from
 memory) and an optional fingerprint of in-memory state: monitors and groups read the scheduler's
 memory, so their fingerprint is `Scheduler.fingerprint`, and a host view shows ages, so its ETag
-also changes every 10 seconds. A matching `If-None-Match` is a 304, and an unchanged page is
+also changes every 10 seconds. A resource may pass `counters=False` so that the declared domains stay
+client metadata and the ETag comes from its fingerprint alone, and the fingerprint may be an async callable (the host list uses both). A matching `If-None-Match` is a 304, and an unchanged page is
 served from a bounded response cache (4 MiB), both before any read connection is borrowed. A
 handler that names a `db` parameter runs on the read pool and receives a read-only connection;
 `StorageBusy` and `StorageTimeout` become a 503 with `Retry-After`, and any other error a 500

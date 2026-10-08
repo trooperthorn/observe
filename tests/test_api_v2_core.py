@@ -312,8 +312,16 @@ def test_unchanged_page_is_a_304_that_opens_no_read_connection(env):
         cached = env.get("/hosts", headers=headers)
         assert cached.status_code == 200 and cached.content == first.content
         assert counter.reads == 0
-        # A change in a domain the page depends on makes a new ETag and a real read.
+        # A batch that changes nothing the list shows keeps the ETag (a 304, still no read).
         env.push(host_batch(ts=START - 4))
+        same = env.get("/hosts", headers={**headers, "If-None-Match": first.headers["etag"]})
+        # Only the digest of the rows is read (host rows and the one list read unit).
+        assert same.status_code == 304 and counter.reads == 2
+        counter.reads = 0
+        # A change the list shows, here a critical event, makes a new ETag and a real read.
+        env.push(host_batch(ts=START - 3, events=[{
+            "kind": "md.failed", "severity": "critical", "source": "journal", "ts": START - 3,
+            "title": "t", "dedup_key": "k", "detail": {}}]))
         fresh = env.get("/hosts", headers={**headers, "If-None-Match": first.headers["etag"]})
         assert fresh.status_code == 200 and fresh.headers["etag"] != first.headers["etag"]
         assert counter.reads > 0
@@ -418,7 +426,7 @@ def test_an_internal_error_hides_its_cause(env, monkeypatch):
         raise RuntimeError("secret detail /etc/passwd")
 
     headers = env.token()
-    monkeypatch.setattr(hosts.HostViews, "view", boom)
+    monkeypatch.setattr(hosts.HostViews, "views", boom)
     env.push(host_batch())
     r = env.get("/hosts", headers=headers)
     assert r.status_code == 500

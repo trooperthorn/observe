@@ -80,7 +80,8 @@ _TAKES_OVER = (f"({_rank_sql('excluded.agent_version')} > {_rank_sql('hosts.agen
 
 
 # The newest point of each series of a host, with its source (scope), metric, labels and unit.
-_LATEST_SQL = ("SELECT sc.name, s.metric, s.attrs, l.value, s.unit, l.ts FROM latest l "
+_LATEST_SQL = ("SELECT sc.name, s.metric, s.attrs, l.value, s.unit, l.ts, s.resource_id "
+               "FROM latest l "
                "JOIN series s ON s.id = l.series_id JOIN scopes sc ON sc.id = s.scope_id ")
 
 
@@ -536,6 +537,66 @@ class Store:
             (host, since, limit))
         return [{"ts": r[0], "kind": r[1], "severity": r[2], "source": r[3], "title": r[4],
                  "detail": json.loads(r[5]), "boot_id": r[6]} for r in rows]
+
+    @staticmethod
+    def _host_list_unit(db: Conn, wanted: dict[str, tuple[float, tuple[tuple[str, str], ...]]],
+                        alert_since: float) -> dict[str, dict[str, Any]]:
+        """Five statements whatever the number of hosts: the host resources, every latest row of
+        them, every source status and the recent warning and critical events."""
+        rids: dict[str, int] = {}
+        for rid, name in db.execute("SELECT id, name FROM resources WHERE kind='host' "
+                                    "ORDER BY id").fetchall():
+            rids.setdefault(name, int(rid))
+        by_rid = {rid: host for host, rid in rids.items() if host in wanted}
+        latest: dict[int, list[Any]] = {}
+        for r in db.execute(_LATEST_SQL + "WHERE s.resource_id IN "
+                            "(SELECT id FROM resources WHERE kind='host') ").fetchall():
+            latest.setdefault(int(r[6]), []).append(r[:6])
+        out: dict[str, dict[str, Any]] = {h: {"samples": [], "sources": {}, "events": []}
+                                           for h in wanted}
+        for rid, host in by_rid.items():
+            since_ms, series_wanted = series.to_ms(wanted[host][0]), wanted[host][1]
+            rows = latest.get(rid, [])
+            # The same three steps as _latest_host_unit: the window, the single newest row when
+            # the window is empty, and each configured series' own newest older row.
+            samples = [r for r in rows if r[5] >= since_ms]
+            if not samples and rows:
+                samples = [max(rows, key=lambda r: r[5])]
+            have = {(r[0], r[1]) for r in samples}
+            for src, metric in series_wanted:
+                if (src, metric) not in have:
+                    samples = samples + [r for r in rows
+                                         if r[0] == src and r[1] == metric and r[5] < since_ms]
+            out[host]["samples"] = [
+                {"source": r[0], "metric": r[1], "labels": json.loads(r[2]), "value": r[3],
+                 "unit": r[4], "ts": r[5] / 1000.0} for r in samples]
+        for host, source, available, reason, updated in db.execute(
+                "SELECT host, source, available, reason, updated FROM host_sources").fetchall():
+            if host in out:
+                out[host]["sources"][source] = {"available": bool(available), "reason": reason,
+                                                "updated": updated}
+        # Of the 50 newest events of a host, only the warnings and criticals inside the alert
+        # window reach the list (the summary shows the alert section, not the event rows).
+        for host, ts, kind, severity, src, title, detail, boot_id in db.execute(
+                "SELECT host, ts, kind, severity, source, title, detail, boot_id FROM ("
+                "SELECT host, ts, kind, severity, source, title, detail, boot_id, id, "
+                "ROW_NUMBER() OVER (PARTITION BY host ORDER BY ts DESC, id DESC) AS rn "
+                "FROM host_events) e WHERE rn <= 50 AND ts >= ? "
+                "AND severity IN ('warning','critical') ORDER BY host, ts DESC, id DESC",
+                (alert_since,)).fetchall():
+            if host in out:
+                out[host]["events"].append(
+                    {"ts": ts, "kind": kind, "severity": severity, "source": src, "title": title,
+                     "detail": json.loads(detail), "boot_id": boot_id})
+        return out
+
+    async def host_list_inputs(self, wanted: dict[str, tuple[float, tuple[tuple[str, str], ...]]],
+                               alert_since: float) -> dict[str, dict[str, Any]]:
+        """What the host list needs for the hosts in `wanted` (host -> oldest sample time and the
+        configured series), in a constant number of statements. Per host the result has the
+        `samples` latest_host would return, the `sources` of host_sources and the `events`
+        host_events would return that can raise an alert."""
+        return await self.storage.read(lambda db: self._host_list_unit(db, wanted, alert_since))
 
     async def write_audit(self, kind: str, actor: str = "", method: str = "", path: str = "",
                           status: int = 0, remote: str = "",

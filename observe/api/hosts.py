@@ -9,6 +9,8 @@ timestamps of the result as RFC 3339 strings.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from fastapi import Query
@@ -57,40 +59,86 @@ class HostViews:
     def names(self, rows: dict[str, dict[str, Any]]) -> list[str]:
         return sorted({*rows, *self.pushed, *self.ha_hosts, *self.snmp_hosts})
 
+    def stale_after(self, host: str, row: dict[str, Any] | None) -> float:
+        """How long the host may stay silent before it reads as stale."""
+        config = self.ctx.config
+        mon = self.pushed.get(host)
+        if mon is not None:
+            return mon.stale_after or 3 * config.effective(mon, "interval")
+        ha_mon = self.ha_hosts.get(host) or self.snmp_hosts.get(host)
+        if ha_mon is not None:
+            return 3 * config.effective(ha_mon, "interval")
+        return 3 * config.defaults.interval
+
+    def _monitor_state(self, mon: Any) -> dict[str, Any] | None:
+        if mon is None:
+            return None
+        sched = self.ctx.scheduler
+        st = sched.states[mon.slug]
+        effective, blocker = sched.rollup.effective(mon.slug)
+        return {"slug": mon.slug, "name": mon.name, "state": st.state.value,
+                "effective_state": effective, "blocked_by": blocker}
+
+    def _stub(self, host: str) -> dict[str, Any] | None:
+        """The row of a host listed in the YAML to which no batch has ever arrived."""
+        if host not in self.pushed and host not in self.ha_hosts and host not in self.snmp_hosts:
+            return None
+        return {"host": host, "platform": "", "agent_version": "", "last_seen": 0.0,
+                "confirmed": 1}
+
     async def view(self, host: str, row: dict[str, Any] | None) -> dict[str, Any] | None:
         ctx = self.ctx
-        config, store, sched = ctx.config, ctx.store, ctx.scheduler
+        store = ctx.store
         mon = self.pushed.get(host)
         seen = row is not None
-        ha_mon = (self.ha_hosts.get(host) or self.snmp_hosts.get(host)) if mon is None else None
         if row is None:
-            if mon is None and ha_mon is None:
+            row = self._stub(host)
+            if row is None:
                 return None
-            # Listed in the YAML but no batch has ever arrived.
-            row = {"host": host, "platform": "", "agent_version": "", "last_seen": 0.0,
-                   "confirmed": 1}
             data = None
         now = ctx.now
-        if mon is not None:
-            stale_after = mon.stale_after or 3 * config.effective(mon, "interval")
-        elif ha_mon is not None:
-            stale_after = 3 * config.effective(ha_mon, "interval")
-        else:
-            stale_after = 3 * config.defaults.interval
+        stale_after = self.stale_after(host, row)
         if seen:
             data = await store.latest_host(
                 host, window=max(stale_after, LATEST_WINDOW_S), now=now,
                 series=tuple((c.source, c.metric) for c in mon.components) if mon else ())
-        state = None
-        if mon is not None:
-            st = sched.states[mon.slug]
-            effective, blocker = sched.rollup.effective(mon.slug)
-            state = {"slug": mon.slug, "name": mon.name, "state": st.state.value,
-                     "effective_state": effective, "blocked_by": blocker}
         overrides = {(c.source, c.metric): c for c in mon.components} if mon else {}
         return hostview.build_host_view(
             row, data, await store.host_sources(host),
-            await store.host_events(host, limit=50), now, stale_after, mon, overrides, state)
+            await store.host_events(host, limit=50), now, stale_after, mon, overrides,
+            self._monitor_state(mon))
+
+    async def views(self, names: list[str], rows: dict[str, dict[str, Any]]
+                    ) -> list[dict[str, Any]]:
+        """The views of `names` in the same order, from a constant number of statements. Each
+        view equals what `view` returns, except that the events hold only the alert-raising ones,
+        which is all the list summary reads."""
+        ctx = self.ctx
+        now = ctx.now
+        wanted: dict[str, tuple[float, tuple[tuple[str, str], ...]]] = {}
+        for name in names:
+            if name in rows:
+                mon = self.pushed.get(name)
+                window = max(self.stale_after(name, rows[name]), LATEST_WINDOW_S)
+                wanted[name] = (now - window, tuple((c.source, c.metric) for c in mon.components)
+                                if mon else ())
+        found = await ctx.store.host_list_inputs(
+            wanted, now - hostview.ALERT_WINDOW_S) if wanted else {}
+        out: list[dict[str, Any]] = []
+        for name in names:
+            row = rows.get(name)
+            mon = self.pushed.get(name)
+            if row is None:
+                row = self._stub(name)
+                if row is None:
+                    continue
+            got = found.get(name)
+            data = {"samples": got["samples"]} if got is not None and name in rows else None
+            overrides = {(c.source, c.metric): c for c in mon.components} if mon else {}
+            out.append(hostview.build_host_view(
+                row, data, got["sources"] if got else {}, got["events"] if got else [], now,
+                self.stale_after(name, row), mon, overrides, self._monitor_state(mon)))
+        return out
 
 
 async def list_hosts(ctx: ApiContext, page: PageParams,
@@ -106,16 +154,9 @@ async def list_hosts(ctx: ApiContext, page: PageParams,
     after = page.after(str)
     if after is not None:
         names = [n for n in names if n > after[0]]
-    out: list[dict[str, Any]] = []
-    more = False
-    for name in names:
-        view = await views.view(name, rows.get(name))
-        if view is None:
-            continue
-        if len(out) == page.limit:
-            more = True
-            break
-        out.append(_times(hostview.summarize(view)))
+    shown = await views.views(names[:page.limit + 1], rows)
+    out = [_times(hostview.summarize(v)) for v in shown[:page.limit]]
+    more = len(shown) > page.limit
     return {"items": out, "next_cursor": encode([out[-1]["host"]]) if more else None}
 
 
@@ -140,19 +181,47 @@ async def list_waiting(ctx: ApiContext) -> dict[str, Any]:
 
 
 FRESH_S = 10  # a host view shows ages and staleness, so its ETag changes at least this often
+# What a list row shows that moves with every batch and with the clock. The ETag holds the age
+# only as a FRESH_S bucket, so a batch that changes nothing else does not change it.
+MOVING_KEYS = ("last_seen", "age_seconds")
 
 
 def register(api: ApiRegistry) -> None:
     sched = api.runtime.scheduler
     runtime = api.runtime
+    kept: dict[str, Any] = {}
 
     def memory() -> Any:
         return (sched.fingerprint(), int(runtime.wall() // FRESH_S))
 
+    async def list_memory() -> Any:
+        """A digest of what the list shows. It is rebuilt only when a change counter, a monitor
+        state or the FRESH_S bucket moved, and it ignores a batch that changed no shown value, so
+        the ETag stays put while an agent pushes the same picture."""
+        now = runtime.wall()
+        seqs = runtime.store.storage.change_seqs()
+        key = (tuple(seqs.get(d, 0) for d in ("hosts", "metrics", "events")),
+               sched.fingerprint(), int(now // FRESH_S))
+        if kept.get("key") == key:
+            return kept["digest"], key[2]
+        ctx = ApiContext(None, runtime, now)  # type: ignore[arg-type]
+        views = HostViews(ctx)
+        rows = {r["host"]: r for r in await runtime.store.host_rows()}
+        shown = [hostview.summarize(v) for v in await views.views(views.names(rows), rows)]
+        for row in shown:
+            row["age_bucket"] = None if row["age_seconds"] is None                 else int(row["age_seconds"] // FRESH_S)
+            for k in MOVING_KEYS:
+                del row[k]
+        digest = hashlib.sha256(json.dumps(shown, sort_keys=True, default=str).encode()
+                                ).hexdigest()[:16]
+        kept["key"], kept["digest"] = key, digest
+        return kept["digest"], key[2]
+
     domains = ("hosts", "metrics", "events")
-    # Hardware inventory: a session or a read token, never an anonymous reader.
+    # Hardware inventory: a session or a read token, never an anonymous reader. The list ETag is
+    # the digest of the rows, not the change counters, which every batch moves.
     api.resource("/hosts", list_hosts, HostPage, domains=domains, tags=("hosts",), paginate=True,
-                 anonymous=False, memory=memory, summary="List hosts")
+                 anonymous=False, memory=list_memory, counters=False, summary="List hosts")
     api.resource("/waiting-hosts", list_waiting, WaitingPage, tags=("hosts",),
                  anonymous=False, etag=False, summary="Enrolled hosts that have not reported")
     api.resource("/hosts/{name:path}", get_host, HostView, domains=domains, tags=("hosts",),

@@ -546,6 +546,7 @@ Implementation status (slice oc2-boot-and-severity): boot classification runs on
 
 * Each resource declares the change domains it depends on (for example `/hosts` depends on `hosts`, `metrics`). The ETag is `W/"<route hash>-<seq of each domain>-<query hash>"`. If `If-None-Match` matches, the server returns 304 without opening a read connection.
 * The response cache stores the last rendered body per (route, query, role) with its ETag, at most 4 MB total, so repeated identical requests from several tabs cost one render per change.
+* `/hosts` is the exception to the counters: every ingest bumps `hosts`, `metrics` and `events`, so its ETag is instead a digest of the rows it shows (without `last_seen` and `age_seconds`, which move with every batch) plus the 10 second clock bucket. A batch that changes no shown value keeps the ETag and gets a 304. The list is built from 5 statements however many hosts there are.
 * `GET /api/v2/changes?since=<cursor>&wait=25` is a long poll: it returns immediately when any domain has a sequence above the cursor, else after `wait` seconds (max 30) with an unchanged cursor. Body: `{"cursor":"..","changed":["metrics","hosts"]}`. The UI uses it to decide which resources to refetch (section 5). This is one open request per tab and costs no database access.
 * `metrics` changes every ingest (every few seconds), so pages that show metric charts refetch at most once per their own interval even when the cursor reports a change.
 
@@ -611,7 +612,7 @@ What differs from the text above, and what is left:
 * **Mounting.** The API is a sub-application mounted at `/api/v2`, so the problem-details handlers
   and the schema are its own. `ApiRegistry.resource` takes `domains`, `roles`, `tags`,
   `paginate`, `filters`, `sparse`, `anonymous`, `cost`, `memory` (a fingerprint of in-memory
-  state for the ETag) and `etag`; a handler may ask for `ctx`, `db` (a read-only connection),
+  state for the ETag, plain or async), `counters` (False leaves the declared domains out of the ETag) and `etag`; a handler may ask for `ctx`, `db` (a read-only connection),
   `page` and `filters`. A query model in `filters` is expanded into one query parameter per field,
   because FastAPI flattens a query model only when it is the only query parameter.
 * **ETag.** It carries the full path and the query (not only the route), the role, the counters of

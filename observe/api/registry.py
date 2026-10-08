@@ -275,10 +275,12 @@ class ApiRegistry:
                  paginate: bool = False, filters: type[BaseModel] | None = None,
                  sparse: Sequence[str] | None = None, anonymous: bool = True, cost: float = 1.0,
                  memory: Callable[[], Any] | None = None, etag: bool = True,
-                 summary: str | None = None, operation_id: str | None = None,
+                 counters: bool = True, summary: str | None = None, operation_id: str | None = None,
                  status_code: int = 200) -> None:
         """Mount `handler` at /api/v2<path>. `domains` are the change counters the response
-        depends on, `memory` a cheap fingerprint of in-memory state it also depends on, `roles`
+        depends on (they are declared for clients, and also make the ETag unless `counters` is False,
+        for a resource whose `memory` fingerprint already covers everything it shows), `memory` a
+        fingerprint of the state it also depends on (a plain or an async callable), `roles`
         the roles allowed (the lowest listed is the least role that may read), `sparse` the item
         fields a client may select with `fields=`, `cost` the rate limit tokens one call takes."""
         for method in methods:
@@ -289,14 +291,14 @@ class ApiRegistry:
             self._mount(path, method, handler, model, name, tuple(domains), tuple(roles),
                         tuple(tags), paginate, filters, tuple(sparse) if sparse else None,
                         anonymous and self.owner is None, cost, memory,
-                        etag and method in SAFE_METHODS, summary, status_code)
+                        etag and method in SAFE_METHODS, summary, status_code, counters)
 
     def _mount(self, path: str, method: str, handler: Callable[..., Any],
                model: type[BaseModel], operation_id: str, domains: tuple[str, ...],
                roles: tuple[str, ...], tags: tuple[str, ...], paginate: bool,
                filters: type[BaseModel] | None, sparse: tuple[str, ...] | None, anonymous: bool,
                cost: float, memory: Callable[[], Any] | None, use_etag: bool,
-               summary: str | None, status_code: int) -> None:
+               summary: str | None, status_code: int, counters: bool = True) -> None:
         runtime = self.runtime
         min_rank = min(RANK[r] for r in roles)
         route_key = _hash(method, path, size=4)
@@ -379,12 +381,22 @@ class ApiRegistry:
             key: tuple[str, str, str] | None = None
             if use_etag:
                 seqs = runtime.store.storage.change_seqs()
-                counters = "-".join(str(seqs.get(d, 0)) for d in domains) or "0"
-                fingerprint = memory() if memory is not None else ""
+                seen = "-".join(str(seqs.get(d, 0)) for d in domains) or "0" if counters else "0"
+                try:
+                    fingerprint = memory() if memory is not None else ""
+                    if inspect.isawaitable(fingerprint):
+                        fingerprint = await fingerprint
+                except (StorageBusy, StorageTimeout) as err:
+                    raise ApiProblem(503, "the database is busy, try again shortly",
+                                     headers={"Retry-After": "2"}) from err
+                except Exception:
+                    log.exception("v2 %s fingerprint failed (request %s)", path,
+                                  getattr(request.state, "request_id", "?"))
+                    raise ApiProblem(500, "the request could not be completed") from None
                 # The path is part of the identity: /hosts/{name} is one route and many pages.
                 query = request.url.path + "?" + "&".join(
                     f"{k}={v}" for k, v in sorted(request.query_params.multi_items()))
-                tag = (f'W/"{route_key}-{counters}-{_hash(repr(fingerprint), size=4)}-'
+                tag = (f'W/"{route_key}-{seen}-{_hash(repr(fingerprint), size=4)}-'
                        f'{_hash(query, principal.role, principal.kind)}"')
                 key = (route_key, query, principal.role)
                 theirs = request.headers.get("if-none-match")
