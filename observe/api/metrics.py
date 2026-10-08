@@ -345,18 +345,20 @@ def _complete(levels: rollups.RetentionLevels, now: float, start: float,
     return now - start <= _kept_days(levels, names, field) * 86400
 
 
+def _pack(n: int, total: Any, lo: Any, hi: Any) -> dict[str, Any]:
+    """The aggregates of one bucket. A sum of large values can overflow: SQLite may return
+    infinity, and PostgreSQL or another SQLite build returns NULL. JSON has no such number, so
+    the sum and the average are null whenever the total is NULL or not finite."""
+    total = finite(total)
+    avg = finite(total / n) if n and total is not None else None
+    return {"avg": avg, "min": finite(lo), "max": finite(hi), "sum": total, "count": n}
+
+
 def _aggregate(db: Any, name: str, table: str | None, ids: list[int], step: int,
                start_ms: int, end_ms: int, aggs: list[str]) -> dict[int, list[list[Any]]]:
     marks = ",".join("?" * len(ids))
     width = step * 1000
     out: dict[int, list[list[Any]]] = {i: [] for i in ids}
-
-    def pack(n: int, total: Any, lo: Any, hi: Any) -> dict[str, Any]:
-        # A sum of large values can overflow to infinity; JSON has no such number, so an
-        # aggregate that is not finite is null.
-        avg = finite(total / n) if n else None
-        return {"avg": avg, "min": finite(lo), "max": finite(hi), "sum": finite(total),
-                "count": n}
 
     if "last" in aggs:
         if name != "raw":
@@ -378,7 +380,7 @@ def _aggregate(db: Any, name: str, table: str | None, ids: list[int], step: int,
                 cur["max"] = max(cur["max"], value)
                 cur["last"] = value
         for (sid, b), c in sorted(by.items()):
-            full = pack(c["n"], c["sum"], c["min"], c["max"])
+            full = _pack(c["n"], c["sum"], c["min"], c["max"])
             full["last"] = finite(c["last"])
             out[sid].append([b // 1000, *[full[a] for a in aggs]])
         return out
@@ -397,7 +399,7 @@ def _aggregate(db: Any, name: str, table: str | None, ids: list[int], step: int,
     for sid, b, n, total, lo, hi in rows:
         if not n:
             continue
-        full = pack(int(n), total, lo, hi)
+        full = _pack(int(n), total, lo, hi)
         out[sid].append([b // 1000, *[full[a] for a in aggs]])
     return out
 

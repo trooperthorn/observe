@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -261,7 +262,7 @@ class Store:
             "SELECT bucket, avg_v FROM metric_hourly WHERE resource = ? AND scope = ? "
             "AND metric = ? AND bucket >= ? AND avg_v IS NOT NULL ORDER BY bucket",
             (monitor, MONITOR_SCOPE, "monitor.value", int(since // 3600 * 3600)))
-        return [(float(b) + 1800.0, float(v)) for b, v in rows]
+        return [(float(b) + 1800.0, float(v)) for b, v in rows if math.isfinite(float(v))]
 
     async def availability(self, monitor: str, hours: float,
                            now: float | None = None) -> float | None:
@@ -276,7 +277,9 @@ class Store:
             "WHERE resource = ? AND scope = ? AND metric = ? AND bucket >= ?",
             (monitor, MONITOR_SCOPE, "monitor.up", int(since // width * width)))
         total, ok = rows[0]
-        return None if not total else round(float(ok) / int(total) * 100, 3)
+        if not total or ok is None or not math.isfinite(float(ok)):
+            return None
+        return round(float(ok) / int(total) * 100, 3)
 
     def raw_cut(self, db: Conn, now: float) -> Callable[[str], int]:
         """For a metric name, the millisecond time before which its raw rows are trimmed now."""

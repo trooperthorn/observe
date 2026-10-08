@@ -63,6 +63,41 @@ def test_the_sum_of_two_huge_points_is_null_not_infinity(env):
     assert r.json()["series"][0]["points"][0][1:] == [None, 1.7e308]
 
 
+@pytest.mark.parametrize("total", [None, float("inf"), float("-inf"), float("nan")])
+def test_pack_gives_a_null_sum_and_average_for_a_null_or_non_finite_total(total):
+    from observe.api.metrics import _pack
+    got = _pack(2, total, 1.0, 5.0)
+    assert got == {"avg": None, "min": 1.0, "max": 5.0, "sum": None, "count": 2}
+    assert _pack(2, 6.0, 1.0, 5.0)["avg"] == 3.0
+
+
+class _Rows:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def fetchall(self):
+        return self.rows
+
+
+class _Db:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def execute(self, *_args):
+        return _Rows(self.rows)
+
+
+@pytest.mark.parametrize("total", [None, float("inf")])
+def test_the_aggregator_answers_a_null_total_without_dividing(total):
+    from observe.api.metrics import _aggregate
+    for table, rows in (("samples", [(1, 0, 2, total, 1.0, 2.0)]),
+                        ("metric_5m", [(1, 0, 2, total, 1.0, 2.0)])):
+        name = "raw" if table == "samples" else "5m"
+        out = _aggregate(_Db(rows), name, table, [1], 300, 0, 1000,
+                         ["avg", "sum", "min", "max", "count"])
+        assert out[1] == [[0, None, None, 1.0, 2.0, 2]]
+
+
 def test_a_value_that_could_overflow_a_rollup_is_refused_at_ingest(otlp):
     key = otlp.key("nas01")
     req = metrics_request("nas01", {"s": [gauge("m", [number(1.7e308, T0),
