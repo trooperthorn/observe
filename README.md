@@ -956,6 +956,10 @@ is counted and explained in the partial success of the ingest answer. The schema
 `/api/v2/openapi.json`, and a test fails when the code and the file differ (regenerate with
 `python -m observe.api.schema`).
 
+Responses of 1 KiB or more are gzipped for a client that sends `Accept-Encoding: gzip`, and the
+console's scripts and style sheets are cached by the browser with an ETag and revalidated (a 304),
+while HTML pages, the login page and every session bound answer stay `no-store`.
+
 | Resource | What it returns |
 | --- | --- |
 | `GET /api/v2/monitors`, `/monitors/{slug}`, `/monitors/{slug}/detail` | monitors with state, forecast and availability; `include=detail`, `state`, `group`, `type`, `q`, `sort=name,-since`, `fields=slug,state` |

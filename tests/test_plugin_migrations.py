@@ -193,7 +193,8 @@ def test_plugin_pages_need_a_login_and_carry_the_core_headers(tmp_path):
             h = e.client.get(url).headers
             assert "default-src 'self'" in h["content-security-policy"]
             assert h["x-content-type-options"] == "nosniff"
-            assert h["cache-control"] == "no-store"
+            # Pages carry session data and stay no-store; plugin static files revalidate.
+            assert h["cache-control"] == ("no-cache" if "/static/" in url else "no-store")
         assert e.client.get("/plugins/echo/static/../../../etc/passwd").status_code in (400, 404)
         assert e.client.get("/plugins/echo/static/missing.js").status_code == 404
     finally:

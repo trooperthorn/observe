@@ -1279,6 +1279,19 @@ rerun here: the benchmark does not drive the plugins, and the Pi was not availab
 numbers are for one machine and one run of 30 repetitions each (5 for the pushed-host poll), so
 treat differences of a millisecond or two as noise.
 
+### Static files and response compression
+
+`observe/web.py` sets `Cache-Control: no-cache` on files served by a `StaticFiles` mount (the
+console's `/static/` and a plugin's static directory). They carry no data, and Starlette already
+sends an ETag and Last-Modified and answers `If-None-Match` with a 304, so after the first load a
+page costs a 304 per script and style sheet instead of the whole file (`app.js` is 16,174 bytes).
+All other responses keep `no-store`, so the HTML pages, the login page and every session bound
+answer are never kept by a browser or proxy. `GZipMiddleware` compresses any response of 1,024
+bytes or more for a client that accepts gzip: the 126,194 byte metrics query of
+`tests/test_static_cache_and_gzip.py` is about 31,153 bytes, and the decoded body is identical.
+Conditional requests are answered inside the application before compression, so a 304 is not
+affected. The same code serves SQLite and PostgreSQL; nothing here touches the database.
+
 The two columns are not a like-for-like comparison: the review could not be rebuilt here, so its
 numbers are quoted, and they used 30 days of history where this run used 7. A rerun of the same
 script with `--days 30` was tried for this record and did not finish loading the history within 15

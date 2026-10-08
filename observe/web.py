@@ -31,6 +31,7 @@ from urllib.parse import urlsplit
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 
 from . import __version__
 from . import api as apimod
@@ -54,6 +55,13 @@ from .scheduler import Scheduler
 from .store import Store
 
 STATIC = Path(__file__).parent / "static"
+GZIP_MIN_BYTES = 1024
+
+
+def is_static_asset(path: str) -> bool:
+    """True for a file served by a StaticFiles mount: the console's own and a plugin's."""
+    return path.startswith("/static/") or (
+        path.startswith(PAGE_PREFIX + "/") and "/static/" in path[len(PAGE_PREFIX):])
 _STATE_NUM = {"pending": -1, "up": 0, "warn": 1, "down": 2}
 _COMPONENT_NUM = {"good": 0, "warning": 1, "critical": 2}
 _EFF_NUM ={**_STATE_NUM, "unreachable": 3}
@@ -128,6 +136,9 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             raise HTTPException(401, headers={"WWW-Authenticate": 'Basic realm="Observe"'})
 
     guarded = [Depends(auth)]
+    # Large answers (a metrics query, a host list) shrink about tenfold; the middleware skips
+    # clients that do not send Accept-Encoding: gzip and bodies under the threshold.
+    app.add_middleware(GZipMiddleware, minimum_size=GZIP_MIN_BYTES, compresslevel=5)
     ingest_guard = Guard(config, store, ingest_clock)
     app.include_router(build_router(config, store, ingest_guard))
 
@@ -143,7 +154,12 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         )
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["Referrer-Policy"] = "no-referrer"
-        resp.headers["Cache-Control"] = "no-store"
+        if is_static_asset(request.url.path) and resp.status_code in (200, 206, 304):
+            # Code and styles hold no data: the browser keeps them but asks again each time,
+            # and StaticFiles answers 304 from the ETag and Last-Modified it already sends.
+            resp.headers["Cache-Control"] = "no-cache"
+        else:
+            resp.headers["Cache-Control"] = "no-store"
         return resp
 
     login_limiter = RateLimiter(config.server.login_rate_per_minute, ingest_clock)
