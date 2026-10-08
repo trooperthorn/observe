@@ -128,6 +128,8 @@ def test_windows_uses_the_hostwatch_installer_with_a_secure_string():
     assert "-IngestKey $secure" in script
     assert "deploy\\windows\\uninstall.ps1" in script
     assert scripts.WINDOWS_SOURCE in script
+    # hostwatch's default branch is master, so the archive must name it.
+    assert scripts.WINDOWS_SOURCE.endswith("/refs/heads/master.zip")
 
 
 # ---------------------------------------------------------------- secrets

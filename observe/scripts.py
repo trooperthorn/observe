@@ -497,7 +497,8 @@ def render_linux(red: Redeemed, ctx: Context) -> str:
 # TrueNAS SCALE and Windows (agent only)
 # ---------------------------------------------------------------------------------------------
 
-WINDOWS_SOURCE = "https://github.com/trooperthorn/hostwatch/archive/refs/heads/main.zip"
+# hostwatch's default branch is master; a main.zip would not exist and the Windows install would fail.
+WINDOWS_SOURCE = "https://github.com/trooperthorn/hostwatch/archive/refs/heads/master.zip"
 
 # The helper functions and the three guards are the Linux script's own text, cut out of it, so
 # every platform runs the same guard code in the same order.
