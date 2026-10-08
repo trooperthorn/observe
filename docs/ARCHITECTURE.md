@@ -189,6 +189,31 @@ Compaction also removes dead series: after the levels are trimmed, a series with
 no summary row is deleted with its `latest` row, and a resource with no series is deleted, so
 churned labels stop counting against the cardinality caps.
 
+### Durable alerts and the bounded writer queue
+
+Slice o8-alert-durability. Schema step 23 adds `alert_outbox` (one row per alert and target, with
+its attempts, `next_at` and last error) and `alert_open` (the monitors whose problem alert went
+out, with the state and time). `Alerter.notify` writes one outbox row per target and then calls
+`flush`, which tries every due row once and deletes it on success; a failure keeps the row and
+sets `next_at` to `retry_delay(attempts)` (10 s doubling to 300 s). `Alerter.run`, started by
+`Scheduler.start`, flushes every 5 s, which also delivers what a previous run left behind. A row
+for a target that is no longer configured, or older than 24 h, is dropped with a log line.
+Delivery is at least once: a crash between the target's answer and the delete repeats that alert.
+The Scheduler binds its store to the alerter; without a store (the one-shot check) an alert is
+tried twice and dropped.
+
+`Scheduler._set_open` writes `alert_open` before the alert is queued, and `restore` reads it: a
+monitor with an open alert comes back in that state with `alert_open` set, so a restart does not
+alert again and the recovery still does. The two writes are separate units, so a crash between
+them loses the one problem alert; the recovery alert is still sent.
+
+`WriteGate` (`observe/storage/base.py`) counts the units submitted to the single writer from
+submission until they finish. A submission past `WRITE_QUEUE_LIMIT` (256) raises `StorageBusy`
+instead of queueing; both backends use it in `write` and `write_sync`, and ingest answers 503 with
+`Retry-After: 5`, other v2 routes 503 with `Retry-After: 2`. Before this the executor queue was
+unbounded. Tests: `tests/test_alert_durability.py` (10 000 refused submissions leave the pending
+count at the limit).
+
 ### Storage interface
 
 All database access goes through the `Storage` protocol in `observe/storage/base.py`

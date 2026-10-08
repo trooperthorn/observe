@@ -25,7 +25,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from .base import CHANGE_DOMAINS, Conn, IntegrityConflict, StorageBusy, StorageTimeout, T
+from .base import (CHANGE_DOMAINS, Conn, IntegrityConflict, StorageBusy, StorageTimeout, T,
+                   WriteGate)
 from . import compaction, rollups
 from .schema import migrate, migrate_plugins
 
@@ -93,6 +94,7 @@ class SqliteStorage:
             raise
         self._writer_tid = 0
         self._touched: set[str] = set()
+        self._gate = WriteGate()
         self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="db-writer",
                                           initializer=self._mark_writer)
         self._readers: queue.Queue[_Reader] = queue.Queue()
@@ -162,12 +164,12 @@ class SqliteStorage:
             # ourselves.
             self._touched.update(touches)
             return unit(self._conn)
-        return self._writer.submit(self._run_unit, unit, tuple(touches)).result()
+        return self._gate.submit(self._writer, self._run_unit, unit, tuple(touches)).result()
 
     async def write(self, unit: Callable[[Conn], T], *, touches: Sequence[str] = ()) -> T:
         self._check_domains(touches)
         return await asyncio.wrap_future(
-            self._writer.submit(self._run_unit, unit, tuple(touches)))
+            self._gate.submit(self._writer, self._run_unit, unit, tuple(touches)))
 
     # ---- readers --------------------------------------------------------------------------
 

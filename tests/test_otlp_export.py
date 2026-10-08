@@ -685,7 +685,7 @@ async def test_a_version_21_cursor_is_converted_so_no_unsent_point_is_lost(tmp_p
     raw.execute("UPDATE samples SET seq = NULL")
     raw.execute("UPDATE ingest_seq SET seq = 0")
     sid = raw.execute("SELECT MIN(series_id) FROM samples").fetchone()[0]
-    raw.execute("DELETE FROM schema_version WHERE version = 22")
+    raw.execute("DELETE FROM schema_version WHERE version >= 22")
     raw.execute("INSERT OR REPLACE INTO export_cursor (signal, ts, last_id, updated) "
                 "VALUES ('metrics', ?, ?, 0)", (cut, sid))
     raw.commit()

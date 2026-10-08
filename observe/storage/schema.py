@@ -367,6 +367,21 @@ SAMPLE_SEQ_TABLES = (
     _convert_metrics_cursor,
 )
 
+# Durable alerts (docs/DATA-API-DESIGN.md section 9): the outbox holds each alert until its target
+# has accepted it, so an outage of the target or a restart loses nothing, and alert_open holds
+# the monitors whose problem alert went out, so a restart does not alert for them again.
+ALERT_TABLES = (
+    """CREATE TABLE IF NOT EXISTS alert_outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT NOT NULL, body TEXT NOT NULL,
+  created REAL NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at REAL NOT NULL,
+  last_error TEXT
+)""",
+    "CREATE INDEX IF NOT EXISTS alert_outbox_next ON alert_outbox(next_at)",
+    """CREATE TABLE IF NOT EXISTS alert_open (
+  monitor TEXT PRIMARY KEY, state TEXT NOT NULL, since REAL NOT NULL
+)""",
+)
+
 # The step that creates the summary levels. TimescaleDB runs its own version of it.
 ROLLUP_STEP = 17
 
@@ -395,6 +410,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     20: EXPORT_TABLES,
     21: BATCH_BODY_HASH,
     22: SAMPLE_SEQ_TABLES,
+    23: ALERT_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

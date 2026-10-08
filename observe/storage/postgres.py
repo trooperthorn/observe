@@ -27,7 +27,8 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from . import compaction, pg_timescale, rollups
-from .base import CHANGE_DOMAINS, Conn, IntegrityConflict, StorageBusy, StorageError, StorageTimeout, T
+from .base import (CHANGE_DOMAINS, Conn, IntegrityConflict, StorageBusy, StorageError,
+                   StorageTimeout, T, WriteGate)
 from .pg_dialect import table_info_query, translate_sql
 from .schema import (MIGRATIONS, PLUGIN_TABLES, ROLLUP_STEP, PluginSchemaTooNewError,
                      SchemaTooNewError, refuse_legacy)
@@ -142,6 +143,7 @@ class PgStorage:
         self._admin: PgConn | None = None
         self._pool: ConnectionPool | None = None
         self._read_exec: ThreadPoolExecutor | None = None
+        self._gate = WriteGate()
         self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="db-writer",
                                           initializer=self._mark_writer)
         try:
@@ -373,12 +375,12 @@ class PgStorage:
         if self._on_writer():
             self._touched.update(touches)
             return unit(self._wconn)
-        return self._writer.submit(self._run_unit, unit, tuple(touches)).result()
+        return self._gate.submit(self._writer, self._run_unit, unit, tuple(touches)).result()
 
     async def write(self, unit: Callable[[Conn], T], *, touches: Sequence[str] = ()) -> T:
         self._check_domains(touches)
         return await asyncio.wrap_future(
-            self._writer.submit(self._run_unit, unit, tuple(touches)))
+            self._gate.submit(self._writer, self._run_unit, unit, tuple(touches)))
 
     # ---- readers --------------------------------------------------------------------------
 

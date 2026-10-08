@@ -228,6 +228,54 @@ class Store:
             return None
         return rows[0][0] / 1000.0, CODE_RESULT[int(rows[0][1])]
 
+    # ---- durable alerts (observe/alerts.py) -------------------------------------------------
+
+    async def set_alert_open(self, monitor: str, state: str | None, at: float) -> None:
+        """Remember that a problem alert for `monitor` was sent while it was in `state`
+        (down or warn), or forget it when `state` is None (the monitor recovered)."""
+        def unit(db: Conn) -> None:
+            if state is None:
+                db.execute("DELETE FROM alert_open WHERE monitor=?", (monitor,))
+            else:
+                db.execute("DELETE FROM alert_open WHERE monitor=?", (monitor,))
+                db.execute("INSERT INTO alert_open (monitor, state, since) VALUES (?,?,?)",
+                           (monitor, state, at))
+        await self.storage.write(unit)
+
+    async def open_alerts(self) -> dict[str, tuple[str, float]]:
+        """The monitors with an open problem alert: monitor -> (state, since)."""
+        rows = await self.fetch("SELECT monitor, state, since FROM alert_open")
+        return {m: (st, float(since)) for m, st, since in rows}
+
+    async def outbox_add(self, rows: list[tuple[str, str]], now: float) -> None:
+        """Queue alerts as (target name, JSON body), all due now, in one transaction."""
+        def unit(db: Conn) -> None:
+            for target, body in rows:
+                db.execute("INSERT INTO alert_outbox (target, body, created, attempts, next_at) "
+                           "VALUES (?,?,?,0,?)", (target, body, now, now))
+        await self.storage.write(unit)
+
+    async def outbox_due(self, now: float, limit: int = 100) -> list[tuple[Any, ...]]:
+        """Queued alerts that are due, oldest first: (id, target, body, created, attempts)."""
+        return await self.fetch(
+            "SELECT id, target, body, created, attempts FROM alert_outbox WHERE next_at<=? "
+            "ORDER BY id LIMIT ?", (now, limit))
+
+    async def outbox_done(self, ids: list[int]) -> None:
+        """Remove alerts that were delivered, or that are no longer wanted."""
+        def unit(db: Conn) -> None:
+            for i in ids:
+                db.execute("DELETE FROM alert_outbox WHERE id=?", (i,))
+        await self.storage.write(unit)
+
+    async def outbox_retry(self, alert_id: int, attempts: int, next_at: float, error: str) -> None:
+        await self.storage.write(lambda db: db.execute(
+            "UPDATE alert_outbox SET attempts=?, next_at=?, last_error=? WHERE id=?",
+            (attempts, next_at, error[:500], alert_id)))
+
+    async def outbox_depth(self) -> int:
+        return int((await self.fetch("SELECT COUNT(*) FROM alert_outbox"))[0][0])
+
     @staticmethod
     def _summary_level(hours: float) -> tuple[str, int]:
         return ("metric_5m", 300) if hours <= FINE_WINDOW_H else ("metric_hourly", 3600)

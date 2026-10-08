@@ -490,11 +490,37 @@ async def test_a_restart_restores_the_state_from_the_latest_result(storage):
     assert not fresh.states["b"].alert_open
 
 
-async def test_a_problem_that_continues_across_a_restart_still_alerts(storage):
+async def test_a_problem_that_was_alerted_before_a_restart_is_not_alerted_again(storage):
     env = Env(storage, [mon("a")], failures_to_down=1, recheck_window=0)
     env.probes["a"].result = CheckResult.fail("refused")
     await env.poll("a")
-    env.sent.clear()
+    assert env.sent == [("a", "down", False)]
+    await settle(storage)
+    fresh = Scheduler(env.cfg, env.store, Alerter(env.cfg), clock=env.clock)
+    sent = []
+
+    async def record(monitor, tr):
+        sent.append(tr.current.value)
+
+    fresh.alerter.notify = record
+    fresh.checks["a"] = env.probes["a"]
+    await fresh.restore(fresh.by_slug["a"])
+    assert fresh.states["a"].state is State.DOWN and fresh.states["a"].alert_open
+    await fresh.poll_once(fresh.by_slug["a"])
+    await asyncio.gather(*fresh._pending_alerts)
+    assert sent == []  # still down, already alerted
+    env.probes["a"].result = CheckResult.ok("up")
+    for _ in range(fresh.states["a"].recoveries_to_up):
+        await fresh.poll_once(fresh.by_slug["a"])
+    await asyncio.gather(*fresh._pending_alerts)
+    assert sent == ["up"]  # the recovery of the alerted problem is still sent
+
+
+async def test_a_problem_whose_alert_never_went_out_alerts_after_a_restart(storage):
+    env = Env(storage, [mon("a")], failures_to_down=1, recheck_window=0)
+    env.probes["a"].result = CheckResult.fail("refused")
+    await env.sched.store.record("a", env.clock.now, env.probes["a"].result)
+    await settle(storage)
     fresh = Scheduler(env.cfg, env.store, Alerter(env.cfg), clock=env.clock)
     sent = []
 
@@ -505,7 +531,7 @@ async def test_a_problem_that_continues_across_a_restart_still_alerts(storage):
     fresh.checks["a"] = env.probes["a"]
     await fresh.restore(fresh.by_slug["a"])
     await fresh.poll_once(fresh.by_slug["a"])
-    await settle(storage)
+    await asyncio.gather(*fresh._pending_alerts)
     assert sent == ["down"]
 
 

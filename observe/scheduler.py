@@ -60,6 +60,7 @@ class Scheduler:
         self.clock = clock
         self.store = store
         self.alerter = alerter
+        alerter.bind(store)  # the outbox and the open-alert marks live in the same database
         self.monitors = [m for m in config.monitors if m.enabled]
         self.by_slug = {m.slug: m for m in self.monitors}
         self.checks = {m.slug: build_check(m, config, store) for m in self.monitors}
@@ -219,9 +220,22 @@ class Scheduler:
         restart does not show everything as pending. A result older than three intervals is not
         trusted. Only a good result is restored. A WARN or FAIL result leaves the monitor pending,
         so a problem that continues across a restart is evaluated again and alerts as usual."""
-        found = await self.store.last_result(monitor.slug)
         st = self.states[monitor.slug]
-        if found is None or st.state is not State.PENDING:
+        if st.state is not State.PENDING:
+            return
+        # A problem whose alert went out before the restart comes back as that problem, with its
+        # alert still open: it is not alerted again, and its recovery is.
+        opened = (await self.store.open_alerts()).get(monitor.slug)
+        if opened is not None:
+            state, since = opened
+            st.state, st.since, st.alert_open = State(state), since, True
+            if st.state is State.DOWN:
+                st.bad = st.warnish = st.failures_to_down
+            else:
+                st.warnish = st.failures_to_down
+            return
+        found = await self.store.last_result(monitor.slug)
+        if found is None:
             return
         at, result = found
         if result is not Result.OK:
@@ -282,6 +296,17 @@ class Scheduler:
                          attempts)
                 await self.poll_once(parent)
 
+    async def _set_open(self, monitor: Any, tr: Transition | None) -> None:
+        """Keep the open-alert mark of a monitor in the database: set when a problem alert goes
+        out, cleared when its recovery does."""
+        st = self.states[monitor.slug]
+        st.alert_open = tr is not None
+        try:
+            await self.store.set_alert_open(monitor.slug, tr.current.value if tr else None,
+                                            tr.at if tr else self.clock())
+        except Exception:  # noqa: BLE001 - a storage fault must not stop the alert itself
+            log.exception("could not store the alert state of %s", monitor.name)
+
     def _send(self, monitor: Any, tr: Transition) -> None:
         task = asyncio.create_task(self.alerter.notify(monitor, tr))
         self._pending_alerts.add(task)  # hold a reference until delivery finishes
@@ -302,11 +327,11 @@ class Scheduler:
             elif holding:
                 tr.message += f" [alert held: {holding} is being re-checked]"
             else:
-                st.alert_open = True
+                await self._set_open(monitor, tr)
                 self._send(monitor, tr)
         elif tr.current is State.UP:
             if st.alert_open:
-                st.alert_open = False
+                await self._set_open(monitor, None)
                 tr.degraded = False
                 self._send(monitor, tr)
             elif tr.degraded:
@@ -337,10 +362,10 @@ class Scheduler:
                 continue  # recovering, recovered, or already alerted by that poll
             if self.rollup.blocking_parent(child.slug) is not None:
                 continue  # still behind another failed parent
-            cst.alert_open = True
             tr = Transition(cst.state, cst.state, time.time(),
                             f"still {cst.state.value} after {monitor.name} recovered: "
                             f"{res.message}")
+            await self._set_open(child, tr)
             self._send(child, tr)
             await self.store.record_event(child.slug, tr)
 
@@ -466,6 +491,7 @@ class Scheduler:
         self._tasks = [asyncio.create_task(self._loop(m), name=m.slug) for m in self.monitors]
         self._tasks.append(asyncio.create_task(self._maintenance(), name="maintenance"))
         self._tasks.append(asyncio.create_task(self._hook_loop(), name="hooks"))
+        self._tasks.append(asyncio.create_task(self.alerter.run(), name="alert-outbox"))
         for plugin, c in self._collectors:
             self._tasks.append(asyncio.create_task(self._collector_loop(plugin, c),
                                                    name=f"collector:{plugin}.{c.name}"))

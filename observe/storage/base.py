@@ -10,7 +10,9 @@ placeholders; a backend whose driver differs adapts it.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import Executor, Future
 from contextlib import contextmanager
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
@@ -32,11 +34,51 @@ class IntegrityConflict(StorageError):
 
 
 class StorageBusy(StorageError):
-    """No read connection became free within the pool deadline (the API answers 503)."""
+    """No read connection became free within the pool deadline, or the write queue is full (the
+    API answers 503)."""
 
 
 class StorageTimeout(StorageError):
     """A read ran past its deadline and was interrupted."""
+
+
+# Write units that may wait for the single writer at once (docs/DATA-API-DESIGN.md section 9).
+WRITE_QUEUE_LIMIT = 256
+
+
+class WriteGate:
+    """Bounds the writer queue. A unit counts from the moment it is submitted until it has
+    finished; a submission past `limit` raises StorageBusy instead of queueing, so a slow disk
+    or a flood of pushes can not grow memory without bound. The API answers 503 with
+    Retry-After and the producer keeps its batch."""
+
+    def __init__(self, limit: int = WRITE_QUEUE_LIMIT) -> None:
+        if limit < 1:
+            raise ValueError("the write queue limit must be at least 1")
+        self.limit = limit
+        self._pending = 0
+        self._lock = threading.Lock()
+
+    @property
+    def pending(self) -> int:
+        return self._pending
+
+    def submit(self, executor: Executor, fn: Callable[..., T], *args: Any) -> "Future[T]":
+        with self._lock:
+            if self._pending >= self.limit:
+                raise StorageBusy(f"the write queue is full ({self.limit} units waiting)")
+            self._pending += 1
+        try:
+            future = executor.submit(fn, *args)
+        except BaseException:
+            self._done()
+            raise
+        future.add_done_callback(lambda _f: self._done())
+        return future
+
+    def _done(self) -> None:
+        with self._lock:
+            self._pending -= 1
 
 
 @contextmanager

@@ -42,8 +42,10 @@ consecutive WARN-or-worse results, and UP after `recoveries_to_up`
 consecutive OKs. Alerts fire on those transitions, not on individual polls.
 The first transition after a restart (PENDING to UP) is recorded but not
 alerted. After a restart a monitor takes its starting state from its newest
-stored result (never older than three intervals) instead of showing pending,
-and a restored problem recovers without an alert.
+stored result (never older than three intervals) instead of showing pending.
+A monitor whose problem alert was already sent comes back as that problem and
+is not alerted again; its recovery is. A problem that was never alerted is
+evaluated again and alerts as usual.
 
 ### Degraded: the fast re-check
 
@@ -476,8 +478,14 @@ The methods and their public sources are recorded in `docs/PRIOR-ART.md`.
 retained `observe/<slug>/state` (`up`, `warn`, `down`) and a non-retained
 JSON `observe/<slug>/event`, which Home Assistant can consume with an MQTT
 binary sensor. Each target has `notify_on` (default `[down, up]`) and each
-monitor can restrict itself to named targets with `alerts:`. Failed deliveries
-are retried once, then shown in the dashboard footer.
+monitor can restrict itself to named targets with `alerts:`. Every alert is
+written to a database outbox first and removed only after its target accepted
+it. A failed delivery is shown in the dashboard footer and retried after 10
+seconds, doubling to 5 minutes, so a target that is down for ten minutes, or a
+restart of Observe, loses nothing. Delivery is at least once, and an alert
+older than 24 hours is dropped. When the database write queue (256 units) is
+full, the ingest routes answer 503 with `Retry-After: 5` and agents keep their
+batch.
 
 ## Adding a host
 
