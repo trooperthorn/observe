@@ -1279,6 +1279,15 @@ rerun here: the benchmark does not drive the plugins, and the Pi was not availab
 numbers are for one machine and one run of 30 repetitions each (5 for the pushed-host poll), so
 treat differences of a millisecond or two as noise.
 
+### Process signals and test warnings
+
+`observe/__main__.py` stops the server on SIGTERM and SIGINT through `loop.add_signal_handler`.
+Where the loop does not implement that (the Windows proactor loop), it falls back to
+`signal.signal` and sets the stop flag through `loop.call_soon_threadsafe`.
+`tests/test_main_signals.py` covers both paths. The suite emits no warnings from Observe code
+or tests; `pytest.ini` ignores only starlette's httpx test client notice and ldap3's pyasn1
+renames, which are third-party.
+
 ### Static files and response compression
 
 `observe/web.py` sets `Cache-Control: no-cache` on files served by a `StaticFiles` mount (the

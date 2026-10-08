@@ -1048,6 +1048,11 @@ python -m pytest -q -rs
 Set `OBSERVE_REQUIRE_SERVICES=1` to make missing test services a failure
 rather than a skip; CI does this.
 
+`python -m observe` also serves on Windows for development. The Windows event loop cannot
+register signal handlers on the loop, so Observe falls back to `signal.signal` there and
+Ctrl+C stops the server cleanly. The suite runs with no warnings; `pytest.ini` filters only
+two third-party ones, each with a comment naming its package.
+
 `tests/test_ui_static.py` is a static guard. It fails if any page or script under
 `observe/static` or a plugin adds inline script or style, `style=` or `on*=`
 attributes, `innerHTML` and its relatives, `eval`, or an off-origin URL, or if a

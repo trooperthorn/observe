@@ -195,11 +195,20 @@ def _matrix_app(env, anonymous: bool = True):
     return TestClient(app, base_url="https://testserver"), runtime
 
 
+def _with_cookies(client, cookies):
+    """A client on the same app that holds the cookies itself, so no request passes
+    per-request cookies (deprecated by Starlette)."""
+    other = type(client)(client.app, base_url="https://testserver")
+    for name, value in cookies.items():
+        other.cookies.set(name, value)
+    return other
+
+
 def test_role_matrix(env):
     client, _ = _matrix_app(env)
     viewer, operator = env.token("viewer", "v"), env.token("operator", "o")
     admin_csrf = env.login("root", admin=True)
-    admin_cookies = dict(env.client.cookies)
+    admin = _with_cookies(client, dict(env.client.cookies))
     expect = {  # path: (viewer token, operator token, admin session)
         "/viewer-thing": (200, 200, 200),
         "/operator-thing": (403, 200, 200),
@@ -208,17 +217,18 @@ def test_role_matrix(env):
     for path, (v, o, a) in expect.items():
         assert client.get(path, headers=viewer).status_code == v, path
         assert client.get(path, headers=operator).status_code == o, path
-        assert client.get(path, cookies=admin_cookies).status_code == a, path
+        assert admin.get(path).status_code == a, path
         assert client.get(path).status_code == 401, path
     # A session needs the CSRF header on an unsafe method; a token does not.
-    assert client.post("/admin-post", cookies=admin_cookies).status_code == 403
-    assert client.post("/admin-post", cookies=admin_cookies, headers=admin_csrf).status_code == 200
+    assert admin.post("/admin-post").status_code == 403
+    assert admin.post("/admin-post", headers=admin_csrf).status_code == 200
     assert client.post("/admin-post", headers=operator).status_code == 403
     # A non-admin session reads as viewer.
     env.client.cookies.clear()
     env.login("bob", admin=False)
-    assert client.get("/viewer-thing", cookies=dict(env.client.cookies)).status_code == 200
-    assert client.get("/operator-thing", cookies=dict(env.client.cookies)).status_code == 403
+    bob = _with_cookies(client, dict(env.client.cookies))
+    assert bob.get("/viewer-thing").status_code == 200
+    assert bob.get("/operator-thing").status_code == 403
 
 
 def runtime_resources(client):

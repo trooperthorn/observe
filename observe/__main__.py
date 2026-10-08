@@ -53,6 +53,23 @@ async def _once(config, only: str | None) -> int:  # type: ignore[no-untyped-def
     return worst
 
 
+def _install_stop_signals(loop, server) -> None:  # type: ignore[no-untyped-def]
+    """Stop the server on SIGTERM and SIGINT.
+
+    The Windows proactor loop does not implement add_signal_handler. There the handlers
+    are installed with signal.signal instead, which is enough for development: Ctrl+C
+    stops the server. The handler runs in the main thread between bytecodes, so it hands
+    the flag to the loop thread safely."""
+    def stop() -> None:
+        server.should_exit = True
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop)
+        except NotImplementedError:
+            signal.signal(sig, lambda _num, _frame: loop.call_soon_threadsafe(stop))
+
+
 async def _serve(config, plugins) -> None:  # type: ignore[no-untyped-def]
     store = Store.from_config(config, plugins)
     alerter = Alerter(config)
@@ -62,9 +79,7 @@ async def _serve(config, plugins) -> None:  # type: ignore[no-untyped-def]
         app, host=config.server.listen, port=config.server.port,
         log_level="warning", access_log=False, proxy_headers=False,
     ))
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, lambda: setattr(server, "should_exit", True))
+    _install_stop_signals(asyncio.get_running_loop(), server)
     sched.start()
     exporting: asyncio.Task[None] | None = None
     if config.export.otlp.enabled:
