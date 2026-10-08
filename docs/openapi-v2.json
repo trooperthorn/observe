@@ -2315,6 +2315,11 @@
             "title": "Aggs",
             "type": "array"
           },
+          "complete": {
+            "default": true,
+            "title": "Complete",
+            "type": "boolean"
+          },
           "end": {
             "format": "date-time",
             "title": "End",

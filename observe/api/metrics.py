@@ -10,7 +10,9 @@ not grow with how long the data has been kept:
 * the daily level beyond,
 
 moving to a coarser level when the finer one no longer holds the start of the range (the
-admin's retention settings decide). A summarised level always answers with min, max, avg and
+admin's retention settings decide, including a metric's own override: the shortest retention of
+any selected metric counts). When even the daily level no longer holds the start for a selected
+metric, `complete` is false and the note says the earliest part is missing. A summarised level always answers with min, max, avg and
 count, so a week or a month shows peaks and not only averages. A response holds at most 1,000
 points per series (the step is raised to fit) and at most 50 series.
 
@@ -23,6 +25,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import Query, Request
@@ -293,9 +296,18 @@ def latest_metrics(db: Any, request: Request, page: PageParams,
 
 # ---- query ----------------------------------------------------------------------------------
 
+def _kept_days(levels: rollups.RetentionLevels, names: Sequence[str], field: str) -> int:
+    """The days a level keeps for a query: the shortest any selected metric keeps it (its own
+    override, else the global level), so no selected series is served from a level that has
+    already trimmed the start of the range. With no metric named it is the global level."""
+    return min([getattr(levels, field), *(rollups.days_for(levels, m, field) for m in names)])
+
+
 def _plan(levels: rollups.RetentionLevels, now: float, start: float, end: float,
-          step: int | None) -> tuple[str, str | None, int, int, str | None]:
-    """(level name, table, step in seconds, bucket width in seconds, note)."""
+          step: int | None, names: Sequence[str] = ()
+          ) -> tuple[str, str | None, int, int, str | None]:
+    """(level name, table, step in seconds, bucket width in seconds, note). `names` are the
+    metrics of the selected series, whose per-metric retention overrides are honoured."""
     span = end - start
     if span <= 0:
         raise ApiProblem(400, "to must be after from")
@@ -309,7 +321,7 @@ def _plan(levels: rollups.RetentionLevels, now: float, start: float, end: float,
     index = next(i for i, t in enumerate(TIERS) if chosen < t[0])
     first = index
     # Move to a coarser level while the chosen one no longer holds the start of the range.
-    while index < len(TIERS) - 1 and now - start > getattr(levels, TIERS[index][4]) * 86400:
+    while index < len(TIERS) - 1 and now - start > _kept_days(levels, names, TIERS[index][4]) * 86400:
         index += 1
     if index != first:
         chosen = max(chosen, TIERS[index][3])
@@ -322,6 +334,12 @@ def _plan(levels: rollups.RetentionLevels, now: float, start: float, end: float,
         note = (note + "; " if note else "") + f"the step was rounded up to {chosen} seconds, a " \
                                                f"whole number of {name} buckets"
     return name, table, chosen, width, note
+
+
+def _complete(levels: rollups.RetentionLevels, now: float, start: float,
+              names: Sequence[str]) -> bool:
+    """Whether the coarsest level still holds the start of the range for every selected metric."""
+    return now - start <= _kept_days(levels, names, TIERS[-1][4]) * 86400
 
 
 def _aggregate(db: Any, name: str, table: str | None, ids: list[int], step: int,
@@ -396,10 +414,16 @@ def run_query(db: Any, ctx: ApiContext, q: MetricQuery) -> dict[str, Any]:
     start = parse_time(q.from_, now, "from")
     end = parse_time(q.to, now, "to")
     levels = rollups.load_levels(db, ctx.config.server.retention_days)
-    name, table, step, _width, note = _plan(levels, now, start, end, q.step)
     rows, resume = _selection(db, sel, q.limit_series + 1)
     truncated = len(rows) > q.limit_series or resume is not None
     rows = rows[:q.limit_series]
+    names = sorted({r[2] for r in rows})
+    name, table, step, _width, note = _plan(levels, now, start, end, q.step, names)
+    complete = _complete(levels, now, start, names)
+    if not complete:
+        note = (note + "; " if note else "") + (
+            "the range starts before the oldest data kept for a selected metric, so the "
+            "earliest part is missing")
     start_s = int(start // step * step)
     data = _aggregate(db, name, table, [r[0] for r in rows], step, start_s * 1000,
                       int(end * 1000), aggs) if rows else {}
@@ -409,7 +433,7 @@ def run_query(db: Any, ctx: ApiContext, q: MetricQuery) -> dict[str, Any]:
         info["points"] = data.get(row[0], [])[:MAX_POINTS]
         series.append(info)
     return {"tier": name, "step": step, "start": start, "end": end, "aggs": aggs,
-            "series": series, "series_truncated": truncated, "note": note}
+            "series": series, "series_truncated": truncated, "complete": complete, "note": note}
 
 
 def query_metrics(db: Any, ctx: ApiContext, request: Request,

@@ -245,6 +245,7 @@ class QueryOut(BaseModel):
     aggs: list[str]
     series: list[QuerySeries]
     series_truncated: bool
+    complete: bool = True
     note: str | None = None
 
 

@@ -384,3 +384,39 @@ def test_retention_levels_are_read_from_the_admin_settings():
     assert plan(levels, now, now - 600 * 86400, now, 60)[0] == "rollup_1d"  # the last level
     with pytest.raises(Exception):
         plan(levels, now, now, now, None)
+
+
+def test_a_metric_with_a_shorter_raw_override_is_served_from_the_level_that_holds_it(env):
+    for hours in (60, 59, 58):  # about two and a half days ago, inside the global raw level
+        env.poll("core", ts=START - hours * 3600, latency=float(hours))
+    path = "/metrics/query?metric=monitor.latency&resource=core&from=-3d&step=60"
+    before = get(env, path).json()
+    assert before["tier"] == "raw" and before["complete"] is True
+    assert len(before["series"][0]["points"]) == 3
+    asyncio.run(env.store.execute(
+        "INSERT INTO app_settings (key, value, updated) VALUES (?, ?, 0)",
+        ("retention.overrides", '{"monitor.latency": {"raw_days": 1}}')))
+    after = get(env, path + "&agg=avg,min,max").json()  # a new key, so no cached reply
+    assert after["tier"] == "rollup_5m" and "no longer holds" in after["note"]
+    assert len(after["series"][0]["points"]) == 3
+    # A metric without an override still uses the global level.
+    plain = get(env, "/metrics/query?metric=monitor.up&resource=core&from=-3d&step=60").json()
+    assert plain["tier"] == "raw"
+
+
+def test_a_range_older_than_every_level_says_it_is_incomplete(env):
+    env.poll("core", ts=START - 3600, latency=1.0)
+    old = get(env, "/metrics/query?metric=monitor.latency&resource=core&from=-800d").json()
+    assert old["tier"] == "rollup_1d" and old["complete"] is False
+    assert "earliest part is missing" in old["note"]
+    assert get(env, "/metrics/query?metric=monitor.latency&resource=core&from=-30d"
+               ).json()["complete"] is True
+
+
+def test_the_plan_honours_overrides_for_the_names_it_is_given():
+    levels = rollups.RetentionLevels(raw_days=7, overrides={"short": {"raw_days": 1}})
+    now = START
+    plan = metrics._plan
+    assert plan(levels, now, now - 3 * 86400, now, 60, ["long"])[0] == "raw"
+    assert plan(levels, now, now - 3 * 86400, now, 60, ["long", "short"])[0] == "rollup_5m"
+    assert plan(levels, now, now - 3 * 86400, now, 60)[0] == "raw"

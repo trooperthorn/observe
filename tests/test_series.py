@@ -412,3 +412,25 @@ def test_an_override_trims_that_metric_by_row_before_whole_chunks_go(monkeypatch
     # The chunk bound follows the longest level any metric keeps.
     bound = compaction.whole_table_cuts(levels, 1_800_000_000.0).raw
     assert bound == (1_800_000_000 * 1000 - 30 * DAY * 1000) // 300_000 * 300_000
+
+
+@pytest.mark.parametrize("seed", range(1, 13))
+async def test_levels_stay_exact_when_values_replace_nulls_and_each_other(storage, seed):
+    """A brute-force oracle: random batches over few timestamps, so that nulls become values,
+    values become nulls and values change, in buckets that share an hour and a day. After the
+    batches every level holds what the raw points say, with no row missing."""
+    rnd = random.Random(seed)
+    day = BASE // DAY * DAY
+    # Slots cluster inside a few 5 minute buckets, hours and days.
+    slots = sorted({(day + d * DAY + h * 3600 + m * 100 + s) * 1000
+                    for d in range(3) for h in (1, 2, 9) for m in (0, 1, 4) for s in (0, 7)})
+    model: dict[tuple[str, int], float | None] = {}
+    for _batch in range(300):
+        # One value per point in a batch, so the oracle needs no rule for repeats inside one.
+        chosen: dict[tuple[str, int], float | None] = {}
+        for _ in range(rnd.randint(1, 4)):
+            key = (rnd.choice(("m0", "m1")), rnd.choice(slots))
+            chosen[key] = None if rnd.random() < 0.45 else rnd.randint(-40, 40) / 4
+        model.update(chosen)
+        await put(storage, [row(ts / 1000, metric, value) for (metric, ts), value in chosen.items()])
+    await assert_levels_match(storage, [(m, ts, v) for (m, ts), v in model.items()])

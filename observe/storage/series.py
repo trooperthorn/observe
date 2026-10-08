@@ -275,14 +275,17 @@ def _correct(db: Conn, sid: int, ts_ms: int, old: float | None, new: float | Non
                                                           bucket + width))
         else:
             fine = _window(db, lower, sid, bucket, bucket + width)
-            if current is not None and int(current[0]) + dn == fine[0]:
+            # A bucket with no row yet (every point in it was null until now) counts as empty,
+            # so a null that becomes a value creates the row as the 5 minute level does.
+            have = (0, 0.0, None, None) if current is None else current
+            if int(have[0]) + dn == fine[0]:
                 _store_bucket(db, table, sid, bucket, fine)  # the level below holds all of it
-            elif current is not None:
-                n = int(current[0]) + dn
-                lows = [x for x in (current[2], new) if x is not None]
-                highs = [x for x in (current[3], new) if x is not None]
+            else:
+                n = int(have[0]) + dn
+                lows = [x for x in (have[2], new) if x is not None]
+                highs = [x for x in (have[3], new) if x is not None]
                 _store_bucket(db, table, sid, bucket,
-                              (n, (current[1] or 0.0) + ds, min(lows) if lows else None,
+                              (n, (have[1] or 0.0) + ds, min(lows) if lows else None,
                                max(highs) if highs else None))
         lower = table
 
