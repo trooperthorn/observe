@@ -161,3 +161,13 @@ def test_plugin_pages_and_static_files_carry_the_csp_header(tmp_path):
         csp = resp.headers.get("Content-Security-Policy", "")
         for part in CSP_PARTS:
             assert part in csp, f"{p} ({resp.status_code}) lacks {part}"
+
+
+def test_console_pages_share_one_value_formatter():
+    root = Path(__file__).resolve().parent.parent / "observe" / "static"
+    fmt = (root / "js" / "format.js").read_text(encoding="utf-8")
+    assert "toExponential" not in fmt and "\r" not in fmt
+    for page in ("host.js", "app.js"):
+        src = (root / page).read_text(encoding="utf-8")
+        assert 'from "/static/js/format.js"' in src, page
+        assert "toExponential" not in src, page

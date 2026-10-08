@@ -1039,6 +1039,8 @@ rather than a skip; CI does this.
 attributes, `innerHTML` and its relatives, `eval`, or an off-origin URL, or if a
 page route loses its Content-Security-Policy header.
 
+`observe/static/js/format.js` is the one value formatter for the dashboard and the host page (ratios as percent, bytes as KiB to TiB, hertz and rates with SI prefixes, seconds as durations); `node --test tests/js` runs its tests.
+
 `tests/test_ui_tokens.py` checks the colour tokens in `observe/static/css/tokens.css`: every
 token is present in the light block and both dark blocks, the two dark blocks match, and the
 text, status and focus colours meet WCAG contrast (4.5:1 for text, 3:1 for dots, the focus

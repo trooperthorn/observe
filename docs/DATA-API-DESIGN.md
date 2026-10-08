@@ -111,6 +111,8 @@ CREATE INDEX series_resource_metric ON series(resource_id, metric);
 CREATE INDEX series_metric ON series(metric);
 ```
 
+The console shows a reading by its unit through `static/js/format.js`: `1` as a percentage, `By` as KiB to EiB, `Hz`, `bit/s` and `By/s` with SI prefixes, and `s` as a duration.
+
 * **Canonical form.** Attribute maps are sorted by key, values typed (string, int, double, bool; arrays and maps are rejected for identity attributes), serialized with `json.dumps(separators=(",", ":"), sort_keys=True)`. The scope is not part of the series identity, so a metric does not split into two series when a collector is renamed; it is stored for provenance. *Implemented (slice r2-series-schema): until the normalizer gives every producer one OpenTelemetry metric namespace, the scope (the hostwatch source) is part of the key, because two sources can send the same metric name for one host.*
 * **Identifying resource attributes.** Only a fixed allow-list per kind enters `resources.key_hash` (for a host: `host.name`, plus `host.id` when sent). Descriptive attributes (`os.type`, `os.version`, `service.version`, `host.arch`) are stored on the resource row but changing them does not create a new resource. This keeps an agent upgrade from forking every series.
 * **Lookup cost.** *Implemented without the cache: a series lookup is one indexed read on `key_hash`, and an LRU filled inside a write unit could hold an id from a transaction that rolled back.* The writer was designed to keep an in-memory LRU of `key_hash -> series_id` (4,096 entries, about 0.5 MB est.). A batch of 40 known series costs zero series lookups; a new series costs one `INSERT ... ON CONFLICT DO NOTHING RETURNING id`.

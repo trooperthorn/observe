@@ -8,6 +8,7 @@ import { stateInfo } from "/static/js/chip-states.js";
 import { applyLayout, initTiles, setDeclared } from "/static/js/tiles.js";
 import { groupTile } from "/static/js/tiles-logic.js";
 import { getAll, get, poller, seconds } from "/static/js/api.js";
+import { formatValue } from "/static/js/format.js";
 
 const ORDER = { down: 0, unreachable: 1, warn: 2, pending: 3, up: 4 };
 const expanded = new Set();
@@ -53,8 +54,11 @@ function fmtVal(m) {
   if (m.value === null || m.value === undefined) {
     return m.latency_ms != null ? `${Math.round(m.latency_ms)} ms` : "";
   }
-  const v = Math.abs(m.value) >= 100 ? Math.round(m.value) : Math.round(m.value * 10) / 10;
-  return `${v}${m.unit || ""}`;
+  if (!m.unit || m.unit === "%" || m.unit === "ms") {
+    const v = Math.abs(m.value) >= 100 ? Math.round(m.value) : Math.round(m.value * 10) / 10;
+    return `${v}${m.unit || ""}`;
+  }
+  return formatValue(m.value, m.unit);
 }
 
 function makeRow(m) {

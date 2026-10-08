@@ -605,7 +605,7 @@ summary adapted from hostwatch's `integrations/summary.py` is the host views sec
 
 ## Host views
 
-The host page at `/host` is a static page too: `host.js` and `host-control.js` are ES modules, the Control section is a card inside `<main>`, and both use the shared chip, dialog and toast modules. The dashboard at `/` is a static page whose module script (`app.js`) builds the KPI row, availability tiles and group cards in the browser from `/api/v2/monitors`, `/api/v2/groups`, `/api/v2/status`, `/api/v2/events` and `/api/v2/findings`, using the shared chip and DOM modules. `static/js/api.js` is the console's client for the v2 API; see "The console as a v2 client" below.
+The host page at `/host` is a static page too: `host.js` and `host-control.js` are ES modules, the Control section is a card inside `<main>`, and both use the shared chip, dialog and toast modules. Readings with a unit are formatted by one shared module, `static/js/format.js` (`formatValue(value, unit)`): unit `1` is a ratio shown as a percentage, `By` uses KiB to EiB, `Hz`, `bit/s` and `By/s` use SI prefixes, `s` becomes a duration, and no normal reading is shown in exponent notation. `tests/js/format.test.mjs` covers it (`node --test tests/js`). The dashboard at `/` is a static page whose module script (`app.js`) builds the KPI row, availability tiles and group cards in the browser from `/api/v2/monitors`, `/api/v2/groups`, `/api/v2/status`, `/api/v2/events` and `/api/v2/findings`, using the shared chip and DOM modules. `static/js/api.js` is the console's client for the v2 API; see "The console as a v2 client" below.
 
 Each pushed host has a page at `/host?name=HOST`, linked from the dashboard
 row of its `pushed_host` monitor. It is served by two v2 routes, `GET /api/v2/hosts`

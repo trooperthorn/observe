@@ -4,6 +4,7 @@
 import { el } from "/static/js/dom.js";
 import { statusChip } from "/static/js/chips.js";
 import { get, poller, whoami } from "/static/js/api.js";
+import { formatValue } from "/static/js/format.js";
 
 const SECTIONS = [
   ["cpu", "CPU"], ["memory", "Memory"], ["power", "Power"], ["temperatures", "Temperatures"],
@@ -41,9 +42,7 @@ function fmtTime(ts) {
 
 function fmtValue(i) {
   if (i.value == null) return "no value";
-  const v = Math.abs(i.value) >= 1e6 ? i.value.toExponential(3)
-    : Math.abs(i.value) >= 100 ? Math.round(i.value) : Math.round(i.value * 100) / 100;
-  return `${v}${i.unit ? " " + i.unit : ""}`;
+  return formatValue(i.value, i.unit);
 }
 
 function labelText(labels) {
