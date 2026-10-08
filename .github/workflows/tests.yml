@@ -26,7 +26,7 @@ jobs:
         run: python -m observe.api.schema --check
       - run: python -m pytest -q -p no:cacheprovider -n auto
       - name: Console formatter and other browser module tests
-        run: node --test tests/js
+        run: node --test tests/js/*.test.mjs
 
   postgres:
     name: suite on PostgreSQL (${{ matrix.name }})
