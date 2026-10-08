@@ -1,7 +1,7 @@
-// Run in CI with: node --test tests/js
+// Run with: node --test tests/js (the tests workflow runs this too).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatValue } from "../../observe/static/js/format.js";
+import { formatValue, formatReading } from "../../observe/static/js/format.js";
 
 test("a ratio of unit 1 is shown as a percentage", () => {
   assert.equal(formatValue(0.35, "1"), "35 %");
@@ -40,4 +40,33 @@ test("large readings never use exponent notation", () => {
 test("unknown units keep the number and unit, missing values are empty", () => {
   assert.equal(formatValue(41.234, "Cel"), "41.23 Cel");
   assert.equal(formatValue(null, "By"), "");
+});
+
+test("values just under a step roll over to the next prefix", () => {
+  assert.equal(formatValue(1023.9, "By"), "1.00 KiB");
+  assert.equal(formatValue(1023.99 * 1024, "By"), "1.00 MiB");
+  assert.equal(formatValue(999999, "Hz"), "1.00 MHz");
+  assert.equal(formatValue(59.999, "s"), "1m");
+  assert.equal(formatValue(0.9996, "s"), "1 s");
+});
+
+test("huge plain values never use exponent notation", () => {
+  assert.doesNotMatch(formatValue(1e21, ""), /e/);
+  assert.doesNotMatch(formatValue(1e25, "W"), /e/);
+});
+
+test("values that are not finite numbers are shown as received", () => {
+  assert.equal(formatValue(NaN, "W"), "NaN W");
+  assert.equal(formatValue(Infinity, ""), "Infinity");
+  assert.equal(formatValue("12", "W"), "12 W");
+});
+
+test("monitor units with a leading space keep the one-decimal display", () => {
+  assert.equal(formatReading(12.345, " ms"), "12.3 ms");
+  assert.equal(formatReading(1.234, " days"), "1.2 days");
+  assert.equal(formatReading(250.4, " ms"), "250 ms");
+  assert.equal(formatReading(41.27, "%"), "41.3%");
+  assert.equal(formatReading(7, ""), "7");
+  assert.equal(formatReading(0.35, "1"), "35 %");
+  assert.equal(formatReading(8e9, "By"), "7.45 GiB");
 });

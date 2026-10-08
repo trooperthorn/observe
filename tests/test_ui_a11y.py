@@ -2,7 +2,7 @@
 
 The scripts cannot run here, so these read the served page and the sources. The map merge is
 mirrored in Python below; tests/js/graph.test.mjs and tests/js/wizard.test.mjs hold the same cases
-for `node --test tests/js`, which is run by hand because the repo has no CI. The
+for `node --test tests/js`, which the tests workflow runs. The
 contrast of text input borders is checked in tests/test_ui_tokens.py and the fan header rule in
 tests/test_fan_header_rule.py."""
 

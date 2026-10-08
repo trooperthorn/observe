@@ -171,3 +171,11 @@ def test_console_pages_share_one_value_formatter():
         src = (root / page).read_text(encoding="utf-8")
         assert 'from "/static/js/format.js"' in src, page
         assert "toExponential" not in src, page
+
+
+def test_ci_runs_the_node_tests_and_app_uses_the_shared_reading_formatter():
+    base = Path(__file__).resolve().parent.parent
+    wf = (base / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+    assert "node --test tests/js" in wf
+    app = (base / "observe" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "formatReading" in app and 'm.unit === "ms"' not in app
