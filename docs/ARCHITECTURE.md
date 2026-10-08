@@ -287,6 +287,38 @@ writer. In an upsert, a column the existing row keeps is named through the table
 the `INSERT`, such as `INSERT INTO infra_switches AS sw`), because PostgreSQL rejects a bare name
 there as ambiguous with the `excluded` row; both backends accept the alias form.
 
+A write unit that loses a deadlock (SQLSTATE 40P01) or a serialization conflict (40001) is rolled
+back and run again by the writer: up to `WRITE_ATTEMPTS` (4) runs in all, with a random pause of
+up to 50, 100 and 200 ms after the first, second and third loss, so two writers that collided do
+not collide again in step. The last conflict is raised as `StorageBusy`, which ingest answers as
+503 with `Retry-After: 5` and the other routes as 503 with `Retry-After: 2`, so a producer keeps
+its batch and the caller never sees a 500 or a lost write. A deadlock met by the writer outside a
+unit (a policy statement, the check before `drop_chunks`) or by a pooled reader is translated the
+same way. Running a unit again is only safe when it leaves nothing behind outside the transaction,
+so every unit was audited for that. The core units are plain SQL, and the few values they set
+outside the transaction (the ingest outcome of a push, the change domains a nested write names) are
+assigned again or cleared at the start of each run. The units that run code which is not part of
+Observe's core, a plugin's `submit_write` unit and the cycle of an infrastructure feed
+(`write_cycle`), are marked with `not_retryable` (`observe/storage/base.py`) and run once; a
+deadlock on one of them is `StorageBusy` at once. A new unit that appends to a list, bumps a
+counter or calls another service must be marked the same way. SQLite takes the whole write lock at
+`BEGIN IMMEDIATE`, so it has neither failure and ignores the mark.
+
+On TimescaleDB the cause is also removed where it is known. A compression or retention job locks a
+chunk exclusively, and a writer that first read the stored samples of a batch (a weak lock on each
+chunk) and then inserted (a stronger one) could wait on a chunk the job already held while the job
+waited on one the writer had read. Before that read, `series._stored_values` calls
+`PgConn.lock_samples_for_write`, which takes `ROW EXCLUSIVE` on the chunks that cover the batch's
+time range, so the job waits for the writer and no wait cycle forms. The chunk list comes from
+`timescaledb_information.chunks`, because `show_chunks()` takes a weak lock on every chunk it
+lists, and a chunk dropped before its lock is skipped. Locking the whole hypertable was tried and
+rejected, because it fails with `cache lookup failed for relation` when `drop_chunks` removes a
+child at the same moment. The retry stays as the safety net for the cycles the lock does not
+cover. Tests: `tests/test_pg_write_retry.py` (the retry policy against a fake connection raising
+40P01 and 40001; on TimescaleDB, a deadlock made on purpose with a compression job that is
+retried and stores every point, and compression and `drop_chunks` jobs running against live ingest
+with nothing lost and no error reaching the caller).
+
 Series storage and the summary levels are shared. Migration 16 adds `resources`, `scopes`,
 `series`, `samples` and `latest` (`observe/storage/series.py`), and migration 17 adds `rollup_5m`,
 `rollup_1h`, `rollup_1d`, the compaction table `rollup_state` and four views with the same columns

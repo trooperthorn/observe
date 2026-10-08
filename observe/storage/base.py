@@ -35,12 +35,26 @@ class IntegrityConflict(StorageError):
 
 
 class StorageBusy(StorageError):
-    """No read connection became free within the pool deadline, or the write queue is full (the
-    API answers 503)."""
+    """No read connection became free within the pool deadline, the write queue is full, or a
+    write kept losing a deadlock or serialization conflict after its retries (the API answers
+    503 with Retry-After and the producer keeps its batch)."""
 
 
 class StorageTimeout(StorageError):
     """A read ran past its deadline and was interrupted."""
+
+
+def not_retryable(unit: Callable[..., T]) -> Callable[..., T]:
+    """Mark a write unit that must run at most once per submission. A backend may run a unit
+    again after rolling it back (PostgreSQL does after a deadlock), which is only safe when the
+    unit keeps no state outside the transaction. Mark a unit that appends to a list, bumps a
+    counter, calls out to another service or otherwise leaves a trace outside the database."""
+    unit.retry_safe = False  # type: ignore[attr-defined]
+    return unit
+
+
+def is_retryable(unit: Callable[..., Any]) -> bool:
+    return getattr(unit, "retry_safe", True)
 
 
 # True inside the server's own background work (a plugin collector): its writes are critical, as

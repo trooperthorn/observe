@@ -309,6 +309,13 @@ def _stored_values(db: Conn, keys: Sequence[tuple[int, int]]
                    ) -> dict[tuple[int, int], float | None]:
     """The stored value of each (series id, time) pair that already has a sample."""
     out: dict[tuple[int, int], float | None] = {}
+    lock = getattr(db, "lock_samples_for_write", None)
+    if lock is not None and keys:
+        # Before the first read, on a backend where that matters (TimescaleDB): the read takes a
+        # weak lock on each chunk and the insert after it asks for a stronger one, and a
+        # compression or retention job that holds a chunk while it waits for the reader ends
+        # that wait in a deadlock. Asking for the stronger lock first makes the job wait.
+        lock(min(ts for _, ts in keys), max(ts for _, ts in keys))
     for part in _chunks(keys, IN_CHUNK // 2):
         marks = ",".join(["(?,?)"] * len(part))
         args = tuple(x for key in part for x in key)

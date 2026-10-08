@@ -41,7 +41,7 @@ from pydantic import BaseModel, ValidationError
 from .. import audit
 from ..config import Config
 from ..ingest.api import DenialAggregator
-from ..storage.base import CHANGE_DOMAINS, StorageBusy, StorageTimeout
+from ..storage.base import CHANGE_DOMAINS, StorageBusy, StorageTimeout, not_retryable
 from ..store import Store
 from . import cursor as cursor_mod
 from .principals import RANK, Authenticator, Principal, csrf_ok
@@ -241,12 +241,15 @@ class ApiRegistry:
 
     async def submit_write(self, unit: Callable[[Any], Any], *, touches: Sequence[str] = ()) -> Any:
         """Run a write unit on the writer. A plugin may bump only the domains its resources
-        declared, so it cannot make another plugin's pages look changed."""
+        declared, so it cannot make another plugin's pages look changed. A plugin's unit may keep
+        state outside the database, so the writer never runs it twice after a rollback."""
         extra = [d for d in touches if d not in self._declared] if self.owner else []
         if extra:
             raise ValueError(f"domain {extra[0]!r} was not declared by a resource of "
                              f"{self.owner!r}")
-        return await self.runtime.store.storage.write(unit, touches=tuple(touches))
+        def once(db: Any) -> Any:
+            return unit(db)
+        return await self.runtime.store.storage.write(not_retryable(once), touches=tuple(touches))
 
     # ---- registration ----------------------------------------------------------------------
 

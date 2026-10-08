@@ -34,6 +34,7 @@ from typing import Any
 from . import map_tables
 from .infra_sql import current_ids_sql
 from .portkey import lldp_port_key, port_key, switch_id, unifi_port_key
+from .storage.base import not_retryable
 from .store import Store
 
 __all__ = ["current_ids_sql", "InfraError", "InfraService", "InfraTx", "PROPERTY_TYPES",
@@ -391,12 +392,13 @@ async def write_cycle(store: Store, fn: Callable[[Any], Any], *, now: float,
     map writes and a SAVEPOINT per item), then the map tables are brought up to date before the
     single commit. `now` is the cycle's observation time, which link ageing is measured against.
     `touches` names the change domains the cycle changed besides the map; `map` and `ports` are
-    bumped only when the map tables really changed."""
+    bumped only when the map tables really changed. `fn` is a feed's own code and may keep state
+    outside the database, so the writer never runs the cycle twice after a rollback."""
     def unit(db: Any) -> Any:
         out = fn(db)
         map_tables.rebuild_and_touch(db, store.storage, now, store.map_stale_days)
         return out
-    return await store.storage.write(unit, touches=touches)
+    return await store.storage.write(not_retryable(unit), touches=touches)
 
 
 class InfraService:

@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -28,7 +30,7 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 
 from . import compaction, pg_timescale, rollups
 from .base import (CHANGE_DOMAINS, Conn, IntegrityConflict, StorageBusy, StorageError,
-                   StorageTimeout, T, WriteGate)
+                   StorageTimeout, T, WriteGate, is_retryable)
 from .pg_dialect import table_info_query, translate_sql
 from .schema import (MIGRATIONS, PLUGIN_TABLES, ROLLUP_STEP, PluginSchemaTooNewError,
                      SchemaTooNewError, refuse_legacy)
@@ -40,6 +42,12 @@ READ_DEADLINE_S = 2.0
 CONNECT_TIMEOUT_S = 10.0
 MIGRATION_LOCK = 7_424_001  # advisory lock key, so two starting processes migrate one at a time
 TIMESCALE_MODES = ("auto", "on", "off")
+# A write unit that loses a deadlock (40P01) or a serialization conflict (40001) is rolled back
+# and run again. It is run at most this many times in all, with a short jittered pause between
+# runs, and then the caller gets StorageBusy (a 503 with Retry-After on ingest).
+RETRY_SQLSTATES = ("40P01", "40001")
+WRITE_ATTEMPTS = 4
+RETRY_PAUSE_S = 0.025
 
 _URI_OR_PASSWORD = re.compile(r"(?:postgres(?:ql)?://\S+|password\s*=\s*\S+)", re.IGNORECASE)
 
@@ -69,6 +77,27 @@ class _ScrubFilter(logging.Filter):
             record.exc_info = None  # the traceback text is not scrubbed, so it is not kept
             record.exc_text = None
         return True
+
+
+def is_retry_conflict(err: BaseException) -> bool:
+    """Whether PostgreSQL ended the transaction to resolve a deadlock or a serialization
+    conflict, so that running it again can succeed."""
+    return isinstance(err, psycopg.Error) and err.sqlstate in RETRY_SQLSTATES
+
+
+def _lock_chunks_sql(lo_ms: int, hi_ms: int) -> str:
+    # The chunks come from the information view, not show_chunks(), which takes a weak lock on
+    # every chunk it lists. A chunk dropped between the listing and its lock is not there to lock.
+    return (
+        "DO $lock$ DECLARE c text; BEGIN "
+        "FOR c IN SELECT format('%I.%I', chunk_schema, chunk_name) "
+        "FROM timescaledb_information.chunks "
+        "WHERE format('%I.%I', hypertable_schema, hypertable_name)::regclass = 'samples'::regclass "
+        f"AND range_end_integer > {int(lo_ms)} "
+        f"AND range_start_integer <= {int(hi_ms)} ORDER BY range_start_integer LOOP "
+        "BEGIN EXECUTE format('LOCK TABLE %s IN ROW EXCLUSIVE MODE', c); "
+        "EXCEPTION WHEN undefined_table THEN NULL; END; "
+        "END LOOP; END $lock$")
 
 
 class _Cursor:
@@ -103,8 +132,18 @@ def _args(args: Sequence[Any]) -> tuple[Any, ...]:
 class PgConn:
     """A psycopg connection that takes the portable SQL and the `?` placeholders."""
 
-    def __init__(self, raw: psycopg.Connection[Any]) -> None:
+    def __init__(self, raw: psycopg.Connection[Any], *, timescale: bool = False) -> None:
         self.raw = raw
+        self.timescale = timescale
+
+    def lock_samples_for_write(self, lo_ms: int, hi_ms: int) -> None:
+        """Lock the raw sample chunks that hold the times lo to hi in ROW EXCLUSIVE mode, the
+        mode an insert takes, before a unit reads them. It stands in for the weaker lock that the
+        read would take first, so the unit never asks for a stronger lock on a chunk it already
+        holds (see series._stored_values). A no-op without TimescaleDB, whose jobs are the only
+        thing that takes a table lock against ingest."""
+        if self.timescale:
+            self.raw.execute(_lock_chunks_sql(lo_ms, hi_ms))
 
     def execute(self, sql: str, args: Sequence[Any] = ()) -> _Cursor:
         info = table_info_query(sql)
@@ -153,6 +192,7 @@ class PgStorage:
             self._admin = PgConn(psycopg.connect(self._conninfo, autocommit=True))
             self._wconn = PgConn(self._wraw)
             self.timescale = self._start(plugins or {}, timescale)
+            self._wconn.timescale = self.timescale
             self.incremental_rollups = not self.timescale
             self._seqs = {d: int(s) for d, s in self._wconn.execute(
                 "SELECT domain, seq FROM change_seq")}
@@ -317,6 +357,9 @@ class PgStorage:
                 raise ValueError(f"unknown change domain {domain!r}")
 
     def _translate(self, err: psycopg.Error) -> Exception:
+        if is_retry_conflict(err):
+            return StorageBusy("the database could not finish the write because it conflicted "
+                               "with other work; try again shortly")
         if isinstance(err, pg_errors.IntegrityError):
             return IntegrityConflict(self._scrub(str(err)))
         if isinstance(err, psycopg.OperationalError):
@@ -331,9 +374,33 @@ class PgStorage:
                 raw.close()
             finally:
                 self._wraw = psycopg.connect(self._conninfo, autocommit=False)
-                self._wconn = PgConn(self._wraw)
+                self._wconn = PgConn(self._wraw, timescale=self.timescale)
+
+    @staticmethod
+    def _pause(attempt: int) -> None:
+        """The wait before run number `attempt + 1`: random, and longer after each failure, so
+        two writers that collided do not collide again in step."""
+        time.sleep(random.uniform(0, RETRY_PAUSE_S * 2 ** attempt))
 
     def _run_unit(self, unit: Callable[[Conn], T], touches: tuple[str, ...]) -> T:
+        """Run a unit in one transaction. A deadlock or serialization failure rolls the whole
+        unit back and runs it again, up to WRITE_ATTEMPTS runs in all (a TimescaleDB policy job
+        can take a lock on a chunk between two statements of a unit, and PostgreSQL then ends one
+        side of the cycle). Only a unit that is safe to run again is retried (see not_retryable);
+        every other failure, and the last conflict, is raised to the caller."""
+        attempts = WRITE_ATTEMPTS if is_retryable(unit) else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._attempt(unit, touches)
+            except psycopg.Error as err:
+                if not (is_retry_conflict(err) and attempt < attempts):
+                    raise self._translate(err) from None
+                log.info("a write unit lost a %s conflict; running it again (run %d of %d)",
+                         err.sqlstate, attempt + 1, attempts)
+                self._pause(attempt)
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    def _attempt(self, unit: Callable[[Conn], T], touches: tuple[str, ...]) -> T:
         try:
             self._reconnect_if_broken()
         except psycopg.Error as err:
@@ -348,9 +415,6 @@ class PgStorage:
                 "UPDATE change_seq SET seq = seq + 1 WHERE domain = ? RETURNING seq",
                 (d,)).fetchone()[0]) for d in bumped}
             raw.commit()
-        except psycopg.Error as err:
-            self._safe_rollback(raw)
-            raise self._translate(err) from None
         except BaseException:
             self._safe_rollback(raw)
             raise
