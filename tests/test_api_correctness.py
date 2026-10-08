@@ -69,8 +69,9 @@ def test_the_sum_of_two_huge_points_is_null_on_the_live_database(tmp_path):
     live server (skipped without OBSERVE_TEST_PG_DSN); on SQLite the case above covers it. The
     rows are written below the rollups, as data stored before the ingest bound existed."""
     with live_pg() as storage:
-        e = ApiEnv(tmp_path, storage=storage)
+        e = None
         try:
+            e = ApiEnv(tmp_path, storage=storage)
             headers = e.token()
             pts = [series.Point("big", "m", "", "{}", int((START - 60 + i) * 1000), 1.7e308)
                    for i in range(2)]
@@ -90,6 +91,10 @@ def test_the_sum_of_two_huge_points_is_null_on_the_live_database(tmp_path):
                                    (sid, (hour + 3600 * k) * 1000, 1.7e308, 1.7e308, 1.7e308))
                 asyncio.run(storage.write(fill))
                 queries.append("&step=7200&agg=sum,avg,max")
+            if getattr(storage, "timescale", False):
+                # The summary levels are real-time views that sum the unrefreshed samples
+                # themselves, so step 300 reads the two huge samples through the view.
+                queries.append("&step=300&agg=sum,avg,max")
             for query in queries:
                 r = e.client.get("/api/v2/metrics/query?metric=m&from=-3h" + query,
                                  headers=headers)
@@ -105,7 +110,8 @@ def test_the_sum_of_two_huge_points_is_null_on_the_live_database(tmp_path):
             got = r.json()["series"][0]["points"][0][1:]
             assert got[0] == pytest.approx(0.3, rel=1e-12) and got[2] == 2
         finally:
-            e.close()
+            if e is not None:
+                e.close()
 
 
 @pytest.mark.parametrize("total", [None, float("inf"), float("-inf"), float("nan")])

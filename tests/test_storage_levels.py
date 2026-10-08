@@ -190,3 +190,25 @@ async def test_an_override_trims_only_its_own_metric(db):
         "SELECT s.metric FROM samples a JOIN series s ON s.id = a.series_id")] == ["kept"]
     assert await db.fetchall("SELECT DISTINCT metric FROM metric_hourly ORDER BY 1") == [
         ("kept",), ("plain",)]
+
+
+def test_covers_treats_equal_infinite_sums_as_equal_and_a_lone_infinity_as_different():
+    inf = float("inf")
+    assert compaction._covers((2, inf, 1.0, 2.0), (2, inf, 1.0, 2.0))
+    assert not compaction._covers((2, inf, 1.0, 2.0), (2, 3.0, 1.0, 2.0))
+    assert not compaction._covers((2, 3.0, 1.0, 2.0), (2, inf, 1.0, 2.0))
+    assert compaction._covers((2, 3.0, 1.0, 2.0), (2, 3.0, 1.0, 2.0))
+
+
+async def test_the_totals_of_a_level_scale_back_and_overflow_to_infinity(db):
+    now = 800 * DAY
+    await put(db, [(now - 20 * DAY + i, "h", "cpu", "big", "{}", 1.7e308, "C") for i in range(2)])
+    await put(db, [(now - 20 * DAY, "h", "cpu", "small", "{}", 0.5, "C")])
+
+    def read(conn):
+        return (compaction._stats(conn, "raw", None, 0, now * 1000),
+                compaction._stats(conn, "raw", None, 0, 0))
+
+    stats, empty = await db.write(read)
+    assert stats[0] == 3 and stats[1] == float("inf") and stats[3] == 1.7e308
+    assert empty == (0, 0.0, None, None)

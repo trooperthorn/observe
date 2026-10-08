@@ -349,7 +349,8 @@ def _complete(levels: rollups.RetentionLevels, now: float, start: float,
 # more than the float limit, which would answer 500. The query sums values divided by 2**64
 # instead. A power of two scales a float exactly, so the sum is the same up to the last rounding
 # and cannot overflow (it would take more than 2**64 values), and multiplying the total back
-# gives infinity, which _pack turns into null. Only values below about 1e-288 lose bits.
+# gives infinity, which _pack turns into null. Only values below about 1e-288 lose bits, and
+# values below about 1e-304 add up as zero.
 _SUM_SCALE = 2.0 ** 64
 _SUM_DIVISOR = "18446744073709551616.0"
 
@@ -363,6 +364,30 @@ def _pack(n: int, total: Any, lo: Any, hi: Any) -> dict[str, Any]:
     total = finite(total)
     avg = finite(total / n) if n and total is not None else None
     return {"avg": avg, "min": finite(lo), "max": finite(hi), "sum": total, "count": n}
+
+
+def _rollup_rows(db: Any, table: str | None, marks: str, width: int, ids: list[int],
+                 start_ms: int, end_ms: int) -> list[Any]:
+    """The rows of a summary level. On TimescaleDB the levels are real-time continuous
+    aggregates, which sum the not yet refreshed buckets inside the view as float8, so scaling
+    the outer sum cannot stop an overflow there and PostgreSQL raises SQLSTATE 22003. The query
+    is then repeated without the sum: the planner drops the unused column from the view, so the
+    count, minimum and maximum are answered and the sum is null."""
+    def run(total: str) -> list[Any]:
+        return db.execute(
+            f"SELECT series_id, (bucket / ?) * ? AS b, CAST(SUM(n) AS BIGINT), {total}, "
+            f"MIN(min_v), MAX(max_v) FROM {table} "
+            f"WHERE series_id IN ({marks}) AND bucket >= ? AND bucket <= ? "
+            "GROUP BY 1, 2 ORDER BY 1, 2", (width, width, *ids, start_ms, end_ms)).fetchall()
+    try:
+        return run(f"CAST(SUM(sum_v / {_SUM_DIVISOR}) AS DOUBLE PRECISION)")
+    except Exception as err:
+        if getattr(err, "sqlstate", None) != "22003":
+            raise
+        raw = getattr(db, "raw", None)
+        if raw is not None:
+            raw.rollback()  # the failed statement aborted the read transaction
+        return run("CAST(NULL AS DOUBLE PRECISION)")
 
 
 def _aggregate(db: Any, name: str, table: str | None, ids: list[int], step: int,
@@ -403,12 +428,7 @@ def _aggregate(db: Any, name: str, table: str | None, ids: list[int], step: int,
             f"WHERE series_id IN ({marks}) AND ts >= ? AND ts <= ? AND value IS NOT NULL "
             "GROUP BY 1, 2 ORDER BY 1, 2", (width, width, *ids, start_ms, end_ms)).fetchall()
     else:
-        rows = db.execute(
-            "SELECT series_id, (bucket / ?) * ? AS b, CAST(SUM(n) AS BIGINT), "
-            f"CAST(SUM(sum_v / {_SUM_DIVISOR}) AS DOUBLE PRECISION), MIN(min_v), MAX(max_v) "
-            f"FROM {table} "
-            f"WHERE series_id IN ({marks}) AND bucket >= ? AND bucket <= ? "
-            "GROUP BY 1, 2 ORDER BY 1, 2", (width, width, *ids, start_ms, end_ms)).fetchall()
+        rows = _rollup_rows(db, table, marks, width, ids, start_ms, end_ms)
     for sid, b, n, total, lo, hi in rows:
         if not n:
             continue

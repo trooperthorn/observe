@@ -101,9 +101,12 @@ because rollups add values up and two values near the float limit sum to infinit
 cannot carry. The pushed-batch schema refuses such a value the same way as a non-finite one. The
 metrics query and the latest values also turn any aggregate that is still not finite into `null`.
 A summed total that is NULL or infinite gives a null sum and a null average, never a division
-error. PostgreSQL raises an overflow error instead of returning either, so the metrics query sums
-values scaled by a power of two and scales the total back, which turns an overflow into infinity
-and so into `null`. The monitor availability and hourly mean readers skip a NULL or non-finite
+error. PostgreSQL raises an overflow error instead of returning either, so the metrics query and the
+compaction totals sum values scaled by a power of two and scale the total back, which turns an
+overflow into infinity and so into `null`. This costs precision only for values below about
+1e-288, and values below about 1e-304 add up as zero. On TimescaleDB the summary levels are
+real-time views that sum the not yet refreshed samples themselves, so a query there that still
+overflows is repeated without the sum, and its sum and average are `null`. The monitor availability and hourly mean readers skip a NULL or non-finite
 total the same way, and a monitor reading above the ingest bound is not stored. The JSON encoder
 of the v2 routes first turns every remaining non-finite float, such as a
 monitor reading of "nan", into `null` and then runs with `allow_nan=False`, so no response holds

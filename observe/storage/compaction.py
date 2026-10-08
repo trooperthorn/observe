@@ -27,6 +27,7 @@ after the same coverage check (see PgStorage).
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -91,7 +92,9 @@ def whole_table_cuts(levels: RetentionLevels, now: float) -> Cuts:
 
 def _stats(db: Conn, level: str, sid: int | None, lo: int, hi: int
            ) -> tuple[int, float, float | None, float | None]:
-    """Count, sum, min and max of the points a level holds in [lo, hi)."""
+    """Count, sum, min and max of the points a level holds in [lo, hi). Values are summed divided
+    by 2**64 so a float8 sum on PostgreSQL cannot overflow; the total is scaled back and may be
+    infinite."""
     table, col = TABLES[level]
     where = f"{col} >= ? AND {col} < ?"
     args: tuple[Any, ...] = (lo, hi)
@@ -99,11 +102,11 @@ def _stats(db: Conn, level: str, sid: int | None, lo: int, hi: int
         where = "series_id = ? AND " + where
         args = (sid, *args)
     if level == "raw":
-        what = "COUNT(value), COALESCE(SUM(value), 0), MIN(value), MAX(value)"
+        what = "COUNT(value), COALESCE(SUM(value / 18446744073709551616.0), 0), MIN(value), MAX(value)"
     else:
-        what = "COALESCE(SUM(n), 0), COALESCE(SUM(sum_v), 0), MIN(min_v), MAX(max_v)"
+        what = "COALESCE(SUM(n), 0), COALESCE(SUM(sum_v / 18446744073709551616.0), 0), MIN(min_v), MAX(max_v)"
     n, total, lo_v, hi_v = db.execute(f"SELECT {what} FROM {table} WHERE {where}", args).fetchone()
-    return (int(n or 0), float(total or 0.0), None if lo_v is None else float(lo_v),
+    return (int(n or 0), float(total or 0.0) * 2.0 ** 64, None if lo_v is None else float(lo_v),
             None if hi_v is None else float(hi_v))
 
 
@@ -117,7 +120,9 @@ def _covers(fine: tuple[int, float, float | None, float | None],
         return False
     if fine[3] is not None and (coarse[3] is None or coarse[3] < fine[3]):
         return False
-    if coarse[0] == fine[0] and abs(coarse[1] - fine[1]) > 1e-9 * max(1.0, abs(fine[1])):
+    if coarse[0] == fine[0] and coarse[1] != fine[1] and (
+            not (math.isfinite(coarse[1]) and math.isfinite(fine[1]))
+            or abs(coarse[1] - fine[1]) > 1e-9 * max(1.0, abs(fine[1]))):
         return False
     return True
 
