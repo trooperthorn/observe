@@ -1,6 +1,6 @@
-"""Home Assistant host mode: /api/config and /api/states become a batch of OpenTelemetry-named points for the Hosts
-page. The fixtures follow the REST shapes; the hassio and HA SOC entity ids are unverified
-against a live install (see observe/checks/ha_host.py)."""
+"""Home Assistant host mode: /api/config and /api/states become a batch of OpenTelemetry-named
+points for the Hosts page. The fixtures follow the REST shapes; the hassio and HA SOC entity ids
+are unverified against a live install (see observe/checks/ha_host.py)."""
 
 from __future__ import annotations
 

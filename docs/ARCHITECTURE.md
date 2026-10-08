@@ -736,6 +736,15 @@ Repairs and Backups, and the existing Containers and Home Assistant sections, ta
 reported shows `not_reported`, never zero. The old source and metric names (`ha_container`,
 `ha_backup`, `cpu_percent`, `backups_total` and the rest) are gone.
 
+Upgrade note. Stored Home Assistant history under the old (source, metric) keys is not deleted and
+not migrated: no view or rule reads it any more, so graphs and history of those series start again
+under the new names at the upgrade, and the old rows age out with the retention setting. The units
+changed too (percent to ratio, GB to bytes, hours to seconds). A saved `pushed_host` component or
+`require_sources` entry that names an old Home Assistant source is refused with the replacement
+scope, so a limit cannot sit on a series that no longer exists and read Good for ever, and a
+saved threshold rule on an old metric is refused when saved and logged as a warning when loaded,
+with the new metric and the unit change. The old source rows are hidden from the host page.
+
 Missing data is shown, not hidden. Each section has a `state`: `ok`, `stale`
 (no reading inside the stale window, or the host is silent), `unavailable` (a
 source reported a failure, with its reason), `absent` (the agent says the host

@@ -196,6 +196,75 @@ def test_graded_levels_follow_the_values(env):
     assert failing["status"] == "critical"
 
 
+def _add_points(metrics: dict[str, Any], scope: str, name: str, unit: str,
+                points: list[tuple[float, dict[str, str]]]) -> None:
+    """Add a gauge with these (value, string attributes) points to a scope of the fixture."""
+    dps = [{"asDouble": v, "timeUnixNano": "1790000000000000000",
+            "attributes": [{"key": k, "value": {"stringValue": t}} for k, t in attrs.items()]}
+           for v, attrs in points]
+    for rm in metrics["resourceMetrics"]:
+        for sm in rm["scopeMetrics"]:
+            if sm["scope"]["name"] == scope:
+                sm["metrics"].append({"name": name, "unit": unit, "gauge": {"dataPoints": dps}})
+                return
+    raise AssertionError(scope)
+
+
+@pytest.mark.parametrize("hours,status", [(10, "good"), (40, "warning"), (100, "critical")])
+def test_the_backup_age_is_graded_in_seconds(env, hours, status):
+    metrics = copy.deepcopy(load("metrics"))
+    _add_points(metrics, "ha_soc.collector.backup", "observe.ha.backup.last_success_age", "s",
+                [(hours * 3600.0, {})])
+    env.push(env.key(HOST), metrics=metrics)
+    env.login()
+    d = env.view()
+    assert item(d, "backups", "observe.ha.backup.last_success_age")["status"] == status
+
+
+def test_a_failed_last_backup_is_a_warning_and_a_good_one_is_good(env):
+    metrics = copy.deepcopy(load("metrics"))
+    _add_points(metrics, "ha_soc.collector.backup", "observe.ha.backup.last_ok", "1",
+                [(0.0, {})])
+    env.push(env.key(HOST), metrics=metrics)
+    env.login()
+    assert item(env.view(), "backups", "observe.ha.backup.last_ok")["status"] == "warning"
+
+
+@pytest.mark.parametrize("severity,status", [("critical", "critical"), ("error", "warning"),
+                                             ("warning", "warning")])
+def test_the_repair_severity_attribute_sets_the_level(env, severity, status):
+    metrics = copy.deepcopy(load("metrics"))
+    _add_points(metrics, "ha_soc.collector.repairs", "observe.ha.repair.issues", "{issue}",
+                [(2.0, {"observe.ha.repair.state": "open", "observe.ha.repair.domain": "zz",
+                        "observe.ha.repair.severity": severity})])
+    env.push(env.key(HOST), metrics=metrics)
+    env.login()
+    got = item(env.view(), "repairs", "observe.ha.repair.issues",
+               **{"observe.ha.repair.domain": "zz"})
+    assert got["status"] == status
+
+
+def test_the_host_events_list_the_pushed_breach_and_the_silent_stop(env):
+    env.push(env.key(HOST))
+    env.login()
+    d = env.view()
+    kinds = {e["kind"] for e in d["events"]}
+    assert {"boot.silent_stop", "observe.ha.watchdog.breach"} <= kinds
+
+
+def test_the_fixtures_stay_inside_the_size_bounds_and_an_oversized_push_is_refused(env):
+    from observe.ingest.schema import MAX_BODY_BYTES
+    for name in ("metrics", "logs"):
+        assert len(json.dumps(load(name))) < MAX_BODY_BYTES
+    key = env.key(HOST)
+    big = copy.deepcopy(load("metrics"))
+    pad = "x" * 1000
+    big["padding"] = [pad] * (MAX_BODY_BYTES // 1000 + 10)
+    assert len(json.dumps(big)) > MAX_BODY_BYTES
+    assert env.post("/v1/metrics", big, key).status_code == 413
+    assert asyncio.run(env.store.host_rows()) == []
+
+
 def test_a_host_with_os_type_keeps_its_platform(env):
     metrics = copy.deepcopy(load("metrics"))
     metrics["resourceMetrics"][0]["resource"]["attributes"].append(

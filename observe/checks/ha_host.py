@@ -176,7 +176,8 @@ def build_batch(host: str, config: dict[str, Any], states: list[dict[str, Any]],
             add(HA, "observe.ha.update.pending", 0.0, "1", {"observe.ha.entity_id": eid})
 
     for name, kind, v in hassio:
-        metric = "container.cpu.utilization" if kind == "cpu_percent"             else "container.memory.utilization"
+        metric = ("container.cpu.utilization" if kind == "cpu_percent"
+                  else "container.memory.utilization")
         add(HASSIO, metric, None if v is None else round(v / 100, 4), "1",
             {"container.name": name})
     for key, v in sorted(disk.items()):

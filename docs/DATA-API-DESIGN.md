@@ -390,12 +390,12 @@ From the golden files ha_Int_soc sends, copied into `tests/fixtures/observe_otlp
 | ha_watchdog/breach_count | `observe.ha.watchdog.breaches` | {breach} | G | `observe.ha.watchdog.rule` |
 | ha_crash_forensics/* | log records `observe.ha.crash` | | | severity ERROR for `kernel_fault` and `silent_stop`, WARN for `core_restart`, INFO for `clean_reboot`; body summary; attributes `observe.boot_id`, `observe.ha.crash.classification`, `observe.ha.crash.gap_seconds`, `observe.ha.crash.suspects`. Observe reads the classification as the boot kind `boot.<classification>`: `kernel_fault` and `silent_stop` are unclean, `core_restart` and `clean_reboot` clean, and the severity is kept |
 | Pulled by Observe's Home Assistant monitor (host mode) | `observe.ha.running`, `.safe_mode`, `.recovery_mode`, `.version`, `.update.pending`, `.update.count`, `.entity.count`, `.entity.unavailable`, `.soc.*`; `container.cpu.utilization`, `container.memory.utilization`; `system.filesystem.usage`, `.limit`, `.utilization` | 1, {entity}, {update}, By | G | scopes `observe.check.homeassistant`, `observe.check.hassio`, `observe.check.ha_soc`; `observe.ha.component`, `observe.ha.domain`, `observe.ha.entity_id`, `container.name`, `system.filesystem.state` |
+| HA REST check (pull monitor) | `observe.monitor.up`, `observe.monitor.latency` | 1, s | G | monitor resource |
+| Future HA detail (entities ha_Int_soc will push) | `observe.ha.entity.state` for numeric entities | entity unit mapped to UCUM | G | `observe.ha.entity_id`, `observe.ha.domain`, `observe.ha.device_class` |
 
 A host whose resource has no `os.type` but that sends a metric or a log named `observe.ha.*` is platform `homeassistant`.
 
 Implementation status (slice o5-ha-otel): the `ha`, `containers`, `integrations`, `repairs` and `backups` sections of the host view read these names from the scopes `ha_soc.collector.<name>` (what HA SOC sends) and `observe.check.*` (what the pull monitor writes), `tests/test_ha_push.py` checks the golden files against expected grades, and the old Home Assistant keys are removed from the host view, the monitor and the tests. Container, CPU and memory ratios are graded at 0.85 and 0.95; backup age is in seconds and graded at 36 h and 72 h.
-| HA REST check (pull monitor) | `observe.monitor.up`, `observe.monitor.latency` | 1, s | G | monitor resource |
-| Future HA detail (entities ha_Int_soc will push) | `observe.ha.entity.state` for numeric entities | entity unit mapped to UCUM | G | `observe.ha.entity_id`, `observe.ha.domain`, `observe.ha.device_class` |
 
 ### 3.5 SNMP
 

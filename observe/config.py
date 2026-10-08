@@ -348,6 +348,18 @@ class PushedHostMonitor(MonitorBase):
     address: str | None = None
     recheck_port: int | None = Field(default=None, ge=1, le=65535)
 
+    @model_validator(mode="after")
+    def _no_retired_required_source(self) -> "PushedHostMonitor":
+        """An old Home Assistant source id is never reported now, but its stored row still reads
+        available, so requiring it would read Good for ever. Refuse it."""
+        from .otelnames import LEGACY_HA_SOURCES
+        for src in self.require_sources:
+            if src in LEGACY_HA_SOURCES:
+                raise ValueError(
+                    f"required source '{src}' is an old Home Assistant id that nothing reports "
+                    f"now; the replacement is '{LEGACY_HA_SOURCES[src]}'")
+        return self
+
 
 class PingMonitor(MonitorBase):
     type: Literal["ping"]

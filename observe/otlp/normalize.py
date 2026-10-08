@@ -577,7 +577,8 @@ def normalize_logs(req: Any, bound_host: str, now: float) -> Normalized:
             ha_producer = True
         crash_class = attrs.get(HA_CRASH_CLASS)
         sent_kind = attrs.pop("observe.event.kind", None)
-        if kind == HA_CRASH and isinstance(crash_class, str) and crash_class                 and len(crash_class) + 5 <= MAX_NAME:
+        if (kind == HA_CRASH and isinstance(crash_class, str) and crash_class
+                and len(crash_class) + 5 <= MAX_NAME):
             sent_kind = "boot." + crash_class
         kind = _event_kind(kind, sent_kind)
         sent_severity = attrs.pop("observe.severity", None)

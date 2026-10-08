@@ -14,6 +14,7 @@ from observe.api import schema as schema_mod
 from observe.config import Config
 from observe.infra import InfraService
 from observe.ingest.keys import create_key, revoke_key
+from observe.ingest.schema import SourceStatus
 from observe.portkey import switch_id
 
 from .api_env import START, ApiEnv, host_batch
@@ -513,7 +514,11 @@ def ha_batch(host="ha01", ts=START - 5):
 
 def test_ha_instances_are_hosts_with_home_assistant_sections(env):
     env.push(host_batch("nas01"))
-    env.push(ha_batch())
+    ha = ha_batch()
+    ha.sources.extend([SourceStatus(source="ha_soc.collector.supervisor", available=True),
+                       SourceStatus(source="observe.check.homeassistant", available=True),
+                       SourceStatus(source="gpu", available=True)])
+    env.push(ha)
     assert env.get("/ha/instances").status_code == 401
     env.login("bob", admin=False)
     got = env.get("/ha/instances").json()
@@ -526,7 +531,10 @@ def test_ha_instances_are_hosts_with_home_assistant_sections(env):
     metrics = {i["metric"] for i in one["ha"]["items"]}
     assert {"observe.ha.running", "observe.ha.supervisor.healthy"} <= metrics
     assert [i["metric"] for i in one["backups"]["items"]] == ["observe.ha.backup.count"]
-    assert "events" in one and "sources" in one
+    assert "events" in one
+    # only the Home Assistant sources are listed: cpu and gpu are host sources of no HA section
+    assert {s["source"] for s in one["sources"]} == {"ha_soc.collector.supervisor",
+                                                     "observe.check.homeassistant"}
     assert env.get("/ha/instances/nas01").status_code == 404
     assert env.get("/ha/instances/nobody").status_code == 404
 

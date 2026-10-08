@@ -29,7 +29,7 @@ from typing import Any
 
 from .checks.host import CRITICAL, GOOD, WARNING, grade
 from .config import Thresholds
-from .otelnames import collector_scope, short_source
+from .otelnames import HA_SOC_PREFIX, RETIRED_SOURCES, collector_scope, short_source
 from .store import ABSENT_REASON
 
 _RANK = {GOOD: 0, WARNING: 1, CRITICAL: 2}
@@ -214,7 +214,6 @@ _LOADS = ("system.cpu.load_average.1m", "system.cpu.load_average.5m",
           "system.cpu.load_average.15m")
 _UTIL = _above(0.90, 0.98)  # a ratio of 0 to 1, as the design sends it
 SNMP = "observe.check.snmp"  # scope of the readings Observe's SNMP poller stores
-HA_SOC_PREFIX = "ha_soc.collector."  # scope prefix of the points ha_Int_soc pushes
 HA_POLL = "observe.check.homeassistant"  # scopes of the Home Assistant monitor in host mode
 HASSIO_POLL = "observe.check.hassio"
 SOC_POLL = "observe.check.ha_soc"
@@ -356,14 +355,14 @@ def _sources_of(section: str) -> list[str]:
 
 
 # The source row Observe's SNMP poller wrote before it used the scope `observe.check.snmp`.
-RETIRED_SNMP_SOURCE = "snmp"
+RETIRED_SNMP_SOURCE = "snmp"  # with the old Home Assistant ids, otelnames.RETIRED_SOURCES
 
 
 def source_views(sources: dict[str, dict[str, Any]], now: float,
                  stale_after: float) -> list[dict[str, Any]]:
     out = []
     for name in sorted(sources):
-        if name == RETIRED_SNMP_SOURCE:
+        if name in RETIRED_SOURCES:
             continue  # kept in the store, but nothing writes it now, so it would only read stale
         info = sources[name]
         absent = not info["available"] and info["reason"] == ABSENT_REASON
