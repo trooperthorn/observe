@@ -541,22 +541,40 @@ class Store:
     @staticmethod
     def _host_list_unit(db: Conn, wanted: dict[str, tuple[float, tuple[tuple[str, str], ...]]],
                         alert_since: float) -> dict[str, dict[str, Any]]:
-        """Five statements whatever the number of hosts: the host resources, every latest row of
-        them, every source status and the recent warning and critical events."""
+        """Four statements whatever the number of hosts: the host resources, the latest rows
+        inside the oldest wanted window, every source status and the recent warning and critical
+        events. A host whose window is empty, or that has a configured series silent for longer,
+        costs one more statement for all such hosts together, which reads only their own rows."""
         rids: dict[str, int] = {}
         for rid, name in db.execute("SELECT id, name FROM resources WHERE kind='host' "
                                     "ORDER BY id").fetchall():
             rids.setdefault(name, int(rid))
         by_rid = {rid: host for host, rid in rids.items() if host in wanted}
+        min_ms = min((series.to_ms(w[0]) for w in wanted.values()), default=0)
+        # The window is pushed into SQL, as _latest_host_unit does, so the rows read follow the
+        # live series and not the retention.
         latest: dict[int, list[Any]] = {}
         for r in db.execute(_LATEST_SQL + "WHERE s.resource_id IN "
-                            "(SELECT id FROM resources WHERE kind='host') ").fetchall():
+                            "(SELECT id FROM resources WHERE kind='host') AND l.ts>=? "
+                            "ORDER BY s.resource_id, l.ts, l.series_id", (min_ms,)).fetchall():
             latest.setdefault(int(r[6]), []).append(r[:6])
+        incomplete = []
+        for rid, host in by_rid.items():
+            since_ms = series.to_ms(wanted[host][0])
+            have = {(r[0], r[1]) for r in latest.get(rid, []) if r[5] >= since_ms}
+            if not have or any(k not in have for k in wanted[host][1]):
+                incomplete.append(rid)
+        full: dict[int, list[Any]] = {}
+        if incomplete:
+            marks = ",".join(str(i) for i in incomplete)  # integers read from the database
+            for r in db.execute(_LATEST_SQL + f"WHERE s.resource_id IN ({marks}) "
+                                "ORDER BY s.resource_id, l.ts, l.series_id").fetchall():
+                full.setdefault(int(r[6]), []).append(r[:6])
         out: dict[str, dict[str, Any]] = {h: {"samples": [], "sources": {}, "events": []}
                                            for h in wanted}
         for rid, host in by_rid.items():
             since_ms, series_wanted = series.to_ms(wanted[host][0]), wanted[host][1]
-            rows = latest.get(rid, [])
+            rows = full[rid] if rid in full else latest.get(rid, [])
             # The same three steps as _latest_host_unit: the window, the single newest row when
             # the window is empty, and each configured series' own newest older row.
             samples = [r for r in rows if r[5] >= since_ms]
@@ -581,7 +599,7 @@ class Store:
                 "SELECT host, ts, kind, severity, source, title, detail, boot_id FROM ("
                 "SELECT host, ts, kind, severity, source, title, detail, boot_id, id, "
                 "ROW_NUMBER() OVER (PARTITION BY host ORDER BY ts DESC, id DESC) AS rn "
-                "FROM host_events) e WHERE rn <= 50 AND ts >= ? "
+                "FROM host_events WHERE ts >= ?) e WHERE rn <= 50 "
                 "AND severity IN ('warning','critical') ORDER BY host, ts DESC, id DESC",
                 (alert_since,)).fetchall():
             if host in out:

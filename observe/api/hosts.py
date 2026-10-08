@@ -209,7 +209,8 @@ def register(api: ApiRegistry) -> None:
         rows = {r["host"]: r for r in await runtime.store.host_rows()}
         shown = [hostview.summarize(v) for v in await views.views(views.names(rows), rows)]
         for row in shown:
-            row["age_bucket"] = None if row["age_seconds"] is None                 else int(row["age_seconds"] // FRESH_S)
+            age = row["age_seconds"]
+            row["age_bucket"] = None if age is None else int(age // FRESH_S)
             for k in MOVING_KEYS:
                 del row[k]
         digest = hashlib.sha256(json.dumps(shown, sort_keys=True, default=str).encode()

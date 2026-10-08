@@ -2,7 +2,8 @@
 one host at a time build returned, and keeps its ETag while the list shows the same picture.
 
 Measured on the 50 host fixture below (SQLite, one statement per execute): the old build took
-414 statements, the batched build 5, and 10 hosts take the same 5."""
+414 statements, the batched build 5 or 6 (6 only when a silent host needs the fallback read, as
+in this fixture), and 10 hosts take the same count as 50."""
 
 from __future__ import annotations
 
@@ -113,7 +114,7 @@ def test_the_statement_count_does_not_grow_with_the_hosts(tmp_path):
                 old_count = len(sink)
         finally:
             env.close()
-    assert counts[10] == counts[50] == 5
+    assert counts[10] == counts[50] == 6
     assert old_count > 10 * counts[50]
 
 
@@ -183,5 +184,28 @@ def test_small_lists(tmp_path, count):
         fill(env, count)
         body = env.get("/hosts", headers=env.token()).json()
         assert [h["host"] for h in body["items"]] == [f"h{i:03d}" for i in range(count)]
+    finally:
+        env.close()
+
+
+def test_the_event_and_latest_reads_are_bounded_by_the_window(tmp_path):
+    """The events statement filters on ts inside the ranking subquery, so the ts index bounds
+    the scan and old history is never ranked; the first latest read carries a ts filter."""
+    env = make_env(tmp_path, 12)
+    try:
+        sink = count_statements(env)
+        ctx = context(env)
+        asyncio.run(list_hosts(ctx, PageParams(100, None), None))
+        events_sql = [s for s in sink if "ROW_NUMBER()" in s]
+        latest_sql = [s for s in sink if "FROM latest" in s]
+        assert len(events_sql) == 1 and "FROM host_events WHERE ts >= ?" in events_sql[0]
+        assert "l.ts>=?" in latest_sql[0]
+        # Results do not depend on what lies outside the window: 400 old events change nothing.
+        before = asyncio.run(list_hosts(ctx, PageParams(100, None), None))
+        old = [event("old", "critical", START - 90_000_000 + i, f"x{i}") for i in range(400)]
+        env.push(host_batch("h002", ts=START - 4, events=old))
+        after = asyncio.run(list_hosts(ctx, PageParams(100, None), None))
+        assert [h["host"] for h in after["items"]] == [h["host"] for h in before["items"]]
+        assert [h["status"] for h in after["items"]] == [h["status"] for h in before["items"]]
     finally:
         env.close()

@@ -1091,7 +1091,7 @@ memory) and an optional fingerprint of in-memory state: monitors and groups read
 memory, so their fingerprint is `Scheduler.fingerprint`, and a host view shows ages, so its ETag
 also changes every 10 seconds. A resource may pass `counters=False` so that the declared domains stay
 client metadata and the ETag comes from its fingerprint alone, and the fingerprint may be an async callable (the host list uses both). A matching `If-None-Match` is a 304, and an unchanged page is
-served from a bounded response cache (4 MiB), both before any read connection is borrowed. A
+served from a bounded response cache (4 MiB), both before any read connection is borrowed for the handler. The one exception is the host list, whose fingerprint is a digest of the rows shown: the first request after a change counter or the 10 second bucket moves reads the database (host rows plus one list read unit, built for all hosts) to rebuild it, so that request is a 503 on a busy database even when a cached body exists, and the page build that follows costs the same again. The digest leaves out `last_seen` and `age_seconds`, so a 304 or cached list may show them up to one 10 second bucket old. The list read is bounded by the alert and latest windows (events and latest rows older than the window are not read, except for the fallback read of hosts or series that have gone silent), measured on the 50 host test fixture as 6 statements for any host count. A
 handler that names a `db` parameter runs on the read pool and receives a read-only connection;
 `StorageBusy` and `StorageTimeout` become a 503 with `Retry-After`, and any other error a 500
 without detail. Lists use opaque cursors (`observe/api/cursor.py`) that carry the sort key of the
