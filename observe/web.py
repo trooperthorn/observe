@@ -147,6 +147,10 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         return resp
 
     login_limiter = RateLimiter(config.server.login_rate_per_minute, ingest_clock)
+    # One window for every peer together, so a flood from many addresses cannot make the
+    # argon2 verifications unbounded. Only requests that passed their own peer's limit count.
+    login_global_limiter = RateLimiter(config.server.login_global_per_minute, ingest_clock)
+    login_locks = authmod.LoginLocks()
     login_denials = DenialAggregator(ingest_clock)
     secure = config.server.session_cookie_secure
 
@@ -330,7 +334,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     @app.post("/api/login", include_in_schema=False)
     async def login(request: Request) -> Response:
         peer = request.client.host if request.client else "unknown"
-        if not login_limiter.allow(peer):
+        if not login_limiter.allow(peer) or not login_global_limiter.allow("all"):
             return await login_failed(peer, 429, "rate limit exceeded")
         declared = request.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > LOGIN_MAX_BODY:
@@ -347,7 +351,8 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         if not isinstance(name, str) or not isinstance(pw, str):
             return JSONResponse({"detail": "username and password are required"},
                                 status_code=422)
-        res = await authmod.check_login(store, config, name, pw, auth_clock())
+        res = await authmod.check_login(store, config, login_locks, name, pw, peer,
+                                         auth_clock())
         if not res.ok:
             # The attempted name is audited only when it is a real account.
             return await login_failed(peer, 401, res.reason, res.username if res.user_id else "")

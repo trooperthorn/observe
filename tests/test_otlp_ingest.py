@@ -797,6 +797,44 @@ def test_one_key_is_limited_across_peers(tmp_path):
         e.close()
 
 
+def test_twenty_keys_behind_one_peer_at_the_real_rate_get_no_429(tmp_path):
+    # 16+ hosts behind a NAT or proxy: metrics and logs every 15 s is 8 requests a minute each.
+    e = Env(tmp_path)
+    try:
+        keys = [e.key(f"host{i:02d}") for i in range(20)]
+        codes = []
+        for _ in range(8):
+            for i, key in enumerate(keys):
+                codes.append(e.push(simple(f"host{i:02d}"), key).status_code)
+        assert len(codes) == 160 and set(codes) == {200}
+    finally:
+        e.close()
+
+
+def test_one_key_above_its_limit_gets_429_with_retry_after_while_another_is_served(tmp_path):
+    e = Env(tmp_path, rate=5)
+    try:
+        busy, quiet = e.key("nas01"), e.key("nas02")
+        codes = [e.push(simple(), busy).status_code for _ in range(7)]
+        assert codes == [200] * 5 + [429] * 2
+        r = e.push(simple(), busy)
+        assert r.status_code == 429 and r.headers["retry-after"] == "60"
+        assert e.push(simple("nas02"), quiet).status_code == 200
+    finally:
+        e.close()
+
+
+def test_bad_keys_are_limited_per_peer_and_do_not_block_valid_keys_of_that_peer(tmp_path):
+    e = Env(tmp_path, rate=3)
+    try:
+        key = e.key("nas01")
+        codes = [e.push(simple(), "wpi_wrong").status_code for _ in range(5)]
+        assert codes == [401, 401, 401, 429, 429]
+        assert e.push(simple(), key).status_code == 200
+    finally:
+        e.close()
+
+
 def test_last_use_of_a_key_is_recorded_at_most_once_a_minute(env):
     key = env.key("nas01")
     assert env.push(simple(), key).status_code == 200

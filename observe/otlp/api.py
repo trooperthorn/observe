@@ -3,7 +3,7 @@
 This is the one write path that does not use a login, so it is the most constrained. Order of
 checks, cheapest and least informative first:
 
-1. Per-peer rate limit (429, Retry-After).
+1. Rate limit: per key for a valid key, per peer for a missing or wrong key (429, Retry-After).
 2. A bearer key is required and must be valid and unrevoked (401). A wpi key writes host data, a
    wpf key writes field data, and a valid key of any other scope is refused (403). A per-key rate
    limit follows (429). The body is not read before this passes.
@@ -208,14 +208,14 @@ def build_router(store: Store, guard: Guard, plugins: LoadedPlugins,
         """(scope, key, prefix, bound host or device) for a valid host or field key, or the
         refusal to send."""
         peer = request.client.host if request.client else "unknown"
-        if not guard.limiter.allow(peer):
-            return await guard.deny(request, 429, "rate limit exceeded")
         key = bearer(request)
         for scope in (HOST_SCOPE, FIELD_SCOPE):
             bound = await key_host(store, key, scope) if key else None
             if bound is not None:
                 break
         else:
+            if not guard.fail_limiter.allow(peer):
+                return await guard.deny(request, 429, "rate limit exceeded")
             if key and any([await key_host(store, key, s) for s in REFUSED_SCOPES]):
                 return await guard.deny(request, 403, "this key may not push data")
             return await guard.deny(request, 401, "missing or invalid ingest key")

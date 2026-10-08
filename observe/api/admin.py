@@ -236,7 +236,7 @@ def list_users(db: Any, page: PageParams) -> dict[str, Any]:
 SERVER_SHOWN = (
     "listen", "port", "retention_days", "audit_retention_days", "ingest_rate_per_minute",
     "max_concurrency", "session_idle_s", "session_absolute_s", "session_cookie_secure",
-    "login_max_failures", "login_lock_s", "login_rate_per_minute", "plugin_rate_per_minute",
+    "login_max_failures", "login_lock_s", "login_rate_per_minute", "login_global_per_minute", "plugin_rate_per_minute",
     "public_url", "anonymous_read", "api_rate_per_second", "api_burst", "api_auth_cache_s")
 
 

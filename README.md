@@ -613,8 +613,8 @@ labels; a log record is an event (`event.name` is its kind, see `docs/ARCHITECTU
 answers are 401 for a missing, wrong or revoked key, 403 for a valid control or read key and for a
 request in which nothing matched the key's host, 415 for an unknown content type or encoding, 413 for an
 oversized body, 400 for a body that does not decode or is nested deeper than 32 levels in JSON (checked
-before parsing, and recorded as a denial), and 429 over the per-peer and per-key rate limit
-(`server.ingest_rate_per_minute`, default 120). A resource for another host, a point that is not finite or
+before parsing, and recorded as a denial), and 429 over the per-key rate limit
+(`server.ingest_rate_per_minute`, default 120; a missing or wrong key is limited per peer instead, so hosts behind one proxy are not throttled together). A resource for another host, a point that is not finite or
 has no usable time, a bad metric name and similar faults are rejected one by one and counted in the
 `partial_success` of a 200 answer, and the rest of the request is stored. Sending the same request
 again is safe: a point is stored once per series and millisecond, an event once per `observe.dedup_key`,
@@ -713,8 +713,9 @@ prompt, never from an argument. Sign in at `/login`. The session cookie is
 HttpOnly, Secure and SameSite=Strict, and expires after 30 idle minutes or 12
 hours in all (`server.session_idle_s`, `session_absolute_s`). Set
 `server.session_cookie_secure: false` only when serving plain HTTP on a trusted
-network. An account locks for 15 minutes after 5 failures, and logins are
-limited per peer address. Routes that change state need the session's CSRF
+network. After 5 failures an account locks for 15 minutes for the peer address that failed, and the delay doubles at each
+further lockout, so someone on the network who knows your username cannot lock you out from your own address.
+Logins are limited per peer address and across all peers (`server.login_global_per_minute`, default 120). Routes that change state need the session's CSRF
 token in an `X-CSRF-Token` header (`GET /api/v2/session` returns it), and admin
 routes (everything under `/api/admin/` and `GET /api/v2/audit`) also need an admin
 user. The optional basic auth is kept for `/metrics` and the page shells and is never

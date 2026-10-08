@@ -152,8 +152,10 @@ Denied requests are written to the audit log as `ingest_denied`, through an
 aggregator adapted from hostwatch's hub: at most one row per peer per minute,
 carrying the number of denials it covers, with at most 4096 peers tracked. The
 row holds the key's public prefix and never the key. The rate limit is a fixed
-window per peer address and a second one per key, both set by
-`server.ingest_rate_per_minute`. The peer is the socket address; forwarded headers are not
+window per ingest key, set by `server.ingest_rate_per_minute` (default 120, against about 8 requests a
+minute from one host sending metrics and logs every 15 s). A valid key is never counted against its peer,
+so 16 hosts behind one NAT or proxy are not throttled together. A missing or wrong key is counted per
+peer in a second window of the same size, and that window answers 429 once it is used up. The peer is the socket address; forwarded headers are not
 trusted. The routes do not use the dashboard basic auth, because producers authenticate with
 their own key. A batch the store could not write is recorded as `ingest_failed` and is a server
 error; a database with no free read connection in time is a 503 with `Retry-After: 5`.
@@ -789,9 +791,13 @@ section note, so a warning or critical summary is never unexplained.
 A login body is at most 4096 bytes however it is framed: a declared Content-Length over the cap
 and a chunked body that grows past it (counted as it streams, never fully read) both get 413
 before any JSON is parsed. The first admin is created from the command line (`--create-admin`). Failed
-logins lock the account (`login_max_failures`, `login_lock_s`) and are limited
-per peer, with an unknown account taking the same time and answer as a wrong
-password. Settings live under `server:` in the config.
+logins are counted per account and peer (`observe.auth.LoginLocks`, in memory). After `login_max_failures`
+bad passwords that pair is locked for `login_lock_s`, and each further lockout of the same pair doubles
+the delay up to 24 hours. A LAN attacker who knows the owner's name therefore locks only their own
+address, and a correct password from any other peer is accepted. Login requests are also limited per
+peer (`login_rate_per_minute`) and across all peers together (`login_global_per_minute`, default 120), which
+bounds the argon2 work a flood from many addresses can cause. An unknown account takes the same time
+and answer as a wrong password. Settings live under `server:` in the config.
 
 ## Audit log
 

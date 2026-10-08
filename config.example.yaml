@@ -27,7 +27,7 @@ server:
   retention_days: 30
   # The audit log has its own retention, separate from polls and host samples.
   audit_retention_days: 365
-  ingest_rate_per_minute: 120  # POST /v1/metrics and /v1/logs requests per peer and per key per minute
+  ingest_rate_per_minute: 120  # POST /v1/metrics and /v1/logs requests per ingest key per minute (wrong keys: per peer)
   # plugin_rate_per_minute: 300  # requests per peer to /api/plugins/* routes
   # The address install commands tell hosts to call, http(s)://host[:port] with no path and never
   # localhost. When unset, an admin confirms one in the Add host wizard. The request's Host
@@ -47,6 +47,7 @@ server:
   # login_max_failures: 5
   # login_lock_s: 900
   # login_rate_per_minute: 20
+  # login_global_per_minute: 120  # logins from all peers together
   # Optional HTTP basic auth for the dashboard and API. Put a TLS reverse
   # proxy in front if you enable this, basic auth over plain HTTP is not
   # confidential.

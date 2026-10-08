@@ -573,6 +573,8 @@ Types: `validation` 400, `unauthenticated` 401, `forbidden` 403, `not-found` 404
 
 Token bucket per principal (session user or token) and per peer for anonymous: 20 requests per second burst 40 for viewers; `/metrics/query` counts 5 tokens; long polls on `/changes` count 1 per request. Over limit returns 429. Limits are in memory and reset on restart.
 
+Ingest (slice o7-auth-limits): `POST /v1/metrics` and `/v1/logs` are limited per ingest key (`server.ingest_rate_per_minute`, default 120 a minute, with a 429 and `Retry-After`), never per peer for a valid key, so hosts behind one NAT or proxy do not throttle each other; one host needs about 8 a minute. Missing or wrong keys are limited per peer. Login is limited per peer and across all peers (`server.login_global_per_minute`), and a failed password locks only the account and peer pair, with a delay that doubles at each further lockout.
+
 ### 4.9 Versioning and deprecation of /api
 
 * `/api/v2` is stable: additive changes only (new fields, new resources, new optional parameters). A breaking change means `/api/v3`.

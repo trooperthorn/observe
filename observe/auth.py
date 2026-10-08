@@ -160,36 +160,77 @@ async def set_user_flag(store: Store, user_id: int, column: str, value: bool) ->
     return "ok" if done else "last_admin"
 
 
-async def check_login(store: Store, cfg: Config, username: str, password: str,
-                      now: float | None = None) -> LoginResult:
-    """Check credentials and apply the lockout policy. An unknown, locked or disabled
-    account burns one dummy verification so timing does not reveal it. A correct
-    password on a locked account is refused and does not unlock it."""
+class LoginLocks:
+    """Lockout state per (account, peer), in memory.
+
+    Failures are counted for the pair, so an attacker on the LAN who knows the owner's name
+    locks only their own address out, never the owner. A pair that reaches `max_failures` is
+    locked for `base_s`; each further lockout of the same pair doubles the delay up to MAX_LOCK_S.
+    A correct password from a pair that is not locked is always accepted and clears the pair.
+    The table is bounded: idle pairs are dropped, and a flood of new pairs shares one entry.
+    State is lost on restart, which only ever unlocks."""
+
+    MAX_LOCK_S = 86400.0
+    MAX_KEYS = 4096
+    OVERFLOW = ("", "overflow")
+
+    def __init__(self) -> None:
+        # key -> [failures since the last lockout, lockouts so far, locked until, last failure]
+        self._state: dict[tuple[str, str], list[float]] = {}
+
+    def locked_for(self, user: str, peer: str, now: float) -> float:
+        entry = self._state.get((user, peer))
+        return max(0.0, entry[2] - now) if entry else 0.0
+
+    def fail(self, user: str, peer: str, now: float, max_failures: int, base_s: float) -> bool:
+        """Count one bad password. Returns True when this failure locked the pair."""
+        key = (user, peer)
+        if key not in self._state and len(self._state) >= self.MAX_KEYS:
+            self._state = {k: v for k, v in self._state.items()
+                           if v[2] > now or now - v[3] < self.MAX_LOCK_S}
+            if len(self._state) >= self.MAX_KEYS:
+                key = self.OVERFLOW
+        entry = self._state.setdefault(key, [0.0, 0.0, 0.0, now])
+        entry[0] += 1
+        entry[3] = now
+        if entry[0] < max_failures:
+            return False
+        entry[0] = 0.0
+        entry[1] += 1
+        entry[2] = now + min(base_s * 2 ** (entry[1] - 1), self.MAX_LOCK_S)
+        return True
+
+    def ok(self, user: str, peer: str) -> None:
+        self._state.pop((user, peer), None)
+
+
+async def check_login(store: Store, cfg: Config, locks: LoginLocks, username: str,
+                      password: str, peer: str, now: float | None = None) -> LoginResult:
+    """Check credentials and apply the lockout policy of the (account, peer) pair. An unknown,
+    locked or disabled account burns one dummy verification so timing does not reveal it. A
+    correct password from a locked pair is refused and does not unlock it; the same password
+    from a peer that is not locked is accepted."""
     now = time.time() if now is None else now
     if len(password) > MAX_PASSWORD or len(username) > MAX_USERNAME:
         _burn(cfg, "x")
         return LoginResult(False, "bad_credentials")
     rows = await store.fetch(
-        "SELECT id, hash, is_admin, disabled, failed_count, locked_until FROM users "
-        "WHERE username=?", (username,))
+        "SELECT id, hash, is_admin, disabled FROM users WHERE username=?", (username,))
     if not rows:
         _burn(cfg, password)
         return LoginResult(False, "bad_credentials")
-    uid, stored, is_admin, disabled, failed, locked_until = rows[0]
-    if locked_until is not None and locked_until > now:
+    uid, stored, is_admin, disabled = rows[0]
+    if locks.locked_for(username, peer, now) > 0:
         _burn(cfg, password)
         return LoginResult(False, "locked", uid, username)
     if disabled:
         _burn(cfg, password)
         return LoginResult(False, "disabled", uid, username)
     if not verify_password(cfg, stored, password):
-        failed += 1
-        lock = now + cfg.server.login_lock_s if failed >= cfg.server.login_max_failures else None
-        await store.execute(
-            "UPDATE users SET failed_count=?, locked_until=? WHERE id=?",
-            (0 if lock else failed, lock, uid))
-        return LoginResult(False, "locked" if lock else "bad_credentials", uid, username)
-    await store.execute("UPDATE users SET failed_count=0, locked_until=NULL WHERE id=?", (uid,))
+        locked = locks.fail(username, peer, now, cfg.server.login_max_failures,
+                            cfg.server.login_lock_s)
+        return LoginResult(False, "locked" if locked else "bad_credentials", uid, username)
+    locks.ok(username, peer)
     if make_hasher(cfg).check_needs_rehash(stored):
         await store.execute("UPDATE users SET hash=? WHERE id=?", (hash_password(cfg, password), uid))
     return LoginResult(True, "ok", uid, username, bool(is_admin))

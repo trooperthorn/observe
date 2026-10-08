@@ -1,4 +1,4 @@
-"""The guards shared by the ingest routes: the per-peer rate limit, the aggregated denial audit
+"""The guards shared by the ingest routes: the per-key rate limit, the per-peer limit on failures, the aggregated denial audit
 and the agent-config route.
 
 Data is pushed only as OTLP (observe/otlp/api.py, POST /v1/metrics and /v1/logs). This module holds
@@ -102,7 +102,9 @@ class Guard:
     def __init__(self, config: Config, store: Store,
                  clock: Callable[[], float] = time.monotonic) -> None:
         self.store = store
-        self.limiter = RateLimiter(config.server.ingest_rate_per_minute, clock)
+        # Failed or missing keys, per peer. A valid key is never counted against its peer, so
+        # hosts behind one NAT or proxy do not throttle each other.
+        self.fail_limiter = RateLimiter(config.server.ingest_rate_per_minute, clock)
         self.key_limiter = RateLimiter(config.server.ingest_rate_per_minute, clock)
         self.denials = DenialAggregator(clock)
         self.clock = clock
@@ -127,7 +129,7 @@ class Guard:
 
 def build_router(config: Config, store: Store, guard: Guard) -> APIRouter:
     router = APIRouter()
-    limiter, deny = guard.limiter, guard.deny
+    deny = guard.deny
 
     @router.get("/internal/v1/agent-config", include_in_schema=False)
     async def agent_config(request: Request) -> JSONResponse:
@@ -135,13 +137,15 @@ def build_router(config: Config, store: Store, guard: Guard) -> APIRouter:
         taken from the key, never from the request, so an agent can read only its own rates. The
         same limits and denial audit as ingest apply, and a key of another scope is refused."""
         peer = request.client.host if request.client else "unknown"
-        if not limiter.allow(peer):
-            return await deny(request, 429, "rate limit exceeded")
         key = bearer(request)
         bound = await key_host(store, key) if key else None
         if key is None or bound is None:
+            if not guard.fail_limiter.allow(peer):
+                return await deny(request, 429, "rate limit exceeded")
             return await deny(request, 401, "missing or invalid ingest key")
-        _, host = bound
+        prefix, host = bound
+        if not guard.key_limiter.allow(prefix):
+            return await deny(request, 429, "rate limit exceeded", prefix)
         glob, hosts = await store.storage.read(tiers.load)
         return JSONResponse({"host": host, "intervals": tiers.effective(host, glob, hosts)},
                             headers={"Cache-Control": "no-store"})

@@ -294,3 +294,59 @@ def test_create_admin_cli(tmp_path, monkeypatch):
             ("user_created", "cli"), ("user_create_failed", "cli")]
     finally:
         conn.close()
+
+
+def _from(env: "Env", peer: str) -> TestClient:
+    return TestClient(env.client.app, base_url="https://testserver", client=(peer, 5000))
+
+
+def test_bad_passwords_from_one_peer_do_not_lock_the_owner_out_from_another(tmp_path):
+    e = Env(tmp_path, login_max_failures=5, login_lock_s=60)
+    e.user("alice")
+    attacker, owner = _from(e, "192.0.2.66"), _from(e, "192.0.2.10")
+    bad = {"username": "alice", "password": "x" * 14}
+    assert [attacker.post("/api/login", json=bad).status_code for _ in range(5)] == [401] * 5
+    # The attacker's pair is locked, even for the right password.
+    good = {"username": "alice", "password": PASSWORD}
+    assert attacker.post("/api/login", json=good).status_code == 401
+    # The owner, from another peer, is accepted.
+    assert owner.post("/api/login", json=good).status_code == 200
+    for c in (attacker, owner):
+        c.close()
+    e.client.close()
+    e.store.close()
+
+
+def test_lockout_delay_doubles_for_each_further_lockout_of_the_same_peer():
+    locks = auth.LoginLocks()
+    now = 1000.0
+    waits = []
+    for _ in range(4):
+        assert not locks.fail("alice", "p", now, 2, 60)
+        assert locks.fail("alice", "p", now, 2, 60)
+        waits.append(locks.locked_for("alice", "p", now))
+        now += waits[-1] + 1
+    assert waits == [60, 120, 240, 480]
+    assert locks.locked_for("alice", "q", now) == 0
+    locks.ok("alice", "p")
+    assert locks.locked_for("alice", "p", now) == 0
+
+
+def test_the_lock_table_is_bounded():
+    locks = auth.LoginLocks()
+    for i in range(locks.MAX_KEYS + 50):
+        locks.fail(f"u{i}", "p", 1000.0, 5, 60)
+    assert len(locks._state) <= locks.MAX_KEYS + 1
+
+
+def test_login_has_a_global_cap_across_peers(tmp_path):
+    e = Env(tmp_path, login_rate_per_minute=100, login_global_per_minute=4, login_max_failures=100)
+    e.user("alice")
+    codes = []
+    for i in range(6):
+        c = _from(e, f"192.0.2.{i + 1}")
+        codes.append(c.post("/api/login", json={"username": "alice", "password": "z" * 14}).status_code)
+        c.close()
+    assert codes == [401, 401, 401, 401, 429, 429]
+    e.client.close()
+    e.store.close()

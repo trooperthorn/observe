@@ -751,6 +751,8 @@ class ServerConfig(Strict):
     db_path: str = "/data/observe.db"
     retention_days: int = Field(default=30, ge=1)
     audit_retention_days: int = Field(default=365, ge=1)
+    # OTLP requests per ingest key per minute. One host sends about 8 a minute (metrics and
+    # logs every 15 s). Requests with a missing or wrong key are limited per peer at the same number.
     ingest_rate_per_minute: int = Field(default=120, ge=1)
     basic_auth_user: str | None = None
     basic_auth_password: str | None = None
@@ -762,7 +764,8 @@ class ServerConfig(Strict):
     session_cookie_secure: bool = True
     login_max_failures: int = Field(default=5, ge=1)
     login_lock_s: int = Field(default=900, ge=1)
-    login_rate_per_minute: int = Field(default=20, ge=1)
+    login_rate_per_minute: int = Field(default=20, ge=1)  # per peer, before authentication
+    login_global_per_minute: int = Field(default=120, ge=1)  # all peers together
     argon2_time_cost: int = Field(default=3, ge=1)
     argon2_memory_kib: int = Field(default=65536, ge=8)
     argon2_parallelism: int = Field(default=4, ge=1)
