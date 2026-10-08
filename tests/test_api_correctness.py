@@ -16,6 +16,7 @@ from .api_env import START, ApiEnv
 from .otlp_build import gauge, metrics_request, number
 from .test_otlp_ingest import Env as OtlpEnv
 from .test_otlp_ingest import T0, rejected
+from .test_storage import live_pg
 
 
 @pytest.fixture
@@ -61,6 +62,50 @@ def test_the_sum_of_two_huge_points_is_null_not_infinity(env):
                        "&agg=sum,max", headers=env.headers)
     assert r.status_code == 200
     assert r.json()["series"][0]["points"][0][1:] == [None, 1.7e308]
+
+
+def test_the_sum_of_two_huge_points_is_null_on_the_live_database(tmp_path):
+    """On PostgreSQL and TimescaleDB a float8 sum raises on overflow, so this runs the API on the
+    live server (skipped without OBSERVE_TEST_PG_DSN); on SQLite the case above covers it. The
+    rows are written below the rollups, as data stored before the ingest bound existed."""
+    with live_pg() as storage:
+        e = ApiEnv(tmp_path, storage=storage)
+        try:
+            headers = e.token()
+            pts = [series.Point("big", "m", "", "{}", int((START - 60 + i) * 1000), 1.7e308)
+                   for i in range(2)]
+            small = [series.Point("big", "small", "", "{}", int((START - 60 + i) * 1000), v)
+                     for i, v in enumerate((0.1, 0.2))]
+            asyncio.run(storage.write(lambda db: series.record_points(
+                db, kind="host", name="h", points=pts + small, now=START, rollups=False)))
+            queries = ["&step=60&agg=sum,avg,max"]
+            if storage.incremental_rollups:  # a summary table that can be written directly
+                hour = int(START // 7200 * 7200) - 7200
+
+                def fill(db):
+                    sid = db.execute("SELECT id FROM series WHERE metric = 'm'").fetchone()[0]
+                    for k in range(2):
+                        db.execute("INSERT INTO rollup_1h (series_id, bucket, n, sum_v, min_v, "
+                                   "max_v) VALUES (?,?,1,?,?,?)",
+                                   (sid, (hour + 3600 * k) * 1000, 1.7e308, 1.7e308, 1.7e308))
+                asyncio.run(storage.write(fill))
+                queries.append("&step=7200&agg=sum,avg,max")
+            for query in queries:
+                r = e.client.get("/api/v2/metrics/query?metric=m&from=-3h" + query,
+                                 headers=headers)
+                assert r.status_code == 200, r.text
+                body = json.loads(r.content, parse_constant=lambda c: pytest.fail(c))
+                assert [p[1:] for p in body["series"][0]["points"]
+                        if p[3] is not None] == [[None, None, 1.7e308]] * len(
+                            [p for p in body["series"][0]["points"] if p[3] is not None])
+                assert any(p[1] is None and p[2] is None for p in body["series"][0]["points"])
+            r = e.client.get("/api/v2/metrics/query?metric=small&from=-1h&step=60"
+                             "&agg=sum,avg,count", headers=headers)
+            assert r.status_code == 200, r.text
+            got = r.json()["series"][0]["points"][0][1:]
+            assert got[0] == pytest.approx(0.3, rel=1e-12) and got[2] == 2
+        finally:
+            e.close()
 
 
 @pytest.mark.parametrize("total", [None, float("inf"), float("-inf"), float("nan")])

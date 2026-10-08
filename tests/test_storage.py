@@ -470,3 +470,38 @@ async def test_latest_host_picks_the_newest_row_and_the_last_value_sent_wins_a_t
     assert by_metric[("disk", "used")]["value"] == 7.5  # silent series still read
     assert type(got["last_seen"]) is float and got["clean_shutdown"] in (0, 1)
     assert await st.latest_host("nobody") is None
+
+
+class _RowsOnly:
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def fetchall(self, _sql, _args=()):
+        return self.rows
+
+
+@pytest.mark.parametrize("total", [None, float("inf"), float("nan")])
+async def test_availability_is_none_for_a_null_or_non_finite_total(total):
+    st = _store_on(_RowsOnly([(4, total)]))
+    assert await st.availability("m", 1) is None
+    assert await _store_on(_RowsOnly([(4, 3.0)])).availability("m", 1) == 75.0
+
+
+async def test_hourly_series_drops_a_non_finite_mean():
+    st = _store_on(_RowsOnly([(3600, float("inf")), (7200, float("nan")), (10800, 2.5)]))
+    assert await st.hourly_series("m", 1) == [(10800 + 1800.0, 2.5)]
+
+
+async def test_a_monitor_reading_above_the_ingest_bound_is_not_stored(storage):
+    from observe.checks.base import CheckResult, Result
+    st = _store_on(storage)
+    now = time.time()
+    for i in range(2):  # two such readings in one bucket would overflow a float8 sum
+        await st.record("m", now - 10 - i, CheckResult(Result.OK, "", value=1.7e308))
+    await st.record("m", now - 20, CheckResult(Result.OK, "", value=4.0))
+    await settle(storage)
+    rows = await st.fetch(
+        "SELECT COALESCE(SUM(n), 0), MAX(max_v) FROM metric_5m WHERE metric = ?",
+        ("monitor.value",))
+    assert rows[0][0] == 1 and rows[0][1] == 4.0
+    assert await st.last_result("m") is not None

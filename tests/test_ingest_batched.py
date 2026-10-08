@@ -248,9 +248,12 @@ def digest(rows: list[Any]) -> str:
     return h.hexdigest()
 
 
-async def content(storage: Any, name: str) -> dict[str, str]:
+async def content(storage: Any, name: str) -> dict[str, Any]:
     """A hash of everything stored for one resource, by name and not by id, so two resources of
-    one database can be compared."""
+    one database can be compared. The summed values of each summary view are kept apart as lists
+    under "<view>.sum_v": on TimescaleDB the views are computed from the samples and the order in
+    which a float sum adds its terms is not defined, so those compare with a tolerance there
+    (see same_content). The counts, minimums and maximums stay in the exact hash."""
     await settle(storage)
     ident = ("FROM {t} x JOIN series s ON s.id = x.series_id JOIN resources r ON r.id = s.resource_id "
              "JOIN scopes sc ON sc.id = s.scope_id WHERE r.name = ? ")
@@ -270,9 +273,26 @@ async def content(storage: Any, name: str) -> dict[str, str]:
     }
     for view in ("metric_5m", "metric_hourly", "metric_daily"):
         out[view] = digest(await storage.fetchall(
-            "SELECT scope, metric, unit, attrs, bucket, n, sum_v, min_v, max_v "
+            "SELECT scope, metric, unit, attrs, bucket, n, min_v, max_v "
             f"FROM {view} WHERE resource = ? ORDER BY scope, metric, attrs, bucket", (name,)))
+        out[view + ".sum_v"] = [r[0] for r in await storage.fetchall(
+            f"SELECT sum_v FROM {view} WHERE resource = ? "
+            "ORDER BY scope, metric, attrs, bucket", (name,))]
     return out
+
+
+async def same_content(storage: Any) -> None:
+    """The new and the old path stored the same rows. Summed values are exact where the summary
+    rows are written by the code under test, and equal within a relative 1e-9 where the database
+    computes them from the samples (TimescaleDB)."""
+    new, old = await content(storage, "new"), await content(storage, "old")
+    for key in [k for k in new if k.endswith(".sum_v")]:
+        a, b = new.pop(key), old.pop(key)
+        if storage.incremental_rollups:
+            assert a == b, key
+        else:
+            assert a == pytest.approx(b, rel=1e-9, abs=1e-12), key
+    assert new == old
 
 
 # ---- the two paths agree ----------------------------------------------------------------------
@@ -284,7 +304,7 @@ async def test_the_batched_path_stores_the_same_rows(storage):
     labels = [s[0] for s in steps]
     assert [(lab, dataclasses.astuple(r)) for lab, r in zip(labels, new)] == [
         (lab, dataclasses.astuple(r)) for lab, r in zip(labels, old)]
-    assert await content(storage, "new") == await content(storage, "old")
+    await same_content(storage)
     got = await storage.fetchall("SELECT COUNT(*) FROM samples")
     assert got[0][0] > 400  # the workload stored something worth comparing
     # The insertion numbers have no holes, and are one per stored sample, on either path.
@@ -319,7 +339,7 @@ async def test_a_batch_that_replaces_a_value_is_stored_like_the_old_path(storage
     new = run(storage, series.record_points, "new", steps)
     assert [dataclasses.astuple(r) for r in new] == [dataclasses.astuple(r) for r in old]
     assert new[1].replaced == 2
-    assert await content(storage, "new") == await content(storage, "old")
+    await same_content(storage)
 
 
 # ---- statements per batch ---------------------------------------------------------------------

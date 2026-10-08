@@ -345,10 +345,21 @@ def _complete(levels: rollups.RetentionLevels, now: float, start: float,
     return now - start <= _kept_days(levels, names, field) * 86400
 
 
+# A float8 SUM on PostgreSQL raises "value out of range: overflow" when stored values add up to
+# more than the float limit, which would answer 500. The query sums values divided by 2**64
+# instead. A power of two scales a float exactly, so the sum is the same up to the last rounding
+# and cannot overflow (it would take more than 2**64 values), and multiplying the total back
+# gives infinity, which _pack turns into null. Only values below about 1e-288 lose bits.
+_SUM_SCALE = 2.0 ** 64
+_SUM_DIVISOR = "18446744073709551616.0"
+
+
 def _pack(n: int, total: Any, lo: Any, hi: Any) -> dict[str, Any]:
     """The aggregates of one bucket. A sum of large values can overflow: SQLite may return
-    infinity, and PostgreSQL or another SQLite build returns NULL. JSON has no such number, so
-    the sum and the average are null whenever the total is NULL or not finite."""
+    infinity or NULL. JSON has no such number, so the sum and the average are null whenever the
+    total is NULL or not finite. PostgreSQL raises an error instead of returning either, so
+    _aggregate sums scaled values there (see _SUM_SCALE) and an overflow shows up here as
+    infinity."""
     total = finite(total)
     avg = finite(total / n) if n and total is not None else None
     return {"avg": avg, "min": finite(lo), "max": finite(hi), "sum": total, "count": n}
@@ -387,19 +398,21 @@ def _aggregate(db: Any, name: str, table: str | None, ids: list[int], step: int,
     if name == "raw":
         rows = db.execute(
             "SELECT series_id, (ts / ?) * ? AS b, COUNT(value), "
-            "CAST(SUM(value) AS DOUBLE PRECISION), MIN(value), MAX(value) FROM samples "
+            f"CAST(SUM(value / {_SUM_DIVISOR}) AS DOUBLE PRECISION), MIN(value), MAX(value) "
+            "FROM samples "
             f"WHERE series_id IN ({marks}) AND ts >= ? AND ts <= ? AND value IS NOT NULL "
             "GROUP BY 1, 2 ORDER BY 1, 2", (width, width, *ids, start_ms, end_ms)).fetchall()
     else:
         rows = db.execute(
             "SELECT series_id, (bucket / ?) * ? AS b, CAST(SUM(n) AS BIGINT), "
-            f"CAST(SUM(sum_v) AS DOUBLE PRECISION), MIN(min_v), MAX(max_v) FROM {table} "
+            f"CAST(SUM(sum_v / {_SUM_DIVISOR}) AS DOUBLE PRECISION), MIN(min_v), MAX(max_v) "
+            f"FROM {table} "
             f"WHERE series_id IN ({marks}) AND bucket >= ? AND bucket <= ? "
             "GROUP BY 1, 2 ORDER BY 1, 2", (width, width, *ids, start_ms, end_ms)).fetchall()
     for sid, b, n, total, lo, hi in rows:
         if not n:
             continue
-        full = _pack(int(n), total, lo, hi)
+        full = _pack(int(n), None if total is None else float(total) * _SUM_SCALE, lo, hi)
         out[sid].append([b // 1000, *[full[a] for a in aggs]])
     return out
 

@@ -100,9 +100,12 @@ A value whose magnitude is above 1e300 is rejected per point ("a value is too la
 because rollups add values up and two values near the float limit sum to infinity, which JSON
 cannot carry. The pushed-batch schema refuses such a value the same way as a non-finite one. The
 metrics query and the latest values also turn any aggregate that is still not finite into `null`.
-A summed total that is NULL (an overflowing SUM on PostgreSQL or some SQLite builds) or infinite gives a null
-sum and a null average, never a division error, and the monitor availability and hourly mean readers skip
-such a total the same way. The JSON encoder of the v2 routes first turns every remaining non-finite float, such as a
+A summed total that is NULL or infinite gives a null sum and a null average, never a division
+error. PostgreSQL raises an overflow error instead of returning either, so the metrics query sums
+values scaled by a power of two and scales the total back, which turns an overflow into infinity
+and so into `null`. The monitor availability and hourly mean readers skip a NULL or non-finite
+total the same way, and a monitor reading above the ingest bound is not stored. The JSON encoder
+of the v2 routes first turns every remaining non-finite float, such as a
 monitor reading of "nan", into `null` and then runs with `allow_nan=False`, so no response holds
 `Infinity` or `NaN`. An integer point (`asInt`) is bounded like a double, as an integer, so a
 huge one is refused with "a value is too large to store". On PostgreSQL the ingest bound is the

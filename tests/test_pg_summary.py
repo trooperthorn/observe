@@ -58,7 +58,7 @@ def test_the_summary_views_read_only_the_summary_tables_with_portable_casts():
 def test_the_availability_and_hourly_reads_are_postgresql_text():
     sqls = (
         f"SELECT CAST(COALESCE(SUM(n), 0) AS BIGINT), "
-        f"CAST(COALESCE(SUM(sum_v), 0) AS DOUBLE PRECISION) FROM metric_5m "
+        f"CAST(SUM(sum_v) AS DOUBLE PRECISION) FROM metric_5m "
         "WHERE resource = ? AND scope = ? AND metric = ? AND bucket >= ?",
         "SELECT bucket, avg_v FROM metric_hourly WHERE resource = ? AND scope = ? "
         "AND metric = ? AND bucket >= ? AND avg_v IS NOT NULL ORDER BY bucket",

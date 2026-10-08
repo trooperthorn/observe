@@ -42,9 +42,15 @@ class Clock:
 
 class ApiEnv:
     def __init__(self, tmp_path: Any, monitors: list[dict[str, Any]] | None = None,
-                 plugins: Any = None, **server: Any) -> None:
+                 plugins: Any = None, storage: Any = None, **server: Any) -> None:
         self.path = str(tmp_path / "api.db")
         self.store = Store(self.path, plugins)
+        self.own_storage = storage is None
+        if storage is not None:
+            # Run the whole app on another backend, such as a live PostgreSQL storage; the
+            # caller closes that storage.
+            self.store.storage.close()
+            self.store.storage = storage
         srv = {"db_path": self.path, "argon2_time_cost": 1, "argon2_memory_kib": 8,
                "argon2_parallelism": 1, "session_idle_s": 100_000, "session_absolute_s": 200_000,
                "api_rate_per_second": 1000, "api_burst": 1000, **server}
@@ -98,7 +104,8 @@ class ApiEnv:
 
     def close(self) -> None:
         self.client.close()
-        self.store.close()
+        if self.own_storage:
+            self.store.close()
 
 
 def host_batch(host: str = "nas01", ts: float = START - 5, events: list | None = None,

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .checks.base import CheckResult, Result
-from .ingest.schema import Batch, normalize_severity
+from .ingest.schema import MAX_ABS_VALUE, Batch, normalize_severity
 from .state import Transition
 from .storage import Conn, Storage, compaction, open_storage, rollups, series
 
@@ -141,7 +141,10 @@ class Store:
 
         points = [point("monitor.up", "1", 0.0 if res.result is Result.FAIL else 1.0),
                   point("monitor.result", "1", RESULT_CODE[res.result])]
-        if res.value is not None and res.result is not Result.FAIL:
+        # A reading above the ingest bound is not stored: two of them in one bucket would add up
+        # past the float limit, which PostgreSQL refuses and so would lose the whole write.
+        if (res.value is not None and res.result is not Result.FAIL
+                and not abs(res.value) > MAX_ABS_VALUE):
             points.append(point("monitor.value", res.unit.strip(), res.value))
         if latency is not None:
             points.append(point("monitor.latency", "ms", latency))
@@ -273,7 +276,7 @@ class Store:
         since = (time.time() if now is None else now) - hours * 3600
         rows = await self.fetch(
             f"SELECT CAST(COALESCE(SUM(n), 0) AS BIGINT), "
-            f"CAST(COALESCE(SUM(sum_v), 0) AS DOUBLE PRECISION) FROM {view} "
+            f"CAST(SUM(sum_v) AS DOUBLE PRECISION) FROM {view} "
             "WHERE resource = ? AND scope = ? AND metric = ? AND bucket >= ?",
             (monitor, MONITOR_SCOPE, "monitor.up", int(since // width * width)))
         total, ok = rows[0]
