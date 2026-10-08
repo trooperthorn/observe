@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -86,16 +85,14 @@ _LATEST_SQL = ("SELECT sc.name, s.metric, s.attrs, l.value, s.unit, l.ts, s.reso
 
 
 # A monitor is a resource of kind "monitor"; each poll writes these series under one scope. State
-# is read back from the summary views and the latest table, never from the raw poll rows.
+# is read back from the summary views and the latest table. A poll is written only as these
+# series; there is no separate per-poll table.
 MONITOR_SCOPE = "observe-monitor"
 RESULT_CODE = {Result.OK: 0.0, Result.WARN: 1.0, Result.FAIL: 2.0}
 CODE_RESULT = {0: Result.OK, 1: Result.WARN, 2: Result.FAIL}
 # A window up to this long is read from the 5 minute level, a longer one from the hourly level.
 FINE_WINDOW_H = 48.0
 
-
-log = logging.getLogger(__name__)
-BACKFILL_KEY = "monitor_series_backfill_done"
 
 class Store:
     # server.retention_days, the raw level when no retention setting exists; it decides which
@@ -136,7 +133,6 @@ class Store:
         # Only a check that was answered has a latency: the time a failed check took is its
         # timeout or a refusal, not how fast the monitor responds.
         latency = None if res.result is Result.FAIL else res.latency_ms
-        row = (monitor, ts, res.result.value, res.value, latency, res.message)
         ms = series.to_ms(ts)
 
         def point(metric: str, unit: str, value: float) -> series.Point:
@@ -150,75 +146,12 @@ class Store:
             points.append(point("monitor.latency", "ms", latency))
 
         def unit(db: Conn) -> None:
-            db.execute("INSERT INTO results VALUES (?,?,?,?,?,?)", row)
             series.record_points(db, kind="monitor", name=monitor, points=points, now=ts,
                                  rollups=self.storage.incremental_rollups)
 
         # A poll result is the server's own work: a full ingest queue must not discard it, or
         # the Down transition that depends on it.
         await self.storage.write(unit, touches=("monitors", "metrics"), critical=True)
-
-    async def backfill_monitor_series(self, batch: int = 2000) -> int:
-        """Copy poll rows older than a monitor's first series point into the series. Before the
-        series existed every poll was only a row in results, and availability and the forecast now
-        read the series, so an upgraded install would otherwise show no history. Newest rows go
-        first, so an interrupted run leaves no gap and the next start continues below the oldest
-        point already copied. Returns the number of rows copied."""
-        done = await self.fetch("SELECT 1 FROM app_settings WHERE key = ?", (BACKFILL_KEY,))
-        if done:
-            return 0  # the copy ran to the end once; pruned raw samples must not be copied again
-        monitors = [r[0] for r in await self.fetch("SELECT DISTINCT monitor FROM results")]
-        copied = 0
-        for n, monitor in enumerate(monitors, 1):
-            log.info("Copying poll history into the series: monitor %d of %d (%s)",
-                     n, len(monitors), monitor)
-            while True:
-                first = await self.fetch(
-                    "SELECT MIN(sm.ts) FROM samples sm JOIN series s ON s.id = sm.series_id "
-                    "JOIN resources r ON r.id = s.resource_id JOIN scopes sc ON sc.id = s.scope_id "
-                    "WHERE r.kind = 'monitor' AND r.name = ? AND sc.name = ? AND s.metric = ?",
-                    (monitor, MONITOR_SCOPE, "monitor.up"))
-                cutoff = first[0][0] if first and first[0][0] is not None else None
-                if cutoff is None:
-                    rows = await self.fetch(
-                        "SELECT ts, result, value, latency_ms FROM results WHERE monitor = ? "
-                        "ORDER BY ts DESC LIMIT ?", (monitor, batch))
-                else:
-                    rows = await self.fetch(
-                        "SELECT ts, result, value, latency_ms FROM results WHERE monitor = ? "
-                        "AND ts < ? ORDER BY ts DESC LIMIT ?", (monitor, cutoff / 1000.0, batch))
-                if not rows:
-                    break
-                await self.storage.write(
-                    lambda db, rows=rows, monitor=monitor: self._backfill_unit(db, monitor, rows),
-                    touches=("monitors", "metrics"))
-                copied += len(rows)
-        await self.execute(
-            "INSERT INTO app_settings (key, value, updated) VALUES (?, '1', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
-            (BACKFILL_KEY, time.time()))
-        log.info("Copied %d poll rows into the series", copied)
-        return copied
-
-    def _backfill_unit(self, db: Conn, monitor: str, rows: list[tuple[Any, ...]]) -> None:
-        points: list[series.Point] = []
-        newest = 0.0
-        for ts, result, value, latency in rows:
-            res = Result(result)
-            ms = series.to_ms(ts)
-            newest = max(newest, ts)
-
-            def point(metric: str, unit: str, v: float, ms: int = ms) -> series.Point:
-                return series.Point(MONITOR_SCOPE, metric, unit, "{}", ms, v)
-
-            points.append(point("monitor.up", "1", 0.0 if res is Result.FAIL else 1.0))
-            points.append(point("monitor.result", "1", RESULT_CODE[res]))
-            if value is not None and res is not Result.FAIL:
-                points.append(point("monitor.value", "", value))
-            if latency is not None and res is not Result.FAIL:
-                points.append(point("monitor.latency", "ms", latency))
-        series.record_points(db, kind="monitor", name=monitor, points=points, now=newest,
-                             rollups=self.storage.incremental_rollups)
 
     async def last_result(self, monitor: str) -> tuple[float, Result] | None:
         """The newest poll result of a monitor and when it was taken, from the latest table."""
@@ -306,18 +239,6 @@ class Store:
         await self.storage.write(
             lambda db: db.execute("INSERT INTO events VALUES (?,?,?,?,?)", row),
             touches=("events",), critical=True)
-
-    async def history(self, monitor: str, hours: float,
-                      limit: int = 20000) -> list[dict[str, Any]]:
-        """Rows in the window, oldest first. At the row limit the newest rows are kept."""
-        since = time.time() - hours * 3600
-        rows = await self.fetch(
-            "SELECT ts, result, value, latency_ms, message FROM results "
-            "WHERE monitor=? AND ts>=? ORDER BY ts DESC LIMIT ?",
-            (monitor, since, limit),
-        )
-        rows.reverse()
-        return [dict(zip(("ts", "result", "value", "latency_ms", "message"), r)) for r in rows]
 
     async def events(self, limit: int = 200, monitor: str | None = None) -> list[dict[str, Any]]:
         if monitor:
@@ -634,10 +555,10 @@ class Store:
         await self.storage.write(lambda db: rollups.note_maintenance(db, now, rows, error))
 
     async def prune(self, retention_days: int, audit_retention_days: int = 365) -> int:
-        """Drop poll rows and host samples past retention. Transitions and host
+        """Drop samples, summaries and ingest batch records past retention. Transitions and host
         events are kept for at least a year because they are small and are the
         record you want in a review. The audit log has its own retention.
-        Expired sessions are removed. Returns the number of result rows removed."""
+        Expired sessions are removed. Returns the number of ingest batch records removed."""
         return await self.storage.apply_retention(
             now=time.time(), retention_days=retention_days,
             audit_retention_days=audit_retention_days)

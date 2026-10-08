@@ -149,7 +149,7 @@ class Storage(Protocol):
                               audit_retention_days: int) -> int:
         """One compaction pass (observe/storage/compaction.py): trim the raw samples and the
         summary levels past their retention after verifying coverage, in chunks, and drop the
-        other history rows past theirs. Returns the number of poll rows removed."""
+        other history rows past theirs. Returns the number of ingest batch records removed."""
 
     async def save_retention_settings(self, changes: dict[str, str | None], *, now: float,
                                       actor: str, remote: str, path: str,

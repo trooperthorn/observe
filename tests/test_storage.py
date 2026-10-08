@@ -188,15 +188,17 @@ async def test_plugin_tables_are_created_once_and_kept(storage):
 async def test_retention_drops_old_rows_and_keeps_the_rest(storage):
     now = 1_000_000_000.0
     day = 86400
-    await storage.execute("INSERT INTO results VALUES ('m', ?, 'ok', 1, 1, '')", (now - 40 * day,))
-    await storage.execute("INSERT INTO results VALUES ('m', ?, 'ok', 1, 1, '')", (now - 1 * day,))
+    await storage.execute("INSERT INTO ingest_batches (host, batch_id, ts) VALUES ('h', 'old', ?)",
+                          (now - 40 * day,))
+    await storage.execute("INSERT INTO ingest_batches (host, batch_id, ts) VALUES ('h', 'new', ?)",
+                          (now - 1 * day,))
     await storage.execute("INSERT INTO audit (ts, actor, kind) VALUES (?, 'a', 'login')",
                           (now - 400 * day,))
     await storage.execute("INSERT INTO audit (ts, actor, kind) VALUES (?, 'a', 'login')",
                           (now - 10 * day,))
     removed = await storage.apply_retention(now=now, retention_days=30, audit_retention_days=365)
     assert removed == 1
-    assert await storage.fetchall("SELECT COUNT(*) FROM results") == [(1,)]
+    assert await storage.fetchall("SELECT COUNT(*) FROM ingest_batches") == [(1,)]
     assert await storage.fetchall("SELECT COUNT(*) FROM audit") == [(1,)]
 
 

@@ -242,11 +242,10 @@ async def compact_level(storage: Storage, level: str, now: float, levels: Retent
 
 def housekeeping(levels: RetentionLevels, now: float, audit_retention_days: int
                  ) -> list[tuple[str, tuple[Any, ...]]]:
-    """The deletes that are not series data, as (sql, args); the first is the poll rows."""
+    """The deletes that are not series data, as (sql, args); the first is the ingest batch records."""
     raw = now - levels.raw_days * 86400
     history = now - levels.history_days * 86400
     return [
-        ("DELETE FROM results WHERE ts < ?", (raw,)),
         ("DELETE FROM ingest_batches WHERE ts < ?", (raw,)),
         ("DELETE FROM events WHERE ts < ?", (history,)),
         ("DELETE FROM host_events WHERE ts < ?", (history,)),
@@ -260,7 +259,7 @@ async def run(storage: Storage, now: float, retention_days: int, audit_retention
               raw: Callable[[float, RetentionLevels], Awaitable[int]] | None = None) -> int:
     """One compaction pass. `summaries_by_policy` leaves the summary levels to the backend's own
     policies (TimescaleDB); `raw` replaces the per-series raw trim (TimescaleDB drops verified
-    chunks). Returns the poll rows removed."""
+    chunks). Returns the ingest batch records removed."""
     levels = await storage.write(lambda db: load_levels(db, retention_days))
     statements = housekeeping(levels, now, audit_retention_days)
     removed = int(await storage.write(

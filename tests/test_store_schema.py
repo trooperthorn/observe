@@ -37,7 +37,8 @@ def version(path: str) -> int:
 def test_fresh_database_has_all_tables(tmp_path):
     path = str(tmp_path / "w.db")
     Store(path).close()
-    assert NEW_TABLES | {"results", "events"} <= tables(path)
+    assert NEW_TABLES | {"events"} <= tables(path)
+    assert "results" not in tables(path)  # polls are series only
     assert version(path) == SCHEMA_VERSION
 
 
@@ -46,15 +47,11 @@ def make_main_schema_db(path: str) -> None:
     db = sqlite3.connect(path)
     db.executescript(
         """
-        CREATE TABLE results (monitor TEXT NOT NULL, ts REAL NOT NULL, result TEXT NOT NULL,
-            value REAL, latency_ms REAL, message TEXT);
-        CREATE INDEX results_monitor_ts ON results(monitor, ts);
         CREATE TABLE events (monitor TEXT NOT NULL, ts REAL NOT NULL, previous TEXT NOT NULL,
             current TEXT NOT NULL, message TEXT);
         CREATE INDEX events_ts ON events(ts);
         """)
     now = time.time()
-    db.execute("INSERT INTO results VALUES ('a', ?, 'ok', 1.5, 2.0, 'fine')", (now,))
     db.execute("INSERT INTO events VALUES ('a', ?, 'up', 'down', 'boom')", (now,))
     db.commit()
     db.close()
@@ -64,10 +61,8 @@ def test_migrates_main_schema_database_keeping_rows(tmp_path):
     path = str(tmp_path / "w.db")
     make_main_schema_db(path)
     store = Store(path)
-    hist = asyncio.run(store.history("a", 1))
     evs = asyncio.run(store.events())
     store.close()
-    assert [h["message"] for h in hist] == ["fine"]
     assert [e["message"] for e in evs] == ["boom"]
     assert NEW_TABLES <= tables(path)
     assert version(path) == SCHEMA_VERSION
@@ -96,7 +91,7 @@ def test_rerunning_migrations_is_safe(tmp_path):
     db.commit()
     migrate(db)
     versions = [r[0] for r in db.execute("SELECT version FROM schema_version ORDER BY version")]
-    rows = db.execute("SELECT COUNT(*) FROM results").fetchone()[0]
+    rows = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     db.close()
     assert versions == sorted(MIGRATIONS)
     assert rows == 1
@@ -130,7 +125,7 @@ def test_prune_applies_retention(tmp_path):
     run_sql(store, "INSERT INTO users (username, hash, created) VALUES ('u', 'x', ?)", (now,))
     for sid, exp in (("dead", now - 10), ("live", now + 3600)):
         run_sql(store, "INSERT INTO sessions VALUES (?, 1, 'c', ?, ?, ?, 0)", (sid, now, exp, now))
-    run_sql(store, "INSERT INTO results VALUES ('m', ?, 'ok', 1, 1, '')", (old,))
+    run_sql(store, "INSERT INTO ingest_batches (host, batch_id, ts) VALUES ('h', 'b', ?)", (old,))
 
     removed = asyncio.run(store.prune(30, audit_retention_days=60))
 
@@ -152,15 +147,3 @@ def test_audit_retention_is_independent_of_sample_retention(tmp_path):
     asyncio.run(store.prune(7))  # default audit retention is a year
     assert run_sql(store, "SELECT COUNT(*) FROM audit")[0][0] == 1
     store.close()
-
-
-def test_history_over_the_row_limit_returns_the_newest_rows_in_time_order(tmp_path):
-    store = Store(str(tmp_path / "h.db"))
-    now = time.time()
-    for i in range(10):
-        db_ts = now - (9 - i) * 60
-        run_sql(store, "INSERT INTO results VALUES ('a', ?, 'ok', ?, 1.0, '')", (db_ts, float(i)))
-    hist = asyncio.run(store.history("a", 24 * 30, limit=4))
-    store.close()
-    assert [h["value"] for h in hist] == [6.0, 7.0, 8.0, 9.0]
-    assert [h["ts"] for h in hist] == sorted(h["ts"] for h in hist)

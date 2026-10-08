@@ -492,7 +492,7 @@ class Scheduler:
                     removed = await self.store.prune(
                         self.config.server.retention_days, self.config.server.audit_retention_days)
                     if removed:
-                        log.info("pruned %d result rows", removed)
+                        log.info("pruned %d ingest batch records", removed)
                     await self.store.note_maintenance(removed)
             except Exception as err:  # noqa: BLE001
                 log.exception("maintenance failed")

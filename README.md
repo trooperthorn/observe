@@ -107,7 +107,8 @@ comes from the key, so it never sees another host's rates. Every change is audit
 new values.
 
 Availability and the hourly series behind forecasts are read from the summary
-views (`metric_5m`, `metric_hourly`), not from raw poll rows.
+views (`metric_5m`, `metric_hourly`). A poll is stored only as series points; there is no
+separate per-poll table.
 
 ## Quick start (details below) (Docker on Debian or a Pi)
 

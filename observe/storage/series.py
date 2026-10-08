@@ -36,6 +36,10 @@ SUMMARY_LEVELS = (("rollup_5m", MS_5M), ("rollup_1h", MS_1H), ("rollup_1d", MS_1
 MAX_SERIES_PER_RESOURCE = 2000
 MAX_SERIES_TOTAL = 50_000
 
+# Bound parameters per statement stay far below every driver's limit (SQLite allowed 999 before
+# 3.32): a lookup names this many keys, or half this many (series, time) pairs, at a time.
+IN_CHUNK = 400
+
 # The attributes that identify a resource of each kind. Descriptive attributes are stored on the
 # row but never change which resource it is.
 RESOURCE_IDENTITY: dict[str, tuple[str, ...]] = {
@@ -48,6 +52,11 @@ RESOURCE_IDENTITY: dict[str, tuple[str, ...]] = {
     "field_tester": ("observe.field.device",),
     "service": ("service.name", "host.name"),
 }
+
+
+def _chunks(items: Sequence[Any], size: int) -> Iterable[Sequence[Any]]:
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
 
 
 def canonical(attrs: Mapping[str, Any]) -> str:
@@ -139,39 +148,64 @@ class _Counts:
         self.total = int(db.execute("SELECT COUNT(*) FROM series").fetchone()[0])
 
 
+def _lookup_series(db: Conn, digests: Sequence[bytes]) -> dict[bytes, int]:
+    """The ids of the series whose key hashes are given, a few hundred hashes per statement."""
+    found: dict[bytes, int] = {}
+    for part in _chunks(digests, IN_CHUNK):
+        marks = ",".join("?" * len(part))
+        for key, sid in db.execute(f"SELECT key_hash, id FROM series WHERE key_hash IN ({marks})",
+                                   tuple(part)):
+            found[bytes(key)] = int(sid)
+    return found
+
+
 def _series_ids(db: Conn, rid: int, points: Sequence[Point], now: float,
                 max_per_resource: int, max_total: int) -> dict[tuple[str, str, str], int | None]:
     """The series id of each distinct (scope, metric, attributes) in the points, creating the
-    ones that are new. None marks a series the cardinality guard refused."""
-    ids: dict[tuple[str, str, str], int | None] = {}
+    ones that are new. None marks a series the cardinality guard refused. The existing series are
+    found with one lookup per few hundred keys and the new ones are inserted together, in the
+    order the points first name them, so they take the ids a one by one insert would give."""
     first: dict[tuple[str, str, str], Point] = {}
     for p in points:
         first.setdefault((p.scope, p.metric, p.attrs), p)
-    counts: _Counts | None = None
+    digests = {key: _digest(str(rid), *key) for key in first}
+    found = _lookup_series(db, list(digests.values()))
+    ids: dict[tuple[str, str, str], int | None] = {}
+    missing = []
+    for key, digest in digests.items():
+        sid = found.get(digest)
+        if sid is None:
+            missing.append(key)
+        else:
+            ids[key] = sid
+    if not missing:
+        return ids
+    counts = _Counts(db, rid)
     scopes: dict[str, int] = {}
-    for key, p in first.items():
-        scope, metric, attrs = key
-        digest = _digest(str(rid), scope, metric, attrs)
-        row = db.execute("SELECT id FROM series WHERE key_hash = ?", (digest,)).fetchone()
-        if row is not None:
-            ids[key] = int(row[0])
-            continue
-        counts = counts or _Counts(db, rid)
+    rows = []
+    created = []
+    for key in missing:
         if counts.resource >= max_per_resource or counts.total >= max_total:
             ids[key] = None
             continue
-        sid = scopes.get(scope)
-        if sid is None:
-            sid = scopes[scope] = scope_id(db, scope)
+        scope, metric, attrs = key
+        scid = scopes.get(scope)
+        if scid is None:
+            scid = scopes[scope] = scope_id(db, scope)
+        p = first[key]
         seen = p.ts_ms / 1000.0
-        db.execute(
-            "INSERT INTO series (key_hash, resource_id, scope_id, metric, unit, instrument, "
-            "attrs, first_seen, last_seen) VALUES (?,?,?,?,?,'gauge',?,?,?) "
-            "ON CONFLICT (key_hash) DO NOTHING", (digest, rid, sid, metric, p.unit, attrs, seen, seen))
-        ids[key] = int(db.execute("SELECT id FROM series WHERE key_hash = ?",
-                                  (digest,)).fetchone()[0])
+        rows.append((digests[key], rid, scid, metric, p.unit, attrs, seen, seen))
+        created.append(key)
         counts.resource += 1
         counts.total += 1
+    if rows:
+        db.executemany(
+            "INSERT INTO series (key_hash, resource_id, scope_id, metric, unit, instrument, "
+            "attrs, first_seen, last_seen) VALUES (?,?,?,?,?,'gauge',?,?,?) "
+            "ON CONFLICT (key_hash) DO NOTHING", rows)
+        made = _lookup_series(db, [digests[k] for k in created])
+        for key in created:
+            ids[key] = made[digests[key]]
     return ids
 
 
@@ -263,6 +297,105 @@ def _replace(db: Conn, sid: int, ts_ms: int, old: float | None, new: float | Non
         _correct(db, sid, ts_ms, old, new)
 
 
+def _stored_values(db: Conn, keys: Sequence[tuple[int, int]]
+                   ) -> dict[tuple[int, int], float | None]:
+    """The stored value of each (series id, time) pair that already has a sample."""
+    out: dict[tuple[int, int], float | None] = {}
+    for part in _chunks(keys, IN_CHUNK // 2):
+        marks = ",".join(["(?,?)"] * len(part))
+        args = tuple(x for key in part for x in key)
+        for sid, ts, value in db.execute(
+                f"SELECT series_id, ts, value FROM samples WHERE (series_id, ts) IN ({marks})", args):
+            out[(int(sid), int(ts))] = value
+    return out
+
+
+def _latest_rows(db: Conn, sids: Sequence[int]
+                 ) -> dict[int, tuple[int, float | None, int | None, float | None]]:
+    out: dict[int, tuple[int, float | None, int | None, float | None]] = {}
+    for part in _chunks(sids, IN_CHUNK):
+        marks = ",".join("?" * len(part))
+        for sid, ts, value, prev_ts, prev_value in db.execute(
+                "SELECT series_id, ts, value, prev_ts, prev_value FROM latest "
+                f"WHERE series_id IN ({marks})", tuple(part)):
+            out[int(sid)] = (int(ts), value, prev_ts, prev_value)
+    return out
+
+
+def _fold_latest(db: Conn, fresh: Sequence[tuple[int, Point]]) -> None:
+    """What `_latest` does for each new point in turn, worked out in memory from the stored latest
+    rows and written back once per changed series. The result is the row a point by point run
+    leaves: the newest point and the one just before it, whatever order the points arrive in."""
+    state = _latest_rows(db, sorted({sid for sid, _ in fresh}))
+    changed: set[int] = set()
+    for sid, p in fresh:
+        t, v = p.ts_ms, p.value
+        cur = state.get(sid)
+        if cur is None:
+            state[sid] = (t, v, None, None)
+        elif t >= cur[0]:
+            state[sid] = (t, v, cur[0], cur[1])
+        elif cur[2] is None or cur[2] < t:
+            state[sid] = (cur[0], cur[1], t, v)  # older than the newest, newer than the one before
+        else:
+            continue
+        changed.add(sid)
+    if changed:
+        db.executemany(
+            "INSERT INTO latest (series_id, ts, value, prev_ts, prev_value) VALUES (?,?,?,?,?) "
+            "ON CONFLICT (series_id) DO UPDATE SET ts = excluded.ts, value = excluded.value, "
+            "prev_ts = excluded.prev_ts, prev_value = excluded.prev_value",
+            [(sid, *state[sid]) for sid in sorted(changed)])
+
+
+def _bump_many(db: Conn, fresh: Sequence[tuple[int, Point]]) -> None:
+    """`_bump` for every new non-null point: one batch of upserts per summary level, in point
+    order, so each row is added to in the order a point by point run adds to it."""
+    pairs = [(sid, p.ts_ms, p.value) for sid, p in fresh if p.value is not None]
+    if not pairs:
+        return
+    for table, width in SUMMARY_LEVELS:
+        db.executemany(
+            f"INSERT INTO {table} (series_id, bucket, n, sum_v, min_v, max_v) "
+            "VALUES (?,?,1,?,?,?) ON CONFLICT (series_id, bucket) DO UPDATE SET "
+            f"n = {table}.n + 1, sum_v = {table}.sum_v + excluded.sum_v, "
+            f"min_v = MIN({table}.min_v, excluded.min_v), "
+            f"max_v = MAX({table}.max_v, excluded.max_v)",
+            [(sid, ts // width * width, v, v, v) for sid, ts, v in pairs])
+
+
+def _record_one_by_one(db: Conn, live: Sequence[tuple[int, Point]], rollups: bool
+                       ) -> tuple[int, int, int]:
+    """The points stored one at a time: a statement or more per point. Used for a batch that
+    replaces a stored value, because correcting a summary reads the rows that the points before
+    it changed. Returns (new, replaced, duplicate)."""
+    new = replaced = duplicate = 0
+    seq = int(db.execute("SELECT seq FROM ingest_seq WHERE name = 'samples'").fetchone()[0])
+    first_seq = seq
+    for sid, p in live:
+        # The next insertion number is used only if the point is new, so numbers have no holes.
+        cur = db.execute("INSERT INTO samples (series_id, ts, value, seq) VALUES (?,?,?,?) "
+                         "ON CONFLICT (series_id, ts) DO NOTHING", (sid, p.ts_ms, p.value, seq + 1))
+        if cur.rowcount == 1:
+            new += 1
+            seq += 1
+            _latest(db, sid, p.ts_ms, p.value)
+            if rollups and p.value is not None:
+                _bump(db, sid, p.ts_ms, p.value)
+            continue
+        stored = db.execute("SELECT value FROM samples WHERE series_id = ? AND ts = ?",
+                            (sid, p.ts_ms)).fetchone()
+        old = None if stored is None else stored[0]
+        if old == p.value:
+            duplicate += 1  # a replay changes nothing
+        else:
+            replaced += 1
+            _replace(db, sid, p.ts_ms, old, p.value, rollups)
+    if seq != first_seq:
+        db.execute("UPDATE ingest_seq SET seq = ? WHERE name = 'samples'", (seq,))
+    return new, replaced, duplicate
+
+
 def record_points(db: Conn, *, kind: str, name: str, points: Iterable[Point], now: float,
                   rollups: bool, attrs: Mapping[str, Any] | None = None,
                   max_per_resource: int = MAX_SERIES_PER_RESOURCE,
@@ -270,6 +403,13 @@ def record_points(db: Conn, *, kind: str, name: str, points: Iterable[Point], no
                   raw_cut: Callable[[str], int] | None = None) -> Recorded:
     """Store the points of one resource inside a write unit. `rollups` says whether the summary
     levels are maintained here (False on TimescaleDB, where continuous aggregates build them).
+
+    The work is done per batch, not per point: the series ids come from one lookup, the stored
+    samples of the batch from one read, and the new samples, the latest rows and each summary
+    level are written with one batched statement (about a dozen statements for 45 points where
+    the point by point path used about 290). A batch that replaces a stored value, which is rare,
+    takes the point by point path, so the stored rows are the same either way
+    (tests/test_ingest_batched.py proves it).
 
     `raw_cut` gives, for a metric name, the millisecond time before which its raw rows are
     trimmed. A point older than that is late: its raw row would be trimmed at once and its
@@ -292,35 +432,40 @@ def record_points(db: Conn, *, kind: str, name: str, points: Iterable[Point], no
         pts = kept
     rid = resource_id(db, kind, name, now, attrs)
     ids = _series_ids(db, rid, pts, now, max_per_resource, max_total)
-    new = replaced = duplicate = dropped = 0
-    seq = int(db.execute("SELECT seq FROM ingest_seq WHERE name = 'samples'").fetchone()[0])
-    first_seq = seq
+    live: list[tuple[int, Point]] = []
+    dropped = 0
     for p in pts:
         sid = ids[(p.scope, p.metric, p.attrs)]
         if sid is None:
             dropped += 1
-            continue
-        # The next insertion number is used only if the point is new, so numbers have no holes.
-        cur = db.execute("INSERT INTO samples (series_id, ts, value, seq) VALUES (?,?,?,?) "
-                         "ON CONFLICT (series_id, ts) DO NOTHING", (sid, p.ts_ms, p.value, seq + 1))
-        if cur.rowcount == 1:
-            new += 1
-            seq += 1
-            _latest(db, sid, p.ts_ms, p.value)
-            if rollups and p.value is not None:
-                _bump(db, sid, p.ts_ms, p.value)
-            continue
-        stored = db.execute("SELECT value FROM samples WHERE series_id = ? AND ts = ?",
-                            (sid, p.ts_ms)).fetchone()
-        old = None if stored is None else stored[0]
-        if old == p.value:
+        else:
+            live.append((sid, p))
+    if not live:
+        return Recorded(0, 0, 0, dropped, late)
+
+    state = _stored_values(db, sorted({(sid, p.ts_ms) for sid, p in live}))
+    fresh: list[tuple[int, Point]] = []
+    duplicate = 0
+    for sid, p in live:
+        key = (sid, p.ts_ms)
+        if key not in state:
+            state[key] = p.value
+            fresh.append((sid, p))
+        elif state[key] == p.value:
             duplicate += 1  # a replay changes nothing
         else:
-            replaced += 1
-            _replace(db, sid, p.ts_ms, old, p.value, rollups)
-    if seq != first_seq:
-        db.execute("UPDATE ingest_seq SET seq = ? WHERE name = 'samples'", (seq,))
-    return Recorded(new, replaced, duplicate, dropped, late)
+            new, replaced, duplicate = _record_one_by_one(db, live, rollups)
+            return Recorded(new, replaced, duplicate, dropped, late)
+    if fresh:
+        seq = int(db.execute("SELECT seq FROM ingest_seq WHERE name = 'samples'").fetchone()[0])
+        db.executemany("INSERT INTO samples (series_id, ts, value, seq) VALUES (?,?,?,?) "
+                       "ON CONFLICT (series_id, ts) DO NOTHING",
+                       [(sid, p.ts_ms, p.value, seq + n) for n, (sid, p) in enumerate(fresh, 1)])
+        _fold_latest(db, fresh)
+        if rollups:
+            _bump_many(db, fresh)
+        db.execute("UPDATE ingest_seq SET seq = ? WHERE name = 'samples'", (seq + len(fresh),))
+    return Recorded(len(fresh), 0, duplicate, dropped, late)
 
 
 # ---- removing a resource --------------------------------------------------------------------

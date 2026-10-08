@@ -299,7 +299,23 @@ point cannot be stored twice, and `latest` holds the newest point of each series
 before it. Both ids are never reused (`AUTOINCREMENT`), so removing a host cannot leave summary
 rows that a later series would adopt.
 
-`series.record_points` runs inside the ingest write unit. A point is stored with `INSERT ... ON
+`series.record_points` runs inside the ingest write unit, and works per batch, not per point (slice
+o10-perf-ingest). The series ids of the batch come from one `key_hash IN (...)` lookup (new series are
+inserted together, in first-use order, so they take the ids a one by one insert gives), the stored
+values of the batch from one `(series_id, ts) IN (...)` read, and then the new samples, the latest
+rows and each of the three summary levels are written with one `executemany` each, in point order, so
+each summary row is added to in the same order and the float sums are identical to the point by
+point path. The latest rows are worked out in memory from the stored rows and written once per
+changed series. A 45 point batch of existing series takes 12 statements where it took 274 (23 times
+fewer; 373 and 23 for a batch that creates its 45 series); lookups are chunked at 400 parameters, so
+ten times the points add only a few statements. A batch that sends a stored point again with a
+different value, which is rare, takes the old point by point path (`_record_one_by_one`), because
+correcting a summary reads rows that earlier points of the batch changed. `tests/test_ingest_batched.py`
+keeps the old implementation as a reference and compares a hash of the stored samples, latest rows,
+summary levels and series of both paths on SQLite, the PostgreSQL stand-in and PostgreSQL (and the
+raw tables, ids and insertion numbers on SQLite). Throughput on SQLite is 1.1 to 1.5 times the old
+path (about 78,000 against 51,000 to 69,000 points per second in one transaction; the gain is the
+saved statements, which cost more on PostgreSQL where each is a round trip). A point is stored with `ON
 CONFLICT DO NOTHING`, and only a point that was newly inserted updates `latest` (kept when the
 point is not older than the current one, so arrival order does not matter) and, on SQLite and plain
 PostgreSQL, the three summary levels: one upsert each into `rollup_5m`, `rollup_1h` and
@@ -413,7 +429,7 @@ create a Degraded and Up pair every cycle.
  The table reads
 `rollup_state`: one row per trimmed level (`raw`, `5m`, `1h`, `1d`) with the time it was trimmed to,
 when, the rows removed and the first coverage problem, and one `compaction` row that the
-maintenance loop writes after each pass (poll rows removed, and the error text, cut to 200
+maintenance loop writes after each pass (ingest batch records removed, and the error text, cut to 200
 characters, when the pass failed). The page names the storage backend and never the DSN or its
 password.
 
@@ -465,7 +481,7 @@ A `schema_version` table records the applied version. At startup the storage lay
 applies each missing migration in order, one transaction per step, and rolls a
 failed step back. Every step is additive and guarded with `IF NOT EXISTS`, so
 rerunning one changes nothing. A database created before versioning existed
-holds only `results` and `events`; it is treated as version 1 and keeps all its
+held `results` and `events` (the `results` table is no longer created); it is treated as version 1 and keeps all its
 rows. A database with a newer version than the code supports raises
 `SchemaTooNewError` and is left untouched.
 
@@ -499,13 +515,13 @@ stay safe to run again. Existing history
 tables are untouched. The layout is adapted from hostwatch's `store.py`.
 
 Both retention settings must be at least 1 day; config validation rejects 0 and negative values.
-Retention is applied by `Store.prune`. Poll results and host samples are
+Retention is applied by `Store.prune`. Samples and the ingest batch records are
 dropped after `server.retention_days`. Transitions and host events are kept for
 at least a year. The audit log has its own setting,
 `server.audit_retention_days` (default 365), so shortening poll retention never
 shortens the audit trail. Expired sessions are deleted in the same pass.
 
-`Store.history` returns the poll results of one monitor in a window, oldest first, capped at 20000 rows. When the window holds more rows than the cap, it keeps the newest rows, so a long window always ends at the present.
+`Store.history` and the `results` table are gone (slice o10-perf-ingest): nothing read the per-poll rows except that method, which no route called, and the one time copy of old poll rows into the series. `Store.record` writes a poll only as series points, one fewer statement and one fewer table to trim on every poll. A database that still has a `results` table keeps it untouched and unread. `Storage.apply_retention` now returns the number of ingest batch records removed.
 
 ## Host-bound keys
 
@@ -569,8 +585,8 @@ is a later slice.
 
 ## State from summaries and the Degraded re-check
 
-Each poll result is written twice: the raw row in `results` (message and detail, trimmed by
-retention) and points in the series store under a resource of kind `monitor`, scope
+Each poll result is written as points in the series store (there is no separate per-poll row; the
+check message is not stored, and the state transition message goes to `events`) under a resource of kind `monitor`, scope
 `observe-monitor`, metrics `monitor.up` (0 for FAIL, else 1), `monitor.result` (0, 1, 2),
 `monitor.value` (not for FAIL) and `monitor.latency`. State is read back from the summary
 levels and the latest table, never from raw rows. `Store.availability` reads `metric_5m` (windows
@@ -601,8 +617,8 @@ as it is and resolves a name once per 600 seconds (`RESOLVE_TTL_S`), so a 10 sec
 no DNS lookup each time. The probe is injectable, so tests use a fake.
 
 `MonitorState.observe` starts the re-check of a monitor that is already WARN without a transition
-(WARN to WARN is not logged or alerted). `Store.record` writes `monitor.latency` and the
-`results.latency_ms` column only for a result that is not FAIL, and the rule engine is fed the same
+(WARN to WARN is not logged or alerted). `Store.record` writes `monitor.latency`
+only for a result that is not FAIL, and the rule engine is fed the same
 way. The `hosts` upsert in `Store.ingest_batch` never replaces a known platform or agent version with
 the placeholders `unknown` and `otlp` that `normalize_logs` and `normalize_metrics` give a request
 without `os.type` or `service.version`.

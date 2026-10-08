@@ -288,7 +288,7 @@ def make_phase5_db(path: str) -> None:
         migrate(db)
     finally:
         MIGRATIONS.update(old)
-    db.execute("INSERT INTO results VALUES ('a', 1.0, 'ok', 1.5, 2.0, 'fine')")
+    db.execute("INSERT INTO events VALUES ('a', 1.0, 'up', 'down', 'fine')")
     db.execute("INSERT INTO hosts (host, first_seen, last_seen) VALUES ('h1', 1.0, 2.0)")
     db.execute("INSERT INTO audit (ts, actor, kind) VALUES (1.0, 'admin', 'login_ok')")
     db.execute("INSERT INTO plugin_schema VALUES ('echo', 1)")
@@ -303,9 +303,9 @@ def test_phase5_database_migrates_keeping_rows(tmp_path):
     assert not INFRA & tables(path)
     store = Store(path)
     counts = {t: run_sql(store, f"SELECT COUNT(*) FROM {t}")[0][0]
-              for t in ("results", "hosts", "audit", "plugin_schema", *INFRA)}
+              for t in ("events", "hosts", "audit", "plugin_schema", *INFRA)}
     store.close()
-    assert counts == {"results": 1, "hosts": 1, "audit": 1, "plugin_schema": 1,
+    assert counts == {"events": 1, "hosts": 1, "audit": 1, "plugin_schema": 1,
                       **{t: 0 for t in INFRA}}
     assert INFRA <= tables(path)
     assert SCHEMA_VERSION == 23  # 15 change sequences, 16 series, 17 summary levels, 18 map tables, 19 key roles, 20 export cursor, 21 batch body hash, 22 sample insertion order, 23 alert outbox

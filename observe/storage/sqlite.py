@@ -239,7 +239,7 @@ class SqliteStorage:
         """Compact: drop raw samples and then each summary level past its retention after
         verifying that the levels above still cover them, in chunks, then the other history
         tables. Each chunk is its own unit so ingest is never held back behind one long delete.
-        Returns the poll rows removed."""
+        Returns the ingest batch records removed."""
         return await compaction.run(self, now, retention_days, audit_retention_days)
 
     async def save_retention_settings(self, changes: dict[str, str | None], *, now: float,

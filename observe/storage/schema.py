@@ -14,15 +14,6 @@ from typing import Any
 from .rollups import METRIC_VIEWS, ROLLUP_TABLES
 
 BASELINE = (
-    """CREATE TABLE IF NOT EXISTS results (
-    monitor TEXT NOT NULL,
-    ts REAL NOT NULL,
-    result TEXT NOT NULL,
-    value REAL,
-    latency_ms REAL,
-    message TEXT
-)""",
-    "CREATE INDEX IF NOT EXISTS results_monitor_ts ON results(monitor, ts)",
     """CREATE TABLE IF NOT EXISTS events (
     monitor TEXT NOT NULL,
     ts REAL NOT NULL,

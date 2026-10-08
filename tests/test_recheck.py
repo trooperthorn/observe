@@ -535,38 +535,6 @@ async def test_a_problem_whose_alert_never_went_out_alerts_after_a_restart(stora
     assert sent == ["down"]
 
 
-async def test_history_from_before_the_series_existed_is_backfilled(storage):
-    """A database from the previous version has poll rows and no monitor series."""
-    st = _store_on(storage)
-    rows = [(T0 - 100 * i, "ok" if i != 3 else "fail", 10.0 + i, 5.0, "") for i in range(1, 9)]
-    for r in rows:
-        await st.execute("INSERT INTO results VALUES (?,?,?,?,?,?)", ("m",) + r)
-    await settle(storage)
-    assert await st.availability("m", 1, now=T0) is None
-    assert await st.backfill_monitor_series(batch=3) == 8
-    await settle(storage)
-    assert await st.availability("m", 1, now=T0) == 87.5
-    assert await st.hourly_series("m", 1, now=T0)
-    # A second start copies nothing, and newer live polls are not disturbed.
-    assert await st.backfill_monitor_series() == 0
-    await st.record("m", T0, CheckResult.ok("up"))
-    assert await st.backfill_monitor_series() == 0
-
-
-async def test_a_finished_backfill_is_not_repeated_after_raw_samples_are_pruned(storage):
-    st = _store_on(storage)
-    for i in range(1, 6):
-        await st.execute("INSERT INTO results VALUES (?,?,?,?,?,?)",
-                         ("m", T0 - 100 * i, "ok", 10.0, 5.0, ""))
-    await settle(storage)
-    assert await st.backfill_monitor_series() == 5
-    await settle(storage)
-    # Raw samples pruned earlier than the poll rows: the rows are older than the new minimum.
-    await st.execute("DELETE FROM samples")
-    await settle(storage)
-    assert await st.backfill_monitor_series() == 0
-
-
 # ---- host identity, latency and warning noise ------------------------------------------------
 
 async def test_a_resolved_name_is_looked_up_once_and_a_literal_never(monkeypatch):
@@ -600,9 +568,6 @@ async def test_a_failed_check_adds_no_latency_point(storage):
         "GROUP BY s.metric")
     counts = dict(rows)
     assert counts["monitor.up"] == 3 and counts["monitor.latency"] == 2
-    latest = await env.store.fetch("SELECT latency_ms FROM results WHERE monitor = 'a' "
-                                   "ORDER BY ts")
-    assert [r[0] for r in latest][1] is None
 
 
 async def test_repeated_unreachable_while_warning_logs_one_transition(storage):

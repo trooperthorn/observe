@@ -36,8 +36,8 @@ ROLLUP_TABLES = (
     _table("rollup_5m"), _table("rollup_1h"), _table("rollup_1d"),
     # One row per compacted level (raw, 5m, 1h, 1d): the time before which it was last trimmed
     # and verified, when it last ran, the rows it removed and the first coverage problem it met.
-    # The row named MAINTENANCE_LEVEL is the whole compaction pass: when it last ran, the poll rows
-    # it removed and its error. This table is always last, because TimescaleDB replaces the
+    # The row named MAINTENANCE_LEVEL is the whole compaction pass: when it last ran, the ingest batch
+    # records it removed and its error. This table is always last, because TimescaleDB replaces the
     # summary tables above it with continuous aggregates.
     "CREATE TABLE IF NOT EXISTS rollup_state (level TEXT PRIMARY KEY, upto INTEGER NOT NULL, "
     "last_run REAL NOT NULL DEFAULT 0, last_rows INTEGER NOT NULL DEFAULT 0, "
@@ -50,7 +50,7 @@ MAX_ERROR_CHARS = 200
 
 
 def note_maintenance(db: Conn, now: float, rows: int, error: str) -> None:
-    """Record one compaction pass: when it ran, the poll rows it removed and its error, if any."""
+    """Record one compaction pass: when it ran, the batch records it removed and its error, if any."""
     db.execute(
         "INSERT INTO rollup_state (level, upto, last_run, last_rows, last_error) "
         "VALUES (?, 0, ?, ?, ?) ON CONFLICT (level) DO UPDATE SET last_run = excluded.last_run, "

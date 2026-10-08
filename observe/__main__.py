@@ -66,9 +66,6 @@ async def _serve(config, plugins) -> None:  # type: ignore[no-untyped-def]
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, lambda: setattr(server, "should_exit", True))
     sched.start()
-    # The history copy can be long on a small board, so it runs beside polling and the web app
-    # and logs its progress instead of holding the start.
-    backfill = asyncio.create_task(store.backfill_monitor_series())
     exporting: asyncio.Task[None] | None = None
     if config.export.otlp.enabled:
         store.exporter = Exporter(config.export.otlp, store)
@@ -80,8 +77,7 @@ async def _serve(config, plugins) -> None:  # type: ignore[no-untyped-def]
     try:
         await server.serve()
     finally:
-        backfill.cancel()
-        tasks = [backfill]
+        tasks: list[asyncio.Task[None]] = []
         if exporting is not None:
             exporting.cancel()
             tasks.append(exporting)

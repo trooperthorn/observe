@@ -206,7 +206,7 @@ async def test_a_full_write_queue_does_not_cost_a_poll_result_or_an_alert(tmp_pa
         await store.storage.write(lambda db: None)
     await sched.poll_once(mon)
     await asyncio.gather(*sched._pending_alerts)
-    assert (await store.fetch("SELECT COUNT(*) FROM results"))[0][0] == 1  # stored
+    assert (await store.fetch("SELECT COUNT(*) FROM samples"))[0][0] > 0  # stored
     assert [b["state"] for b in target.received] == ["down"]
     assert await store.open_alerts() == {mon.slug: ("down", clock.now)}
     store.close()
@@ -241,11 +241,11 @@ def test_a_version_22_database_with_rows_migrates_to_23(tmp_path):
     finally:
         MIGRATIONS[23] = newest
     assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 22
-    db.execute("INSERT INTO results VALUES ('a', 1.0, 'ok', 1.5, 2.0, 'fine')")
+    db.execute("INSERT INTO events VALUES ('a', 1.0, 'up', 'down', 'fine')")
     db.commit()
     db.close()
     store = Store(path)
-    assert [h["message"] for h in asyncio.run(store.history("a", 10**6))] == ["fine"]
+    assert [e["message"] for e in asyncio.run(store.events())] == ["fine"]
     asyncio.run(store.set_alert_open("a", "down", T0))
     assert asyncio.run(store.outbox_depth()) == 0
     store.close()
