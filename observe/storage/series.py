@@ -275,17 +275,22 @@ def _correct(db: Conn, sid: int, ts_ms: int, old: float | None, new: float | Non
                                                           bucket + width))
         else:
             fine = _window(db, lower, sid, bucket, bucket + width)
-            # A bucket with no row yet (every point in it was null until now) counts as empty,
-            # so a null that becomes a value creates the row as the 5 minute level does.
-            have = (0, 0.0, None, None) if current is None else current
-            if int(have[0]) + dn == fine[0]:
+            if current is None:
+                # No row: either every point in the bucket was null until now, or the level
+                # has already trimmed it. Only the first case may create a row, and the raw
+                # samples and the level below must then hold exactly the one new point.
+                # Otherwise the row would be a partial aggregate or have a negative count.
+                if dn > 0 and fine[0] == dn == _window(db, "samples", sid, bucket,
+                                                       bucket + width)[0]:
+                    _store_bucket(db, table, sid, bucket, fine)
+            elif int(current[0]) + dn == fine[0]:
                 _store_bucket(db, table, sid, bucket, fine)  # the level below holds all of it
-            else:
-                n = int(have[0]) + dn
-                lows = [x for x in (have[2], new) if x is not None]
-                highs = [x for x in (have[3], new) if x is not None]
+            elif int(current[0]) + dn >= 0:
+                n = int(current[0]) + dn
+                lows = [x for x in (current[2], new) if x is not None]
+                highs = [x for x in (current[3], new) if x is not None]
                 _store_bucket(db, table, sid, bucket,
-                              (n, (have[1] or 0.0) + ds, min(lows) if lows else None,
+                              (n, (current[1] or 0.0) + ds, min(lows) if lows else None,
                                max(highs) if highs else None))
         lower = table
 

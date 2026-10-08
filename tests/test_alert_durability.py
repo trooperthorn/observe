@@ -105,11 +105,18 @@ async def test_a_queued_alert_survives_a_restart_and_is_delivered_once(tmp_path)
     wire(again, target)
     target.up = True
     clock.now += 60
+    # Store calls run on a worker thread, so yielding a fixed number of times does not wait for
+    # them. The test waits for the real event instead: the queued row being marked done.
+    delivered = asyncio.Event()
+    mark_done = second.outbox_done
+
+    async def done_and_signal(ids):
+        await mark_done(ids)
+        delivered.set()
+
+    second.outbox_done = done_and_signal
     task = asyncio.create_task(again.run())  # the loop the scheduler starts
-    for _ in range(500):
-        if target.received and await second.outbox_depth() == 0:
-            break
-        await asyncio.sleep(0)
+    await asyncio.wait_for(delivered.wait(), timeout=30)
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
     assert [b["monitor"] for b in target.received] == ["nas"]

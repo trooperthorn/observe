@@ -432,5 +432,27 @@ async def test_levels_stay_exact_when_values_replace_nulls_and_each_other(storag
             key = (rnd.choice(("m0", "m1")), rnd.choice(slots))
             chosen[key] = None if rnd.random() < 0.45 else rnd.randint(-40, 40) / 4
         model.update(chosen)
-        await put(storage, [row(ts / 1000, metric, value) for (metric, ts), value in chosen.items()])
+        await put(storage, [row(ts / 1000, metric, value)
+                             for (metric, ts), value in chosen.items()])
     await assert_levels_match(storage, [(m, ts, v) for (m, ts), v in model.items()])
+
+
+async def test_a_replacement_never_writes_a_row_into_a_level_that_trimmed_the_bucket(storage):
+    """The daily row is gone while the raw samples are still there (a short daily retention).
+    Turning a value into null must not store a negative count, and turning a null into a value
+    must not bring back a partial row."""
+    if isinstance(storage, PgStorage) and storage.timescale:
+        pytest.skip("the levels are continuous aggregates there, and no correction runs")
+    ts = BASE + 10
+    await put(storage, [row(ts, "m0", 5.0), row(ts + 1, "m0", 7.0), row(ts + 2, "m0", None)])
+    await settle(storage)
+    await storage.execute("DELETE FROM rollup_1d")
+    await put(storage, [row(ts, "m0", None)])  # a value becomes null
+    await settle(storage)
+    assert await level_rows(storage, "rollup_1d") == {}
+    await put(storage, [row(ts + 2, "m0", 9.0)])  # a null becomes a value
+    await settle(storage)
+    assert await level_rows(storage, "rollup_1d") == {}
+    points = [("m0", ts * 1000, None), ("m0", (ts + 1) * 1000, 7.0), ("m0", (ts + 2) * 1000, 9.0)]
+    for table, width in LEVELS[:2]:
+        same_levels(await level_rows(storage, table), expected(points, width))

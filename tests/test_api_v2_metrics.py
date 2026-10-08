@@ -396,12 +396,29 @@ def test_a_metric_with_a_shorter_raw_override_is_served_from_the_level_that_hold
     asyncio.run(env.store.execute(
         "INSERT INTO app_settings (key, value, updated) VALUES (?, ?, 0)",
         ("retention.overrides", '{"monitor.latency": {"raw_days": 1}}')))
+    # The trim removes this metric's raw samples older than its own day; the 5 minute level keeps
+    # them, so only a plan that follows the override still returns all three points.
+    asyncio.run(env.store.storage.apply_retention(now=START, retention_days=7,
+                                                  audit_retention_days=365))
+    assert asyncio.run(env.store.execute(
+        "SELECT COUNT(*) FROM samples s JOIN series v ON v.id = s.series_id "
+        "WHERE v.metric = 'monitor.latency'")) == [(0,)]
     after = get(env, path + "&agg=avg,min,max").json()  # a new key, so no cached reply
     assert after["tier"] == "rollup_5m" and "no longer holds" in after["note"]
     assert len(after["series"][0]["points"]) == 3
     # A metric without an override still uses the global level.
     plain = get(env, "/metrics/query?metric=monitor.up&resource=core&from=-3d&step=60").json()
     assert plain["tier"] == "raw"
+
+
+def test_a_finer_level_that_holds_the_range_is_complete_whatever_the_daily_level_keeps(env):
+    env.poll("core", ts=START - 3600, latency=1.0)
+    asyncio.run(env.store.execute(
+        "INSERT INTO app_settings (key, value, updated) VALUES (?, ?, 0)",
+        ("retention.overrides", '{"monitor.latency": {"daily_days": 1}}')))
+    served = get(env, "/metrics/query?metric=monitor.latency&resource=core&from=-3d&step=60").json()
+    assert served["tier"] == "raw" and served["complete"] is True
+    assert "missing" not in (served.get("note") or "")
 
 
 def test_a_range_older_than_every_level_says_it_is_incomplete(env):

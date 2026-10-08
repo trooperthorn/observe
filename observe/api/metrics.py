@@ -11,9 +11,9 @@ not grow with how long the data has been kept:
 
 moving to a coarser level when the finer one no longer holds the start of the range (the
 admin's retention settings decide, including a metric's own override: the shortest retention of
-any selected metric counts). When even the daily level no longer holds the start for a selected
-metric, `complete` is false and the note says the earliest part is missing. A summarised level always answers with min, max, avg and
-count, so a week or a month shows peaks and not only averages. A response holds at most 1,000
+any selected metric counts). When even the level used no longer holds the start for a selected
+metric, `complete` is false and the note says the earliest part is missing. A summarised level
+always answers with min, max, avg and count, so a week or a month shows peaks and not only averages. A response holds at most 1,000
 points per series (the step is raised to fit) and at most 50 series.
 
 Not done yet: a query does not mix levels inside one response (it uses the one level that covers
@@ -321,7 +321,8 @@ def _plan(levels: rollups.RetentionLevels, now: float, start: float, end: float,
     index = next(i for i, t in enumerate(TIERS) if chosen < t[0])
     first = index
     # Move to a coarser level while the chosen one no longer holds the start of the range.
-    while index < len(TIERS) - 1 and now - start > _kept_days(levels, names, TIERS[index][4]) * 86400:
+    while (index < len(TIERS) - 1
+           and now - start > _kept_days(levels, names, TIERS[index][4]) * 86400):
         index += 1
     if index != first:
         chosen = max(chosen, TIERS[index][3])
@@ -337,9 +338,11 @@ def _plan(levels: rollups.RetentionLevels, now: float, start: float, end: float,
 
 
 def _complete(levels: rollups.RetentionLevels, now: float, start: float,
-              names: Sequence[str]) -> bool:
-    """Whether the coarsest level still holds the start of the range for every selected metric."""
-    return now - start <= _kept_days(levels, names, TIERS[-1][4]) * 86400
+              names: Sequence[str], level: str) -> bool:
+    """Whether the level the query uses still holds the start of the range for every selected
+    metric. A finer level that does is enough, even if the daily level keeps less."""
+    field = next(t[4] for t in TIERS if t[1] == level)
+    return now - start <= _kept_days(levels, names, field) * 86400
 
 
 def _aggregate(db: Any, name: str, table: str | None, ids: list[int], step: int,
@@ -419,7 +422,7 @@ def run_query(db: Any, ctx: ApiContext, q: MetricQuery) -> dict[str, Any]:
     rows = rows[:q.limit_series]
     names = sorted({r[2] for r in rows})
     name, table, step, _width, note = _plan(levels, now, start, end, q.step, names)
-    complete = _complete(levels, now, start, names)
+    complete = _complete(levels, now, start, names, name)
     if not complete:
         note = (note + "; " if note else "") + (
             "the range starts before the oldest data kept for a selected metric, so the "

@@ -326,8 +326,9 @@ its own bucket, and a replay changes nothing. A point resent with a different va
 stored one; the 5 minute bucket is recomputed from raw samples, and a coarser bucket from the level
 below when that level still holds all of it, otherwise its count and sum are adjusted by the
 difference and its extremes widened; a bucket with no row yet, because every point in it was
-null, gets its row when a null becomes a value, at every level. A value of null is stored (the gap stays visible) and counts
-toward nothing. The views join the series, scope and resource names and show the bucket in whole
+null, gets its row when a null becomes a value, at every level (a bucket whose row a level has
+already trimmed is not brought back). A value of null is stored (the gap stays visible) and
+counts toward nothing. The views join the series, scope and resource names and show the bucket in whole
 seconds with `avg_v` as sum over count; there is no view over raw samples.
 
 Compaction (`observe/storage/compaction.py`, run by `apply_retention` from the scheduler every
@@ -1126,9 +1127,10 @@ The resources are `monitors`, `groups`, `status` (`observe/api/monitors.py`), `h
 host events until the `logs` table exists), `metrics`, `metrics/latest` and `metrics/query`
 (`metrics.py`) and `changes` (`changes.py`, a long poll on the in-memory counters). The query
 chooses raw samples, the 5 minute, the hourly or the daily level from the step and the admin's
-retention settings, including the per-metric overrides (the shortest retention of any selected metric
-decides, so a query never silently returns partial data; when even the daily level no longer holds the
-start of the range for a selected metric, the response has `complete: false` and a note), caps a response at 1,000 points per series and 50 series, and uses only
+retention settings, including the per-metric overrides (the shortest retention of any selected
+metric decides, so a query never silently returns partial data; when even the level used no longer
+holds the start of the range for a selected metric, the response has `complete: false` and a
+note), caps a response at 1,000 points per series and 50 series, and uses only
 portable SQL (aggregates cast to plain types, `GROUP BY` by position), which
 `tests/test_api_v2_metrics.py` runs through the PostgreSQL dialect fake. A plugin adds resources
 with an optional `register_api(api)` hook; its registry mounts only under `/<plugin name>`, never
