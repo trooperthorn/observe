@@ -40,6 +40,23 @@ def _pg_dsn() -> str:
     return dsn
 
 
+# The ids of every TimescaleDB background job of a schema (parameter: the schema name). The
+# compression job reports the schema's own hypertable. The refresh and retention jobs of the
+# continuous aggregates run on materialization hypertables in TimescaleDB's internal schema, and
+# their config holds only numeric ids, so they are found through the aggregates of the schema.
+SCHEMA_JOBS_SQL = (
+    "SELECT j.job_id FROM timescaledb_information.jobs j "
+    "WHERE j.hypertable_schema = %(schema)s OR j.config::text LIKE %(like)s "
+    "OR EXISTS (SELECT 1 FROM timescaledb_information.continuous_aggregates c "
+    "WHERE c.view_schema = %(schema)s "
+    "AND c.materialization_hypertable_schema = j.hypertable_schema "
+    "AND c.materialization_hypertable_name = j.hypertable_name)")
+
+
+def schema_jobs_args(schema: str) -> dict:
+    return {"schema": schema, "like": f'%"{schema}"%'}
+
+
 @contextlib.contextmanager
 def live_pg(timescale: str | None = None, plugins=None):
     """A storage on a throwaway schema of the server in OBSERVE_TEST_PG_DSN; the case is skipped
@@ -72,9 +89,8 @@ def _hold_background_jobs(s, psycopg, dsn: str, schema: str) -> None:
     def hold() -> None:
         with psycopg.connect(dsn, autocommit=True) as admin:
             admin.execute(
-                "SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs "
-                "WHERE hypertable_schema = %s OR config::text LIKE %s",
-                (schema, f'%"{schema}"%'))
+                f"SELECT alter_job(job_id, scheduled => false) FROM ({SCHEMA_JOBS_SQL}) x",
+                schema_jobs_args(schema))
 
     original = s._apply_policies
 
@@ -97,9 +113,8 @@ def _drop_schema(psycopg, dsn: str, schema: str) -> None:
                     "SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'").fetchone()
                 if has_ts:
                     admin.execute(
-                        "SELECT delete_job(job_id) FROM timescaledb_information.jobs "
-                        "WHERE hypertable_schema = %s OR config::text LIKE %s",
-                        (schema, f'%"{schema}"%'))
+                        f"SELECT delete_job(job_id) FROM ({SCHEMA_JOBS_SQL}) x",
+                        schema_jobs_args(schema))
                 admin.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
             return
         except psycopg.errors.DeadlockDetected:
@@ -534,25 +549,46 @@ async def test_a_monitor_reading_above_the_ingest_bound_is_not_stored(storage):
 
 
 def test_timescale_jobs_of_a_test_schema_are_held_until_a_test_runs_them():
-    """The fixture unschedules the background jobs, also after the policies are registered again,
-    and a held job still runs on request."""
+    """The fixture unschedules every background job of its schema, the refresh and retention jobs
+    of the continuous aggregates included, also after the policies are registered again, and a
+    held job still runs on request."""
     import psycopg
 
+    expected = {"policy_compression": 1, "policy_refresh_continuous_aggregate": 3,
+                "policy_retention": 3}
     with live_pg() as s:
         if not s.timescale:
             pytest.skip("TimescaleDB is not in use")
         schema = s._wconn.execute("SELECT current_schema()").fetchone()[0]
-        query = ("SELECT job_id, scheduled FROM timescaledb_information.jobs "
-                 "WHERE hypertable_schema = %s OR config::text LIKE %s")
-        args = (schema, f'%"{schema}"%')
+        query = ("SELECT j.job_id, j.proc_name, j.scheduled, 0 "
+                 f"FROM timescaledb_information.jobs j JOIN ({SCHEMA_JOBS_SQL}) mine "
+                 "ON mine.job_id = j.job_id ORDER BY j.job_id")
 
         def jobs():
             with psycopg.connect(os.environ["OBSERVE_TEST_PG_DSN"], autocommit=True) as admin:
-                return admin.execute(query, args).fetchall()
+                return admin.execute(query, schema_jobs_args(schema)).fetchall()
 
-        before = jobs()
-        assert before and not any(scheduled for _, scheduled in before)
+        def assert_all_held(rows):
+            kinds: dict[str, int] = {}
+            for _, proc, scheduled, _ in rows:
+                kinds[proc] = kinds.get(proc, 0) + 1
+                assert not scheduled, proc
+            assert kinds == expected
+
+        assert_all_held(jobs())
         s._apply_policies(rollups.load_levels(s._wconn))
         after = jobs()
-        assert after and not any(scheduled for _, scheduled in after)
-        s._admin_run([f"CALL run_job({int(job)})" for job, _ in after])
+        assert_all_held(after)
+        # The data is dated years back, so a requested compression run must compress its chunk.
+        from .dbq import put_samples
+        s.write_sync(lambda db: put_samples(
+            db, [(1_700_000_000 + i, "h", "cpu", "t", "{}", float(i), "C") for i in range(3)],
+            rollups=s.incremental_rollups))
+        chunks = ("SELECT COUNT(*) FILTER (WHERE is_compressed) FROM timescaledb_information.chunks "
+                  "WHERE hypertable_schema = %s AND hypertable_name = 'samples'")
+        with psycopg.connect(os.environ["OBSERVE_TEST_PG_DSN"], autocommit=True) as admin:
+            assert admin.execute(chunks, (schema,)).fetchone()[0] == 0
+        s._admin_run([f"CALL run_job({int(row[0])})" for row in jobs()])
+        with psycopg.connect(os.environ["OBSERVE_TEST_PG_DSN"], autocommit=True) as admin:
+            assert admin.execute(chunks, (schema,)).fetchone()[0] >= 1
+        assert_all_held(jobs())

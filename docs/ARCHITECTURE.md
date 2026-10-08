@@ -320,7 +320,9 @@ retried and stores every point, and compression and `drop_chunks` jobs running a
 with nothing lost and no error reaching the caller).
 
 The TimescaleDB tests control the background jobs themselves. The `live_pg` fixture in
-`tests/test_storage.py` unschedules every job of its schema after the storage opens
+`tests/test_storage.py` unschedules every background job of its schema, the refresh and retention jobs of the continuous
+aggregates included (found through the aggregates of the schema, because those jobs run on
+TimescaleDB's internal materialization hypertables), after the storage opens
 (`alter_job ... scheduled => false`) and does so again each time the policies are registered
 again, because that creates new jobs. The test data is dated years in the past, so left alone the
 compression and retention jobs would start within seconds and race the writer. A job still runs
