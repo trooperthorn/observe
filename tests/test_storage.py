@@ -20,6 +20,7 @@ import pytest
 
 from observe.storage import (CHANGE_DOMAINS, IntegrityConflict, Storage, StorageBusy,
                              StorageError, StorageTimeout, open_storage)
+from observe.storage import rollups
 from observe.storage.schema import SCHEMA_VERSION, SchemaTooNewError
 from observe.storage.sqlite import SqliteStorage
 
@@ -54,10 +55,35 @@ def live_pg(timescale: str | None = None, plugins=None):
     s = open_storage("", plugins, backend="postgres", dsn=scoped,
                      timescale=timescale or os.environ.get("OBSERVE_TEST_PG_TIMESCALE", "auto"))
     try:
+        if getattr(s, "timescale", False):
+            _hold_background_jobs(s, psycopg, dsn, schema)
         yield s
     finally:
         s.close()
         _drop_schema(psycopg, dsn, schema)
+
+
+def _hold_background_jobs(s, psycopg, dsn: str, schema: str) -> None:
+    """Unschedule the TimescaleDB background jobs of the schema, so a test decides when a policy
+    runs. The policies are registered against dates years in the past, so their compression and
+    retention jobs would otherwise start within seconds and take a lock that a running write unit
+    needs. A job still runs on request (CALL run_job). Registering the policies again creates new
+    jobs, so that is held as well."""
+    def hold() -> None:
+        with psycopg.connect(dsn, autocommit=True) as admin:
+            admin.execute(
+                "SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs "
+                "WHERE hypertable_schema = %s OR config::text LIKE %s",
+                (schema, f'%"{schema}"%'))
+
+    original = s._apply_policies
+
+    def apply_and_hold(levels) -> None:
+        original(levels)
+        hold()
+
+    s._apply_policies = apply_and_hold
+    hold()
 
 
 def _drop_schema(psycopg, dsn: str, schema: str) -> None:
@@ -505,3 +531,28 @@ async def test_a_monitor_reading_above_the_ingest_bound_is_not_stored(storage):
         ("monitor.value",))
     assert rows[0][0] == 1 and rows[0][1] == 4.0
     assert await st.last_result("m") is not None
+
+
+def test_timescale_jobs_of_a_test_schema_are_held_until_a_test_runs_them():
+    """The fixture unschedules the background jobs, also after the policies are registered again,
+    and a held job still runs on request."""
+    import psycopg
+
+    with live_pg() as s:
+        if not s.timescale:
+            pytest.skip("TimescaleDB is not in use")
+        schema = s._wconn.execute("SELECT current_schema()").fetchone()[0]
+        query = ("SELECT job_id, scheduled FROM timescaledb_information.jobs "
+                 "WHERE hypertable_schema = %s OR config::text LIKE %s")
+        args = (schema, f'%"{schema}"%')
+
+        def jobs():
+            with psycopg.connect(os.environ["OBSERVE_TEST_PG_DSN"], autocommit=True) as admin:
+                return admin.execute(query, args).fetchall()
+
+        before = jobs()
+        assert before and not any(scheduled for _, scheduled in before)
+        s._apply_policies(rollups.load_levels(s._wconn))
+        after = jobs()
+        assert after and not any(scheduled for _, scheduled in after)
+        s._admin_run([f"CALL run_job({int(job)})" for job, _ in after])

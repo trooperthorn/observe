@@ -319,6 +319,16 @@ cover. Tests: `tests/test_pg_write_retry.py` (the retry policy against a fake co
 retried and stores every point, and compression and `drop_chunks` jobs running against live ingest
 with nothing lost and no error reaching the caller).
 
+The TimescaleDB tests control the background jobs themselves. The `live_pg` fixture in
+`tests/test_storage.py` unschedules every job of its schema after the storage opens
+(`alter_job ... scheduled => false`) and does so again each time the policies are registered
+again, because that creates new jobs. The test data is dated years in the past, so left alone the
+compression and retention jobs would start within seconds and race the writer. A job still runs
+on request through `CALL run_job`, which is how `run_summary_policies` in `tests/dbq.py` works.
+Tests that compare summed floats on TimescaleDB use a relative tolerance of 1e-9, because the
+continuous aggregate adds its rows in no defined order, and keep the counts, minimums and maximums
+exact.
+
 Series storage and the summary levels are shared. Migration 16 adds `resources`, `scopes`,
 `series`, `samples` and `latest` (`observe/storage/series.py`), and migration 17 adds `rollup_5m`,
 `rollup_1h`, `rollup_1d`, the compaction table `rollup_state` and four views with the same columns
