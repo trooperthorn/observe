@@ -128,7 +128,7 @@ class HomeAssistantCheck(_HttpApiCheck):
             return CheckResult.fail("unexpected /api/config or /api/states shape")
         now = self.clock()
         batch = ha_host.build_batch(self.monitor.host_name, cfg, states, now)
-        await self.store.ingest_batch(batch, {}, now=now)
+        await self.store.ingest_batch(batch, {}, now=now, critical=True)
         return CheckResult.ok(
             f"{self.monitor.host_name}: {len(states)} entities, {len(batch.samples)} readings",
             value=float(len(states)), detail={"samples": len(batch.samples)})

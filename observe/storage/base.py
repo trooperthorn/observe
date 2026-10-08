@@ -63,9 +63,14 @@ class WriteGate:
     def pending(self) -> int:
         return self._pending
 
-    def submit(self, executor: Executor, fn: Callable[..., T], *args: Any) -> "Future[T]":
+    def submit(self, executor: Executor, fn: Callable[..., T], *args: Any,
+               critical: bool = False) -> "Future[T]":
+        """Queue `fn`. A `critical` unit is never refused: it is the server's own work that
+        alerting depends on (a poll result, the open-alert mark, the outbox, the audit row of a
+        denial), produced by a bounded number of pollers and by requests that are already being
+        answered, so it can not grow without bound the way a flood of pushes can."""
         with self._lock:
-            if self._pending >= self.limit:
+            if not critical and self._pending >= self.limit:
                 raise StorageBusy(f"the write queue is full ({self.limit} units waiting)")
             self._pending += 1
         try:
@@ -106,11 +111,14 @@ class Storage(Protocol):
     # PostgreSQL with TimescaleDB, where continuous aggregates build them.
     incremental_rollups: bool
 
-    async def write(self, unit: Callable[[Conn], T], *, touches: Sequence[str] = ()) -> T:
+    async def write(self, unit: Callable[[Conn], T], *, touches: Sequence[str] = (),
+                    critical: bool = False) -> T:
         """Run `unit` on the writer in one transaction and return its result. `touches`
-        names the change domains to bump in that transaction."""
+        names the change domains to bump in that transaction. A `critical` unit is not refused
+        when the write queue is full (see WriteGate.submit); ingest never sets it."""
 
-    def write_sync(self, unit: Callable[[Conn], T], *, touches: Sequence[str] = ()) -> T:
+    def write_sync(self, unit: Callable[[Conn], T], *, touches: Sequence[str] = (),
+                   critical: bool = False) -> T:
         """Blocking form of `write`, for code already running on a worker thread. Called from
         inside a running write unit it joins that unit's transaction."""
 

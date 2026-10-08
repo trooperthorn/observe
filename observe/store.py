@@ -153,7 +153,9 @@ class Store:
             series.record_points(db, kind="monitor", name=monitor, points=points, now=ts,
                                  rollups=self.storage.incremental_rollups)
 
-        await self.storage.write(unit, touches=("monitors", "metrics"))
+        # A poll result is the server's own work: a full ingest queue must not discard it, or
+        # the Down transition that depends on it.
+        await self.storage.write(unit, touches=("monitors", "metrics"), critical=True)
 
     async def backfill_monitor_series(self, batch: int = 2000) -> int:
         """Copy poll rows older than a monitor's first series point into the series. Before the
@@ -240,7 +242,19 @@ class Store:
                 db.execute("DELETE FROM alert_open WHERE monitor=?", (monitor,))
                 db.execute("INSERT INTO alert_open (monitor, state, since) VALUES (?,?,?)",
                            (monitor, state, at))
-        await self.storage.write(unit)
+        await self.storage.write(unit, critical=True)
+
+    async def prune_alert_open(self, keep: set[str]) -> int:
+        """Forget the open-alert mark of every monitor not in `keep` (a monitor that was removed
+        from the configuration), so a stale row neither lingers nor revives under a reused name.
+        Returns the number of rows removed."""
+        def unit(db: Conn) -> int:
+            rows = db.execute("SELECT monitor FROM alert_open").fetchall()
+            gone = [m for (m,) in rows if m not in keep]
+            for m in gone:
+                db.execute("DELETE FROM alert_open WHERE monitor=?", (m,))
+            return len(gone)
+        return await self.storage.write(unit, critical=True)
 
     async def open_alerts(self) -> dict[str, tuple[str, float]]:
         """The monitors with an open problem alert: monitor -> (state, since)."""
@@ -253,25 +267,28 @@ class Store:
             for target, body in rows:
                 db.execute("INSERT INTO alert_outbox (target, body, created, attempts, next_at) "
                            "VALUES (?,?,?,0,?)", (target, body, now, now))
-        await self.storage.write(unit)
+        await self.storage.write(unit, critical=True)
 
     async def outbox_due(self, now: float, limit: int = 100) -> list[tuple[Any, ...]]:
-        """Queued alerts that are due, oldest first: (id, target, body, created, attempts)."""
+        """Queued alerts that are due, oldest first: (id, target, body, created, attempts). An
+        alert is due only when no older alert of its target is still waiting for its next try,
+        so the alerts of a target are delivered in the order they were queued."""
         return await self.fetch(
-            "SELECT id, target, body, created, attempts FROM alert_outbox WHERE next_at<=? "
-            "ORDER BY id LIMIT ?", (now, limit))
+            "SELECT id, target, body, created, attempts FROM alert_outbox o WHERE next_at<=? "
+            "AND NOT EXISTS (SELECT 1 FROM alert_outbox p WHERE p.target=o.target "
+            "AND p.id<o.id AND p.next_at>?) ORDER BY id LIMIT ?", (now, now, limit))
 
     async def outbox_done(self, ids: list[int]) -> None:
         """Remove alerts that were delivered, or that are no longer wanted."""
         def unit(db: Conn) -> None:
             for i in ids:
                 db.execute("DELETE FROM alert_outbox WHERE id=?", (i,))
-        await self.storage.write(unit)
+        await self.storage.write(unit, critical=True)
 
     async def outbox_retry(self, alert_id: int, attempts: int, next_at: float, error: str) -> None:
         await self.storage.write(lambda db: db.execute(
             "UPDATE alert_outbox SET attempts=?, next_at=?, last_error=? WHERE id=?",
-            (attempts, next_at, error[:500], alert_id)))
+            (attempts, next_at, error[:500], alert_id)), critical=True)
 
     async def outbox_depth(self) -> int:
         return int((await self.fetch("SELECT COUNT(*) FROM alert_outbox"))[0][0])
@@ -284,7 +301,7 @@ class Store:
         row = (monitor, tr.at, tr.previous.value, tr.current.value, tr.message)
         await self.storage.write(
             lambda db: db.execute("INSERT INTO events VALUES (?,?,?,?,?)", row),
-            touches=("events",))
+            touches=("events",), critical=True)
 
     async def history(self, monitor: str, hours: float,
                       limit: int = 20000) -> list[dict[str, Any]]:
@@ -421,16 +438,19 @@ class Store:
 
     async def ingest_batch(self, batch: Batch, boots: dict[int, tuple[str, int | None]],
                            now: float | None = None, body_hash: str = "",
-                           outcome: IngestOutcome | None = None
+                           outcome: IngestOutcome | None = None, critical: bool = False
                            ) -> tuple[int, int, bool]:
         """Store a pushed batch. boots maps an event index to (classification,
         clean_shutdown flag). Returns (samples stored, events stored, duplicate).
         A batch_id already recorded for the host is acknowledged and nothing is
         stored again, unless both records carry a body hash and the hashes differ: the id was
-        reused for another body and IdempotencyConflict is raised (nothing is stored)."""
+        reused for another body and IdempotencyConflict is raised (nothing is stored). `critical` is
+        for the server's own pollers (SNMP, apps), whose readings are not refused when the write
+        queue is full; a push never sets it."""
         at = time.time() if now is None else now
         return await self.storage.write(
-            lambda db: self._ingest_unit(db, batch, boots, at, body_hash, outcome))
+            lambda db: self._ingest_unit(db, batch, boots, at, body_hash, outcome),
+            critical=critical)
 
     @staticmethod
     def _latest_host_unit(db: Conn, host: str, since: float, newest_fallback: bool,
@@ -524,7 +544,7 @@ class Store:
             lambda db: db.execute(
                 "INSERT INTO audit (ts, actor, kind, method, path, status, remote, detail) "
                 "VALUES (?,?,?,?,?,?,?,?)", row),
-            touches=("audit",))
+            touches=("audit",), critical=True)  # a denial must stay a 401/403/429 under load
 
     async def note_maintenance(self, rows: int, error: str = "") -> None:
         """Record the outcome of a compaction pass for the admin retention page."""

@@ -82,6 +82,7 @@ class Scheduler:
         # rules have been read yet.
         self.rules = rules.RuleEngine(clock=clock)
         self._rules_loaded = False
+        self._open_pruned = False
         self.forecasts: dict[str, Forecast] = {}
         self.forecast_rev = 0  # counts forecast refreshes, so the API can tell they changed
         self._locks = {m.slug: asyncio.Lock() for m in self.monitors}
@@ -218,11 +219,16 @@ class Scheduler:
     async def restore(self, monitor: Any) -> None:
         """Take the monitor's state from its newest stored result (the latest table), so a
         restart does not show everything as pending. A result older than three intervals is not
-        trusted. Only a good result is restored. A WARN or FAIL result leaves the monitor pending,
-        so a problem that continues across a restart is evaluated again and alerts as usual."""
+        trusted. Only a good result is restored from the results. A WARN or FAIL result leaves the
+        monitor pending, unless its problem alert already went out before the restart (the
+        alert_open mark): then the problem is restored with its alert open and is not alerted
+        again. Marks of monitors that are removed or disabled are deleted."""
         st = self.states[monitor.slug]
         if st.state is not State.PENDING:
             return
+        if not self._open_pruned:
+            await self.store.prune_alert_open(set(self.by_slug))
+            self._open_pruned = True
         # A problem whose alert went out before the restart comes back as that problem, with its
         # alert still open: it is not alerted again, and its recovery is.
         opened = (await self.store.open_alerts()).get(monitor.slug)
@@ -310,7 +316,12 @@ class Scheduler:
     def _send(self, monitor: Any, tr: Transition) -> None:
         task = asyncio.create_task(self.alerter.notify(monitor, tr))
         self._pending_alerts.add(task)  # hold a reference until delivery finishes
-        task.add_done_callback(self._pending_alerts.discard)
+        task.add_done_callback(self._alert_done)
+
+    def _alert_done(self, task: asyncio.Task[None]) -> None:
+        self._pending_alerts.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.error("an alert task failed", exc_info=task.exception())
 
     async def _on_transition(self, monitor: Any, tr: Transition) -> None:
         st = self.states[monitor.slug]

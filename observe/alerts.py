@@ -7,7 +7,8 @@ delay, so an outage of the target or a restart of Observe loses nothing. Deliver
 once: a crash between the target's answer and the delete sends that one alert again. An alert
 older than ALERT_MAX_AGE_S is dropped, because a page about a day-old state is noise. Without a
 store (the one-shot check command and a few tests) an alert is tried twice and then dropped.
-Nothing here blocks polling.
+Alerts of one target are delivered in the order they were queued, so a recovery never overtakes
+the problem it ends. Nothing here blocks polling.
 """
 
 from __future__ import annotations
@@ -87,8 +88,16 @@ class Alerter:
             return
         if not targets:
             return
-        body = json.dumps(payload(monitor, tr), separators=(",", ":"))
-        await self.store.outbox_add([(a.name, body) for a in targets], self.clock())
+        data = payload(monitor, tr)
+        body = json.dumps(data, separators=(",", ":"))
+        try:
+            await self.store.outbox_add([(a.name, body) for a in targets], self.clock())
+        except Exception:  # noqa: BLE001 - an alert is never dropped because the queue failed
+            # The outbox could not take it, so try the targets directly (twice, as without a
+            # store) rather than lose the alert.
+            log.exception("could not queue the alert for %s, delivering it directly", monitor.name)
+            await asyncio.gather(*(self._deliver(a, monitor, tr) for a in targets))
+            return
         await self.flush()
 
     def bind(self, store: Store | None) -> None:
@@ -105,11 +114,29 @@ class Alerter:
             now = self.clock()
             rows = await self.store.outbox_due(now)
             known = {a.name: a for a in self.config.alerts}
-            results = await asyncio.gather(*(self._attempt(known.get(target), row, now)
-                                             for row in rows for target in (row[1],)))
+            # Targets are independent, but the alerts of one target go out in the order they were
+            # queued, and a failure holds back the newer ones: a recovery must never reach a
+            # target before the problem it ends.
+            queues: dict[str, list[tuple[Any, ...]]] = {}
+            for row in rows:
+                queues.setdefault(row[1], []).append(row)
+            results = await asyncio.gather(*(self._drain(known.get(name), name, queue, now)
+                                             for name, queue in queues.items()))
             return sum(results)
 
-    async def _attempt(self, target: Any, row: tuple[Any, ...], now: float) -> int:
+    async def _drain(self, target: Any, name: str, queue: list[tuple[Any, ...]],
+                     now: float) -> int:
+        sent = 0
+        for row in queue:
+            outcome = await self._attempt(target, row, now)
+            if outcome is None:
+                break
+            sent += outcome
+        return sent
+
+    async def _attempt(self, target: Any, row: tuple[Any, ...], now: float) -> int | None:
+        """Deliver one queued alert. Returns 1 when it was delivered, 0 when it was dropped and
+        None when it failed and was kept for a later try."""
         assert self.store is not None
         alert_id, name, text, created, attempts = row
         if target is None or now - created > ALERT_MAX_AGE_S:
@@ -126,7 +153,7 @@ class Alerter:
             log.warning("alert %s to %s failed (attempt %d), next try in %.0fs: %s",
                         alert_id, name, attempts + 1, delay, msg)
             await self.store.outbox_retry(alert_id, attempts + 1, now + delay, msg)
-            return 0
+            return None
         self.status[name]["sent"] += 1
         self.status[name]["last_error"] = None
         await self.store.outbox_done([alert_id])

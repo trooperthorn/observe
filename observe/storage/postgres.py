@@ -370,17 +370,21 @@ class PgStorage:
     def _on_writer(self) -> bool:
         return threading.get_ident() == self._writer_tid
 
-    def write_sync(self, unit: Callable[[Conn], T], *, touches: Sequence[str] = ()) -> T:
+    def write_sync(self, unit: Callable[[Conn], T], *, touches: Sequence[str] = (),
+                   critical: bool = False) -> T:
         self._check_domains(touches)
         if self._on_writer():
             self._touched.update(touches)
             return unit(self._wconn)
-        return self._gate.submit(self._writer, self._run_unit, unit, tuple(touches)).result()
+        return self._gate.submit(self._writer, self._run_unit, unit, tuple(touches),
+                                 critical=critical).result()
 
-    async def write(self, unit: Callable[[Conn], T], *, touches: Sequence[str] = ()) -> T:
+    async def write(self, unit: Callable[[Conn], T], *, touches: Sequence[str] = (),
+                    critical: bool = False) -> T:
         self._check_domains(touches)
         return await asyncio.wrap_future(
-            self._gate.submit(self._writer, self._run_unit, unit, tuple(touches)))
+            self._gate.submit(self._writer, self._run_unit, unit, tuple(touches),
+                              critical=critical))
 
     # ---- readers --------------------------------------------------------------------------
 

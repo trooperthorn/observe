@@ -179,7 +179,7 @@ def fake_pg(timescale, saved):
     pg._writer = InlineWriter()
     levels = RetentionLevels(raw_days=5, overrides={"x": {"raw_days": 20}})
 
-    async def write(unit, *, touches=()):
+    async def write(unit, *, touches=(), critical=False):
         if touches:
             saved.append(touches)
             return {"old": {}, "new": {}}

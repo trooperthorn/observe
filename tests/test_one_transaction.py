@@ -69,9 +69,9 @@ class Units:
         self.count = 0
         original = storage.write
 
-        async def write(unit: Any, *, touches: Any = ()) -> Any:
+        async def write(unit: Any, *, touches: Any = (), critical: bool = False) -> Any:
             self.count += 1
-            return await original(unit, touches=touches)
+            return await original(unit, touches=touches, critical=critical)
         storage.write = write
 
 

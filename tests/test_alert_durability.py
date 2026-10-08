@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import threading
 
 import pytest
@@ -19,6 +20,7 @@ from observe.scheduler import Scheduler
 from observe.state import State, Transition
 from observe.storage import StorageBusy, open_storage
 from observe.storage.base import WRITE_QUEUE_LIMIT, WriteGate
+from observe.storage.schema import MIGRATIONS, SCHEMA_VERSION, migrate
 from observe.store import Store
 
 from .conftest import make_config
@@ -129,6 +131,129 @@ async def test_an_alert_for_a_removed_target_or_a_day_old_is_dropped(tmp_path):
     store.close()
 
 
+async def test_a_recovery_never_overtakes_the_problem_it_ends(tmp_path):
+    """Audit finding: Down failed and backed off to 300 s while the newer Up had a short
+    back-off, so Up arrived first and the retained MQTT state read 'down' for a healthy monitor."""
+    cfg, clock, target = config(), Clock(), Target()
+    store = Store(str(tmp_path / "o.db"))
+    alerter = Alerter(cfg, store, clock)
+    wire(alerter, target)
+    mon = cfg.monitors[0]
+    await alerter.notify(mon, Transition(State.UP, State.DOWN, clock.now, "no reply"))
+    while clock.now < T0 + 320:  # the target stays down; Down backs off to 300 s
+        clock.now += 5
+        await alerter.flush()
+    await alerter.notify(mon, Transition(State.DOWN, State.UP, clock.now, "ok"))
+    assert await store.outbox_depth() == 2 and target.received == []
+    target.up = True
+    clock.now += 10  # Up's own short delay has passed, Down's has not
+    await alerter.flush()
+    assert target.received == []  # Up waits behind the older Down
+    for _ in range(100):
+        clock.now += 5
+        await alerter.flush()
+    assert [b["state"] for b in target.received] == ["down", "up"]
+    assert await store.outbox_depth() == 0
+    store.close()
+
+
+async def test_alerts_of_other_targets_are_not_held_back_by_a_failing_one(tmp_path):
+    cfg = make_config([{"name": "nas", "type": "ping", "host": "127.0.0.1",
+                        "failures_to_down": 1, "recheck_window": 0}],
+                      alerts=[HOOK, {**HOOK, "name": "other"}])
+    clock, got = Clock(), []
+    store = Store(str(tmp_path / "o.db"))
+    alerter = Alerter(cfg, store, clock)
+
+    async def send(target, body):
+        if target.name == "hook":
+            raise ConnectionError("refused")
+        got.append((target.name, body["state"]))
+    alerter._send = send  # type: ignore[method-assign]
+    await alerter.notify(cfg.monitors[0], Transition(State.UP, State.DOWN, T0, "x"))
+    assert got == [("other", "down")] and await store.outbox_depth() == 1
+    store.close()
+
+
+async def test_an_alert_is_delivered_directly_when_the_outbox_cannot_take_it(tmp_path):
+    cfg, clock, target = config(), Clock(), Target()
+    target.up = True
+    store = Store(str(tmp_path / "o.db"))
+    alerter = Alerter(cfg, store, clock)
+    wire(alerter, target)
+
+    async def refuse(rows, now):
+        raise StorageBusy("the write queue is full")
+    store.outbox_add = refuse  # type: ignore[method-assign]
+    await alerter.notify(cfg.monitors[0], Transition(State.UP, State.DOWN, T0, "no reply"))
+    assert [b["state"] for b in target.received] == ["down"]
+    store.close()
+
+
+async def test_a_full_write_queue_does_not_cost_a_poll_result_or_an_alert(tmp_path):
+    """Audit finding: the cap applied to the server's own writes, so a flood of pushes made
+    poll_once raise before the Down transition and dropped the alert and its open mark."""
+    cfg, clock, target = config(), Clock(), Target()
+    target.up = True
+    store = Store(str(tmp_path / "o.db"))
+    gate = store.storage._gate
+    gate._pending = gate.limit  # the queue is full of pushes
+    sched = Scheduler(cfg, store, Alerter(cfg, None, clock), clock=clock)
+    wire(sched.alerter, target)
+    mon = cfg.monitors[0]
+    sched.checks[mon.slug] = Failing()
+    with pytest.raises(StorageBusy):  # ingest-style work is refused
+        await store.storage.write(lambda db: None)
+    await sched.poll_once(mon)
+    await asyncio.gather(*sched._pending_alerts)
+    assert (await store.fetch("SELECT COUNT(*) FROM results"))[0][0] == 1  # stored
+    assert [b["state"] for b in target.received] == ["down"]
+    assert await store.open_alerts() == {mon.slug: ("down", clock.now)}
+    store.close()
+
+
+async def test_a_denial_audit_row_is_written_while_the_queue_is_full(tmp_path):
+    store = Store(str(tmp_path / "o.db"))
+    store.storage._gate._pending = store.storage._gate.limit
+    await store.write_audit("ingest_denied", status=403)  # not StorageBusy
+    assert (await store.fetch("SELECT COUNT(*) FROM audit"))[0][0] == 1
+    store.close()
+
+
+async def test_open_alert_marks_of_removed_monitors_are_pruned(tmp_path):
+    cfg, clock = config(), Clock()
+    store = Store(str(tmp_path / "o.db"))
+    await store.set_alert_open("nas", "down", T0)
+    await store.set_alert_open("gone", "down", T0)
+    sched = Scheduler(cfg, store, Alerter(cfg, None, clock), clock=clock)
+    await sched.restore(cfg.monitors[0])
+    assert set(await store.open_alerts()) == {"nas"}
+    assert sched.states["nas"].state is State.DOWN
+    store.close()
+
+
+def test_a_version_22_database_with_rows_migrates_to_23(tmp_path):
+    path = str(tmp_path / "m.db")
+    db = sqlite3.connect(path)
+    newest = MIGRATIONS.pop(23)
+    try:
+        migrate(db)
+    finally:
+        MIGRATIONS[23] = newest
+    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 22
+    db.execute("INSERT INTO results VALUES ('a', 1.0, 'ok', 1.5, 2.0, 'fine')")
+    db.commit()
+    db.close()
+    store = Store(path)
+    assert [h["message"] for h in asyncio.run(store.history("a", 10**6))] == ["fine"]
+    asyncio.run(store.set_alert_open("a", "down", T0))
+    assert asyncio.run(store.outbox_depth()) == 0
+    store.close()
+    db = sqlite3.connect(path)
+    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == SCHEMA_VERSION == 23
+    db.close()
+
+
 def test_the_retry_delay_doubles_to_its_cap():
     assert [retry_delay(n) for n in (1, 2, 3, 4, 5, 6, 7, 50)] == [
         10, 20, 40, 80, 160, 300, 300, 300]
@@ -191,6 +316,8 @@ def test_a_full_write_queue_refuses_more_work_and_stays_bounded(tmp_path):
             except StorageBusy:
                 refused += 1
         assert refused == 10_000 and storage._gate.pending == 8  # nothing piled up
+        # The executor's own queue holds exactly the admitted units: one running, seven waiting.
+        assert storage._writer._work_queue.qsize() <= 8
         release.set()
         for f in held:
             f.result(timeout=10)

@@ -361,7 +361,7 @@ def fake_timescale(covered, rows=42):
     async def read(unit):
         return covered, rows
 
-    async def write(unit, *, touches=()):
+    async def write(unit, *, touches=(), critical=False):
         return unit(pg.db)
 
     async def compact_level(storage, level, now, levels):
