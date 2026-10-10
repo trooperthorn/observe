@@ -354,12 +354,15 @@ class Store:
             points=[series.Point(s.source, s.metric, s.unit, series.canonical(s.labels),
                                  series.to_ms(clamp(s.ts)), s.value) for s in batch.samples])
         db.executemany(
-            "INSERT INTO host_sources (host, source, available, reason, updated) VALUES (?,?,?,?,?) "
+            "INSERT INTO host_sources (host, source, available, reason, updated, present_at) "
+            "VALUES (?,?,?,?,?,?) "
             "ON CONFLICT(host, source) DO UPDATE SET available=excluded.available, "
-            "reason=excluded.reason, updated=excluded.updated "
+            "reason=excluded.reason, updated=excluded.updated, "
+            "present_at=COALESCE(excluded.present_at, host_sources.present_at) "
             "WHERE excluded.updated >= host_sources.updated",
             [(batch.host, st.source, int(st.available and st.present),
-              st.reason or ("" if st.present else ABSENT_REASON), sent)
+              st.reason or ("" if st.present else ABSENT_REASON), sent,
+              sent if st.present else None)
              for st in batch.sources])
         stored = 0
         for i, ev in enumerate(batch.events):
@@ -476,9 +479,34 @@ class Store:
     async def host_sources(self, host: str) -> dict[str, dict[str, Any]]:
         """Source status for a host, with when each source was last reported."""
         rows = await self.fetch(
-            "SELECT source, available, reason, updated FROM host_sources WHERE host=?",
+            "SELECT source, available, reason, updated, present_at FROM host_sources WHERE host=?",
             (host,))
-        return {r[0]: {"available": bool(r[1]), "reason": r[2], "updated": r[3]} for r in rows}
+        return {r[0]: {"available": bool(r[1]), "reason": r[2], "updated": r[3],
+                      "present_at": r[4]} for r in rows}
+
+    async def forget_source(self, host: str, source: str, *, actor: str, remote: str,
+                            path: str, now: float | None = None) -> bool:
+        """Accept that a source which disappeared is gone for good: its last-present time is
+        cleared, so it reads as hardware the host does not have instead of a missing source
+        (observe/hostview.py). Only a source the agent now reports as not present can be
+        forgotten; the change is audited in the same write. False when there was nothing to
+        clear. If the agent reports the source again it counts as present from then on."""
+        at = time.time() if now is None else now
+
+        def work(db: Conn) -> bool:
+            cur = db.execute(
+                "UPDATE host_sources SET present_at = NULL WHERE host=? AND source=? "
+                "AND available = 0 AND reason = ? AND present_at IS NOT NULL",
+                (host, source, ABSENT_REASON))
+            if not cur.rowcount:
+                return False
+            db.execute(
+                "INSERT INTO audit (ts, actor, kind, method, path, status, remote, detail) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (at, actor, "host_source_forgotten", "POST", path, 200, remote,
+                 json.dumps({"host": host, "source": source}, sort_keys=True)))
+            return True
+        return await self.storage.write(work, touches=("hosts", "audit"))
 
     async def host_events(self, host: str, since: float = 0.0,
                           limit: int = 50) -> list[dict[str, Any]]:
@@ -540,11 +568,12 @@ class Store:
             out[host]["samples"] = [
                 {"source": r[0], "metric": r[1], "labels": json.loads(r[2]), "value": r[3],
                  "unit": r[4], "ts": r[5] / 1000.0} for r in samples]
-        for host, source, available, reason, updated in db.execute(
-                "SELECT host, source, available, reason, updated FROM host_sources").fetchall():
+        for host, source, available, reason, updated, present_at in db.execute(
+                "SELECT host, source, available, reason, updated, present_at FROM host_sources"
+                ).fetchall():
             if host in out:
                 out[host]["sources"][source] = {"available": bool(available), "reason": reason,
-                                                "updated": updated}
+                                                "updated": updated, "present_at": present_at}
         # Of the 50 newest events of a host, only the warnings and criticals inside the alert
         # window reach the list (the summary shows the alert section, not the event rows), and
         # the agent's outbox reports, which say whether it is dropping data (agentdrops.py).

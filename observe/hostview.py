@@ -14,7 +14,12 @@ reading is graded Good, Warning or Critical here. Nothing is guessed:
 - A source the agent says does not exist on the host (state "absent") and a
   source nobody ever reported (state "not_reported") claim nothing, so they do
   not make the host look worse. They are listed under `sources` so the page
-  can say so.
+  can say so. A source the agent reported present before and reports absent now
+  (state "gone") is different: it disappeared, so it is Critical, with when it was
+  last seen, until the agent reports it again or an admin accepts that it is gone
+  (POST /api/hosts/{host}/sources/{source}/forget, audited).
+- An unavailable source with no reason of its own takes the title of the newest
+  event the agent sent about it.
 
 A reading is matched by its OpenTelemetry scope name (`hostwatch.collector.<source>`) and metric
 name, with the point attributes as its labels (docs/DATA-API-DESIGN.md section 3). Utilization,
@@ -27,6 +32,7 @@ defaults for that scope and metric. The agent never sets thresholds.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -38,6 +44,7 @@ from .enrol import install_problem
 from .tiers import Staleness
 from .otelnames import HA_SOC_PREFIX, RETIRED_SOURCES, collector_scope, short_source
 from .store import ABSENT_REASON
+from .units import value_text
 
 NO_DATA = "no_data"  # a reading or section with nothing to grade; ranks below Good
 _RANK = {NO_DATA: -1, GOOD: 0, WARNING: 1, CRITICAL: 2}
@@ -52,24 +59,48 @@ def worst(levels: list[str]) -> str:
     return max(levels, key=_RANK.__getitem__, default=GOOD)
 
 
-def _above(warn: float, crit: float) -> Grader:
-    def fn(v: float, _labels: dict[str, str]) -> tuple[str, str]:
-        if v >= crit:
-            return CRITICAL, f"{v:g} is at or past {crit:g}"
-        if v >= warn:
-            return WARNING, f"{v:g} is at or past {warn:g}"
-        return GOOD, ""
+def _unit_aware(fn: Any) -> Any:
+    """Mark a grader that takes the reading's unit as a third argument, so its reason writes the
+    value and the limit the way the Value column does ("92.5 %", not "0.9248")."""
+    fn.unit_aware = True
     return fn
+
+
+def _run(rule: Grader, v: float, labels: dict[str, str], unit: str) -> tuple[str, str]:
+    if getattr(rule, "unit_aware", False):
+        return rule(v, labels, unit)  # type: ignore[call-arg]
+    return rule(v, labels)
+
+
+def _above(warn: float, crit: float) -> Grader:
+    def fn(v: float, _labels: dict[str, str], unit: str = "") -> tuple[str, str]:
+        if v >= crit:
+            return CRITICAL, f"{value_text(v, unit)} is at or past {value_text(crit, unit)}"
+        if v >= warn:
+            return WARNING, f"{value_text(v, unit)} is at or past {value_text(warn, unit)}"
+        return GOOD, ""
+    return _unit_aware(fn)
 
 
 def _below(warn: float, crit: float) -> Grader:
-    def fn(v: float, _labels: dict[str, str]) -> tuple[str, str]:
+    def fn(v: float, _labels: dict[str, str], unit: str = "") -> tuple[str, str]:
         if v <= crit:
-            return CRITICAL, f"{v:g} is at or under {crit:g}"
+            return CRITICAL, f"{value_text(v, unit)} is at or under {value_text(crit, unit)}"
         if v <= warn:
-            return WARNING, f"{v:g} is at or under {warn:g}"
+            return WARNING, f"{value_text(v, unit)} is at or under {value_text(warn, unit)}"
         return GOOD, ""
-    return fn
+    return _unit_aware(fn)
+
+
+def _past_limit(v: float, unit: str, th: Thresholds) -> tuple[str, str]:
+    """A configured limit from the YAML, with the same wording as the built-in ones."""
+    level = grade(v, th)
+    if level == GOOD:
+        return GOOD, ""
+    limit = th.crit if level == CRITICAL else th.warn
+    word = "past" if th.direction == "above" else "under"
+    shown = value_text(limit, unit) if limit is not None else "limit"
+    return level, f"{value_text(v, unit)} is at or {word} the configured {shown}"
 
 
 def _info(_v: float, _labels: dict[str, str]) -> tuple[str, str]:
@@ -133,8 +164,12 @@ class _Only:
     def accepts(self, labels: dict[str, str]) -> bool:
         return labels.get(self.key) == self.value
 
-    def __call__(self, v: float, labels: dict[str, str]) -> tuple[str, str]:
-        return self.grader(v, labels)
+    @property
+    def unit_aware(self) -> bool:
+        return bool(getattr(self.grader, "unit_aware", False))
+
+    def __call__(self, v: float, labels: dict[str, str], unit: str = "") -> tuple[str, str]:
+        return _run(self.grader, v, labels, unit)
 
 
 _ARRAY_STATES = {"clean": GOOD, "active": GOOD, "active-idle": GOOD, "idle": GOOD,
@@ -227,9 +262,10 @@ HASSIO_POLL = "observe.check.hassio"
 SOC_POLL = "observe.check.ha_soc"
 
 
-def _snmp_cpu(v: float, labels: dict[str, str]) -> tuple[str, str]:
+@_unit_aware
+def _snmp_cpu(v: float, labels: dict[str, str], unit: str = "1") -> tuple[str, str]:
     """The whole-host load is graded; the load of one core (`cpu.logical_number`) is shown."""
-    return _info(v, labels) if "cpu.logical_number" in labels else _UTIL(v, labels)
+    return _info(v, labels) if "cpu.logical_number" in labels else _run(_UTIL, v, labels, unit)
 
 _FAN_SOURCES = ("hwmon", "thermalctl", "win_thermalsuite")
 
@@ -373,27 +409,112 @@ def _windows(stale_after: float | Staleness) -> Staleness:
     return stale_after if isinstance(stale_after, Staleness) else Staleness(stale_after)
 
 
+# The event the agent sends when a source it had seen is no longer there. While the source stays
+# missing the host is held Critical by the source itself (`_gone`), so the event does not also
+# count for 24 hours, and the host clears as soon as the source is back.
+SOURCE_GONE = "source.disappeared"
+_GONE_TITLE = re.compile(r"\bsource (\S+) disappeared", re.IGNORECASE)
+
+
+def _ago(seconds: float) -> str:
+    """'13h ago', the way the host page writes an age."""
+    s = max(0.0, seconds)
+    if s < 90:
+        return f"{s:.0f}s ago"
+    if s < 5400:
+        return f"{s / 60:.0f}m ago"
+    if s < 129600:
+        return f"{s / 3600:.0f}h ago"
+    return f"{s / 86400:.0f}d ago"
+
+
+def _absent(info: dict[str, Any]) -> bool:
+    """The agent reports the source as not present on the host."""
+    return not info["available"] and info["reason"] == ABSENT_REASON
+
+
+def _gone(info: dict[str, Any]) -> bool:
+    """A source the agent reported present before and reports not present now: it disappeared,
+    which is not hardware the host never had (that one has no `present_at`)."""
+    return _absent(info) and info.get("present_at") is not None
+
+
+def _gone_text(name: str, info: dict[str, Any], now: float) -> str:
+    return (f"{name} disappeared, last seen {_ago(now - info['present_at'])}; this clears when "
+            f"the agent reports {name} again or an admin accepts that it is gone")
+
+
+def _event_source(e: dict[str, Any]) -> str:
+    """The collector id an event is about: the source the agent named (`observe.source`), or for
+    a disappeared source the one its title names."""
+    if e.get("kind") == SOURCE_GONE:
+        m = _GONE_TITLE.search(str(e.get("title", "")))
+        if m:
+            return m.group(1)
+    return short_source(str(e.get("source") or ""))
+
+
+def _reason(name: str, info: dict[str, Any], events: list[dict[str, Any]]) -> str:
+    """Why a source is unavailable: the reason its status carries, else the title of the newest
+    event the agent sent about it (the rapl collector says how to grant access there), else
+    "no reason given"."""
+    if info["reason"]:
+        return info["reason"]
+    for e in sorted(events, key=lambda x: x.get("ts", 0.0), reverse=True):
+        title = str(e.get("title", ""))
+        if e.get("kind") == SOURCE_GONE or _event_source(e) != name \
+                or title == f"{name} available":
+            continue
+        detail = e.get("detail") or {}
+        why = detail.get("reason") or detail.get("observe.source.reason") or title
+        if why:
+            return str(why)
+    return "no reason given"
+
+
+def _source_problem(name: str, info: dict[str, Any] | None, now: float,
+                    events: list[dict[str, Any]]) -> str:
+    """What is wrong with the source of a reading, or "" when nothing is."""
+    if info is None:
+        return ""
+    if _gone(info):
+        return _gone_text(name, info, now)
+    if not info["available"] and info["reason"] != ABSENT_REASON:
+        return f"source unavailable: {_reason(name, info, events)}"
+    return ""
+
+
 def source_views(sources: dict[str, dict[str, Any]], now: float,
-                 stale_after: float | Staleness) -> list[dict[str, Any]]:
+                 stale_after: float | Staleness,
+                 events: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """One row per source. `state` is ok, stale, unavailable, gone (it was present and has
+    disappeared: Critical until it returns or an admin accepts it) or absent (the host never had
+    it: claims nothing)."""
     windows = _windows(stale_after)
     out = []
     for name in sorted(sources):
         if name in RETIRED_SOURCES:
             continue  # kept in the store, but nothing writes it now, so it would only read stale
         info = sources[name]
-        absent = not info["available"] and info["reason"] == ABSENT_REASON
+        absent, gone = _absent(info), _gone(info)
         age = max(0.0, now - info["updated"])
         limit = windows.for_source(name)
+        stale = age > limit
+        state = "gone" if gone else "absent" if absent else \
+            "unavailable" if not info["available"] else "stale" if stale else "ok"
+        reason = _gone_text(name, info, now) if gone else "" if absent else \
+            _reason(name, info, events or []) if not info["available"] else info["reason"]
         out.append({"source": name, "available": info["available"], "present": not absent,
-                    "reason": info["reason"], "updated": info["updated"], "age_seconds": age,
-                    "stale": age > limit,
-                    "status": NO_DATA if absent else GOOD if info["available"] and age <= limit
-                    else WARNING})
+                    "gone": gone, "present_at": info.get("present_at"), "state": state,
+                    "reason": reason, "updated": info["updated"], "age_seconds": age,
+                    "stale": stale,
+                    "status": CRITICAL if gone else NO_DATA if absent
+                    else GOOD if info["available"] and not stale else WARNING})
     return out
 
 
 def _item(rule: Grader, override: Thresholds | None, s: dict[str, Any], now: float,
-          windows: Staleness, src_info: dict[str, Any] | None,
+          windows: Staleness, src_problem: str,
           host_stale: bool, ignored: frozenset[str] = frozenset()) -> dict[str, Any]:
     age = max(0.0, now - s["ts"])
     stale = host_stale or age > windows.for_scope(s["source"])
@@ -407,18 +528,17 @@ def _item(rule: Grader, override: Thresholds | None, s: dict[str, Any], now: flo
         # about now, so staleness alone decides the state.
         level = GOOD
     else:
-        level, why = rule(s["value"], labels)
+        level, why = _run(rule, s["value"], labels, s["unit"])
         if override is not None:
-            level = grade(s["value"], override)
-            why = f"{s['value']:g} past the configured limit" if level != GOOD else ""
+            level, why = _past_limit(s["value"], s["unit"], override)
         if why:
             reasons.append(why)
     if stale:
         level = worst([level, WARNING])
         reasons.append(f"last reading {age:.0f}s ago")
-    if src_info is not None and not src_info["available"] and src_info["reason"] != ABSENT_REASON:
+    if src_problem:
         level = worst([level, WARNING])
-        reasons.append(f"source unavailable: {src_info['reason'] or 'no reason given'}")
+        reasons.append(src_problem)
     hw_id = labels.get("hw.id")
     return {"source": s["source"], "metric": s["metric"], "labels": labels, "value": s["value"],
             "unit": s["unit"], "ts": s["ts"], "age_seconds": age, "stale": stale,
@@ -429,7 +549,9 @@ def _item(rule: Grader, override: Thresholds | None, s: dict[str, Any], now: flo
 def _section(name: str, samples: list[dict[str, Any]], sources: dict[str, dict[str, Any]],
              overrides: dict[tuple[str, str], Thresholds], now: float, windows: Staleness,
              host_stale: bool, heard: bool = True,
-             ignored: frozenset[str] = frozenset()) -> dict[str, Any]:
+             ignored: frozenset[str] = frozenset(),
+             events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    events = events or []
     rules = RULES[name]
     items = []
     for s in sorted(samples, key=lambda x: (x["source"], x["metric"],
@@ -437,31 +559,48 @@ def _section(name: str, samples: list[dict[str, Any]], sources: dict[str, dict[s
         rule = rules.get((s["source"], s["metric"]))
         if rule is None or not getattr(rule, "accepts", lambda _l: True)(s["labels"]):
             continue
-        info = sources.get(short_source(s["source"]))
-        items.append(_item(rule, overrides.get((s["source"], s["metric"])), s, now,
-                           windows, info, host_stale, ignored))
+        src = short_source(s["source"])
+        items.append(_item(rule, overrides.get((s["source"], s["metric"])), s, now, windows,
+                           _source_problem(src, sources.get(src), now, events), host_stale,
+                           ignored))
     counted = [i for i in items if not i["ignored"]]
     names = _sources_of(name)
     infos = {n: sources[n] for n in names if n in sources}
     bad = {n: i for n, i in infos.items()
            if not i["available"] and i["reason"] != ABSENT_REASON}
+    gone = {n: i for n, i in infos.items() if _gone(i)}
     if not heard:
         state, note = "not_reported", "the host has never reported"
     elif host_stale:
         state, note = "stale", "no current data from the host"
+    elif gone:
+        # A source that fed this section has disappeared: say which, since when, and how it
+        # clears, instead of calling the hardware "not present".
+        state = "gone"
+        note = "; ".join([_gone_text(n, i, now) for n, i in sorted(gone.items())]
+                         + [f"{n}: {_reason(n, i, events)}" for n, i in sorted(bad.items())])
     elif counted and all(i["stale"] for i in counted):
         state, note = "stale", "no reading inside the stale window"
     elif bad:
         state = "unavailable"
-        note = "; ".join(f"{n}: {i['reason'] or 'no reason given'}" for n, i in sorted(bad.items()))
+        note = "; ".join(f"{n}: {_reason(n, i, events)}" for n, i in sorted(bad.items()))
     elif items or any(i["available"] for i in infos.values()):
         state, note = "ok", ""
+        if not items:
+            working = ", ".join(sorted(n for n, i in infos.items() if i["available"]))
+            note = f"{working} reports but sends no reading for this section"
+        elif not counted:
+            note = "every reading here is ignored on this host"
+        elif all(i["status"] == NO_DATA for i in counted):
+            note = "no reading here has a value this cycle"
     elif infos:
         state, note = "absent", "the agent reports this hardware is not present"
     else:
         state, note = "not_reported", "no source for this section has reported"
     level = worst([i["status"] for i in counted])
-    if state in ("stale", "unavailable"):
+    if state == "gone":
+        level = worst([level, CRITICAL])
+    elif state in ("stale", "unavailable"):
         level = worst([level, WARNING])
     elif state in ("absent", "not_reported") or not counted:
         level = NO_DATA  # nothing to grade: neither Up nor Warning
@@ -485,12 +624,11 @@ def _memory_extra(sec: dict[str, Any], overrides: dict[tuple[str, str], Threshol
     else:
         return
     ratio = round(used / total["value"], 4)
-    level, why = _above(0.90, 0.97)(ratio, {})
+    level, why = _run(_above(0.90, 0.97), ratio, {}, "1")
     key = (scope, UTILIZATION)
     th = overrides.get(key)
     if th is not None:
-        level = grade(ratio, th)
-        why = f"{ratio:g} past the configured limit" if level != GOOD else ""
+        level, why = _past_limit(ratio, "1", th)
     stale = any(p["stale"] for p in parts)
     reasons = [why] if why else []
     if stale:
@@ -519,15 +657,24 @@ def _components(monitor: Any | None, row: dict[str, Any], samples: list[dict[str
             "note": "the components the monitor lists", "items": items, "levels": levels}
 
 
-def _alerts(events: list[dict[str, Any]], now: float,
-            monitor: Any | None = None) -> dict[str, Any]:
+def _alerts(events: list[dict[str, Any]], now: float, monitor: Any | None = None,
+            sources: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     """Warning and critical events of the last day. For a host listed as a pushed_host monitor a
     boot classification is left to the monitor's crash hold (`crash_hold_s`, `crash_result`,
-    graded under `components`), so a crash counts for as long, and as badly, as the YAML says."""
+    graded under `components`), so a crash counts for as long, and as badly, as the YAML says.
+    A disappeared source the store knows is graded by its current state instead of its event:
+    each source still missing is a critical item for as long as it stays missing, and the
+    agent's `source.disappeared` event stops counting (so the host clears when the source is
+    back, and an old event alone never keeps it Down)."""
     crash_policy = getattr(monitor, "type", None) == "pushed_host"
+    known = sources or {}
     recent = [e for e in events if e["severity"] in ("warning", "critical")
               and now - e["ts"] <= ALERT_WINDOW_S
-              and not (crash_policy and str(e.get("kind", "")).startswith("boot."))]
+              and not (crash_policy and str(e.get("kind", "")).startswith("boot."))
+              and not (e.get("kind") == SOURCE_GONE and _event_source(e) in known)]
+    recent += [{"ts": i["present_at"], "kind": "source.missing", "severity": "critical",
+                "source": n, "title": _gone_text(n, i, now), "detail": {}, "boot_id": None}
+               for n, i in sorted(known.items()) if _gone(i) and n not in RETIRED_SOURCES]
     level = worst([CRITICAL if e["severity"] == "critical" else WARNING for e in recent])
     return {"status": level, "state": "ok", "note": f"warning and critical events in the last "
             f"{int(ALERT_WINDOW_S // 3600)}h", "items": recent}
@@ -563,10 +710,10 @@ def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
     }
     for name in SECTIONS:
         out[name] = _section(name, samples, sources, overrides, now, windows, host_stale, heard,
-                             ignored)
+                             ignored, events)
     _memory_extra(out["memory"], overrides)
     out["components"] = _components(monitor, row, samples, sources, windows, now)
-    out["alerts"] = _alerts(events, now, monitor)
+    out["alerts"] = _alerts(events, now, monitor, sources)
     # The agent's outbox is dropping data: a warning in the verdict until the count stops growing.
     out["agent_drops"] = agent_drops(events, now)
     if out["agent_drops"]:
@@ -575,7 +722,7 @@ def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
     if not heard and not out["alerts"]["items"]:
         out["alerts"]["status"] = NO_DATA  # a host that never reported has no "Up" anywhere
     out["events"] = events
-    out["sources"] = source_views(sources, now, windows)
+    out["sources"] = source_views(sources, now, windows, events)
     levels = [out[n]["status"] for n in VERDICT]
     if host_stale:
         out["status"] = CRITICAL

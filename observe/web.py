@@ -946,6 +946,22 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             touches=("admin", "audit"))
         return JSONResponse({"host": host, "ignored": got["new"]})
 
+    @app.post("/api/hosts/{host}/sources/{source}/forget", include_in_schema=False)
+    async def forget_source(
+            host: str, source: str, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Accept that a source which disappeared from a host is gone for good, so it stops
+        holding the host Down (observe/hostview.py). Admin session and CSRF; audited. 404 when
+        the source is not one that disappeared."""
+        remote = request.client.host if request.client else ""
+        done = await store.forget_source(host, source, actor=sess.username, remote=remote,
+                                         path="/api/hosts/[host]/sources/[source]/forget",
+                                         now=auth_clock())
+        if not done:
+            return JSONResponse({"detail": "no disappeared source by that name on this host"},
+                                status_code=404)
+        return JSONResponse({"host": host, "source": source, "forgotten": True})
+
     @app.put("/api/admin/rules", include_in_schema=False)
     async def put_rules(
             request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:

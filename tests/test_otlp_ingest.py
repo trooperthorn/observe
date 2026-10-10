@@ -128,7 +128,8 @@ def test_a_json_request_is_stored(env):
     assert env.stored() == [
         ("nas01", "rapl", "dram_watts", "{}", None, "W"),
         ("nas01", "rapl", "package_watts", '{"package":"0"}', 12.5, "W")]
-    sources = {s: (a, r) for _, s, a, r, _ in env.rows("SELECT * FROM host_sources")}
+    sources = {s: (a, r) for s, a, r in env.rows(
+        "SELECT source, available, reason FROM host_sources")}
     assert sources["rapl"] == (1, "") and sources["mdraid"] == (0, "no md arrays")
     (host,) = env.rows("SELECT host, platform, agent_version, confirmed FROM hosts")
     assert host == ("nas01", "linux", "0.9.0", 0)
@@ -201,7 +202,8 @@ def test_a_source_is_unavailable_or_absent_from_the_status_gauges(env):
         gauge("observe.source.available", [number(0.0, T0, {"observe.source": "mdraid"})]),
         gauge("observe.source.present", [number(0.0, T0, {"observe.source": "mdraid"})])]
     assert env.push(metrics_request("nas01", {"observe": status}), key).status_code == 200
-    rows = {s: (a, r) for _, s, a, r, _ in env.rows("SELECT * FROM host_sources")}
+    rows = {s: (a, r) for s, a, r in env.rows(
+        "SELECT source, available, reason FROM host_sources")}
     assert rows["smart"] == (0, "no permission")
     assert rows["mdraid"] == (0, "not present on this host")
     assert env.stored() == []

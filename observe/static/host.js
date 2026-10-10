@@ -6,6 +6,7 @@ import { statusChip } from "/static/js/chips.js";
 import { api, get, poller, whoami } from "/static/js/api.js";
 import { toast } from "/static/js/toast.js";
 import { formatValue, formatWhen, readingText, refreshedText } from "/static/js/format.js";
+import { groupItems } from "/static/js/host-groups.js";
 
 const SECTIONS = [
   ["cpu", "CPU"], ["memory", "Memory"], ["power", "Power"], ["temperatures", "Temperatures"],
@@ -18,7 +19,7 @@ const SECTIONS = [
 const KPI_SECTIONS = ["cpu", "temperatures", "fans", "disks"];
 const STATE_TEXT = {
   stale: "stale", unavailable: "source unavailable", absent: "not present on this host",
-  not_reported: "never reported",
+  not_reported: "never reported", gone: "source disappeared",
 };
 const STATUS_STATE = { good: "up", warning: "warn", critical: "down" };
 const page = document.getElementById("page");
@@ -74,20 +75,48 @@ function dataTable(heads, rows) {
   return wrap;
 }
 
+function itemRow(i) {
+  const st = el("span");
+  if (i.ignored) st.append(chip("no_data", "Ignored"));
+  else st.append(chip(i.status));
+  if (i.reason) st.append(" ", el("span", "muted", i.reason));
+  const row = [`${i.source.replace(/^hostwatch\.collector\./, "")}.${i.metric}`, labelText(i.labels), fmtValue(i), st,
+    `${ago(i.age_seconds)}${i.stale ? " (stale)" : ""}`];
+  if (isAdmin) row.push(ignoreButton(i));
+  if (i.ignored) row.cls = "ignored";
+  return row;
+}
+
+// Families of readings (the Home Assistant update entities, the entity count per domain) are one
+// summary row with a button that lists the members below it. The choice survives a refresh.
+const expandedGroups = new Set();
+
+function groupRows(g, width) {
+  const open = expandedGroups.has(g.key);
+  const b = el("button", "btn", open ? "Hide" : `Show ${g.items.length}`);
+  b.type = "button";
+  b.setAttribute("aria-expanded", String(open));
+  b.addEventListener("click", () => {
+    if (expandedGroups.has(g.key)) expandedGroups.delete(g.key); else expandedGroups.add(g.key);
+    refresh().catch(() => {});
+  });
+  const st = el("span");
+  st.append(chip(g.status), " ", el("span", "muted", g.summary));
+  const head = [`${g.items[0].source.replace(/^hostwatch\.collector\./, "")}.${g.items[0].metric}`,
+    `${g.items.length} readings`, b, st, ""];
+  while (head.length < width) head.push("");
+  return [head, ...(open ? g.items.map(itemRow) : [])];
+}
+
 function itemsTable(items) {
   const heads = ["Reading", "Labels", "Value", "State", "Seen"];
   if (isAdmin) heads.push("");
-  return dataTable(heads, items.map((i) => {
-    const st = el("span");
-    if (i.ignored) st.append(chip("no_data", "Ignored"));
-    else st.append(chip(i.status));
-    if (i.reason) st.append(" ", el("span", "muted", i.reason));
-    const row = [`${i.source.replace(/^hostwatch\.collector\./, "")}.${i.metric}`, labelText(i.labels), fmtValue(i), st,
-      `${ago(i.age_seconds)}${i.stale ? " (stale)" : ""}`];
-    if (isAdmin) row.push(ignoreButton(i));
-    if (i.ignored) row.cls = "ignored";
-    return row;
-  }));
+  const rows = [];
+  for (const r of groupItems(items)) {
+    if (r.group) rows.push(...groupRows(r.group, heads.length));
+    else rows.push(itemRow(r.item));
+  }
+  return dataTable(heads, rows);
 }
 
 // Every hw.id ignored on this host, read back from the items the server marked.
@@ -170,13 +199,41 @@ function sourcesTable(sources) {
     box.append(el("p", "card-sub", "No source has reported."));
     return box;
   }
-  box.append(dataTable(["Source", "State", "Reason", "Reported"], sources.map((s) => {
-    const state = !s.present ? "absent" : !s.available ? "unavailable" : s.stale ? "stale" : "ok";
+  const heads = ["Source", "State", "Reason", "Last present", "Reported"];
+  if (isAdmin) heads.push("");
+  box.append(dataTable(heads, sources.map((s) => {
+    const state = s.state
+      || (!s.present ? "absent" : !s.available ? "unavailable" : s.stale ? "stale" : "ok");
     const st = el("span");
     st.append(chip(s.status), " ", el("span", "muted", STATE_TEXT[state] || "available"));
-    return [s.source, st, s.present ? s.reason : "", ago(s.age_seconds)];
+    const row = [s.source, st, s.present || s.gone ? s.reason : "",
+      s.present_at ? fmtTime(s.present_at) : "never", ago(s.age_seconds)];
+    if (isAdmin) row.push(s.gone ? forgetButton(s.source) : "");
+    return row;
   })));
   return box;
+}
+
+// A source that disappeared holds the host Critical until the agent reports it again. When it
+// was removed on purpose an admin accepts that here; the server audits it, and the source then
+// reads as not present on this host.
+function forgetButton(source) {
+  const b = el("button", "btn", "Accept as gone");
+  b.type = "button";
+  b.setAttribute("aria-label", `Accept that ${source} is gone`);
+  b.addEventListener("click", async () => {
+    b.disabled = true;
+    try {
+      await api("POST", `/api/hosts/${encodeURIComponent(name)}/sources/` +
+        `${encodeURIComponent(source)}/forget`, null, {});
+      toast(`${source} is accepted as gone on this host`);
+      await refresh();
+    } catch (err) {
+      toast(`Not saved: ${err.message}`, "error");
+      b.disabled = false;
+    }
+  });
+  return b;
 }
 
 function kpis(h) {

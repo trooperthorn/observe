@@ -398,6 +398,28 @@ def _add_switch_device_type(db: sqlite3.Connection) -> None:
 
 SWITCH_TYPE_TABLES = (_add_switch_device_type,)
 
+# When the agent last reported each source present, so a source that was there and then
+# disappeared (the agent now says "not present") is told apart from hardware the host never had
+# (observe/hostview.py). NULL means never seen present, or an admin cleared it. A row present now
+# takes its last report; a row absent now takes the newest reading stored under the source's
+# scope, if there is one.
+def _add_source_present_at(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(host_sources)")}
+    if "present_at" not in columns:
+        db.execute("ALTER TABLE host_sources ADD COLUMN present_at REAL")
+
+
+SOURCE_PRESENT_TABLES = (
+    _add_source_present_at,
+    "UPDATE host_sources SET present_at = updated "
+    "WHERE available = 1 OR reason <> 'not present on this host'",
+    "UPDATE host_sources SET present_at = (SELECT MAX(l.ts) / 1000.0 FROM latest l "
+    "JOIN series s ON s.id = l.series_id JOIN scopes sc ON sc.id = s.scope_id "
+    "JOIN resources r ON r.id = s.resource_id WHERE r.kind = 'host' "
+    "AND r.name = host_sources.host AND (sc.name = 'hostwatch.collector.' || host_sources.source "
+    "OR sc.name = host_sources.source)) WHERE present_at IS NULL",
+)
+
 # The step that creates the summary levels. TimescaleDB runs its own version of it.
 ROLLUP_STEP = 17
 
@@ -429,6 +451,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     23: ALERT_TABLES,
     24: MONITOR_STATE_TABLES,
     25: SWITCH_TYPE_TABLES,
+    26: SOURCE_PRESENT_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

@@ -15,6 +15,8 @@ export const STATES = {
   stale: { role: "pending", icon: "clock", word: "Stale" },
   unavailable: { role: "pending", icon: "hollow", word: "No data" },
   absent: { role: "pending", icon: "hollow", word: "No data" },
+  // A source that was present and has disappeared (observe/hostview.py): not "no data".
+  gone: { role: "down", icon: "cross", word: "Missing" },
   not_reported: { role: "pending", icon: "hollow", word: "No data" },
   no_data: { role: "pending", icon: "hollow", word: "No data" },
 };
