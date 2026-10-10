@@ -251,16 +251,29 @@ Credential = Annotated[
 # -------------------------------------------------------------------- monitors
 
 
+# The default clear band of a threshold, as a fraction of the threshold (Thresholds.hysteresis).
+DEFAULT_HYSTERESIS = 0.05
+
+
 class Thresholds(Strict):
     """Numeric thresholds applied to a check's value.
 
     direction "above": value >= crit is DOWN, value >= warn is WARN.
     direction "below": value <= crit is DOWN, value <= warn is WARN.
+
+    Once a threshold holds, the value must move back past it by `hysteresis` (in the value's
+    unit) before it clears, so a value hovering at a threshold does not flap. None means 5% of
+    each threshold; 0 turns it off.
     """
 
     direction: Literal["above", "below"] = "above"
     warn: float | None = None
     crit: float | None = None
+    hysteresis: float | None = Field(default=None, ge=0)
+
+    def band(self, limit: float) -> float:
+        """How far past `limit` the value must return before that threshold clears."""
+        return abs(limit) * DEFAULT_HYSTERESIS if self.hysteresis is None else self.hysteresis
 
 
 MIN_RECHECK_INTERVAL = 5.0

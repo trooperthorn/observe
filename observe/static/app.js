@@ -8,7 +8,7 @@ import { stateInfo } from "/static/js/chip-states.js";
 import { applyLayout, initTiles, setDeclared } from "/static/js/tiles.js";
 import { groupTile } from "/static/js/tiles-logic.js";
 import { getAll, get, poller, seconds } from "/static/js/api.js";
-import { formatReading } from "/static/js/format.js";
+import { eventText, monitorReading } from "/static/js/format.js";
 import { downTileLabel } from "/static/js/hosts-logic.js";
 
 const ORDER = { down: 0, unreachable: 1, warn: 2, pending: 3, up: 4 };
@@ -50,13 +50,7 @@ function fmtTime(ts) {
   return new Date(seconds(ts) * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
 }
 
-function fmtVal(m) {
-  if (m.result === "fail" && m.value == null) return "";  // a failed probe has no meaningful latency
-  if (m.value === null || m.value === undefined) {
-    return m.latency_ms != null ? `${Math.round(m.latency_ms)} ms` : "";
-  }
-  return formatReading(m.value, m.unit);
-}
+const fmtVal = monitorReading;
 
 function makeRow(m) {
   const node = tpl.content.firstElementChild.cloneNode(true);
@@ -173,7 +167,7 @@ async function loadHistory(slug, node) {
     list.replaceChildren(...events.items.map((e) => {
       const li = el("li");
       const a = e.attributes;
-      li.append(el("span", "when", fmtTime(e.ts)),
+      li.append(el("span", "when", fmtTime(e.ts)), " ",
         `${a["observe.monitor.state.previous"]} → ${a["observe.monitor.state"]}: ${e.body}`);
       return li;
     }));
@@ -195,9 +189,8 @@ function drawDashboard(data) {
     if (!groups.has(m.group)) groups.set(m.group, []);
     groups.get(m.group).push(m);
   }
-  const summary = document.getElementById("summary");
-  summary.replaceChildren(...Object.entries(counts).filter(([, n]) => n)
-    .map(([s, n]) => statusChip(s, `${n} ${stateInfo(s).word}`)));
+  // The header summary (#summary) is the shell's global monitor summary; the counts of this
+  // page are in the KPI row and the availability tiles below.
   document.title = counts.down ? `(${counts.down} down) Overview - Observe` : "Overview - Observe";
 
   const forecasts = data.monitors.filter((m) => m.forecast && (m.forecast.warn_at || m.forecast.crit_at));
@@ -269,7 +262,8 @@ function drawDashboard(data) {
   document.getElementById("capacity").replaceChildren(...outlook.map(({ m }) => {
     const [text] = fcText(m.forecast);
     const li = el("li");
-    li.append(el("span", "when", m.name), `${text} · now ${fmtVal(m)} · ${m.forecast.reason}`);
+    li.append(el("span", "when", m.name), " ",
+      `${text} · now ${fmtVal(m)} · ${m.forecast.reason}`);
     return li;
   }));
 
@@ -279,19 +273,13 @@ function drawDashboard(data) {
     (bad.length ? ` · alert delivery failing: ${bad.map(([n, a]) => `${n} (${a.last_error})`).join("; ")}` : "");
 }
 
-function eventText(e) {
-  const a = e.attributes;
-  if (e.event_name === "observe.monitor.transition") {
-    return `${e.resource.name}: ${a["observe.monitor.state.previous"]} → ${a["observe.monitor.state"]} (${e.body})`;
-  }
-  return `${e.resource.name}: ${e.event_name} (${e.body})`;
-}
-
 async function renderEvents() {
   const page = await get("/api/v2/events?limit=25");
+  const names = new Map((lastData ? lastData.monitors : []).map((m) => [m.slug, m.name]));
   document.getElementById("events").replaceChildren(...page.items.map((e) => {
     const li = el("li");
-    li.append(el("span", "when", fmtTime(e.ts)), eventText(e));
+    // The space is real text, so a copy, a screen reader or a text view keeps the gap too.
+    li.append(el("span", "when", fmtTime(e.ts)), " ", eventText(e, names));
     return li;
   }));
 }

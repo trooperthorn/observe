@@ -236,7 +236,6 @@ function componentsCard(sec) {
 function render(h) {
   document.title = `${h.host} - Observe`;
   ignoredIds = collectIgnored(h);
-  document.getElementById("summary").replaceChildren(chip(h.status, `${h.host}: ${h.status}`));
   const frag = document.createDocumentFragment();
   // The same title block as the other pages: crumbs, then the title row with its action.
   const head = el("div", "admin-title host-title");

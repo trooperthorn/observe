@@ -132,7 +132,7 @@ class HomeAssistantCheck(_HttpApiCheck):
         await self.store.ingest_batch(batch, {}, now=now, critical=True)
         return CheckResult.ok(
             f"{self.monitor.host_name}: {len(states)} entities, {len(batch.samples)} readings",
-            value=float(len(states)), detail={"samples": len(batch.samples)})
+            value=float(len(states)), unit="{entity}", detail={"samples": len(batch.samples)})
 
     def headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.credential().token}"}
@@ -155,7 +155,7 @@ class HomeAssistantCheck(_HttpApiCheck):
                              if s["entity_id"].startswith("update.")
                              and ha_host.update_is_pending(s))
             res = CheckResult.ok(f"{len(pending)} updates pending", value=float(len(pending)),
-                                 detail={"pending": pending})
+                                 unit="{update}", detail={"pending": pending})
             if pending:
                 res.message += ": " + ", ".join(pending[:5])
                 if m.thresholds is None:
@@ -173,7 +173,7 @@ class HomeAssistantCheck(_HttpApiCheck):
             bad.append(eid)
         bad.sort()
         res = CheckResult.ok(f"{len(bad)} unavailable entities", value=float(len(bad)),
-                             detail={"unavailable": bad})
+                             unit="{entity unavailable}", detail={"unavailable": bad})
         if bad:
             res.message += ": " + ", ".join(bad[:5]) + (" ..." if len(bad) > 5 else "")
         return res
@@ -275,7 +275,7 @@ class UniFiNetworkCheck(_UniFiCheck):
             # own device's state, not the monitor's (observe/infra_map.py).
             each = [{"name": d.get("name"), "mac": mac_digits(str(d.get("macAddress") or "")),
                      "state": d.get("state")} for d in considered]
-            res = CheckResult.ok(msg, value=float(len(down)),
+            res = CheckResult.ok(msg, value=float(len(down)), unit="{device offline}",
                                  detail={"not_online": down, "devices": each})
             if down and m.thresholds is None:
                 res.result = Result.FAIL
@@ -284,7 +284,8 @@ class UniFiNetworkCheck(_UniFiCheck):
             upd = sorted(d.get("name") for d in devices
                          if d.get("firmwareUpdatable") and d.get("name") not in m.ignore)
             res = CheckResult.ok(f"{len(upd)} devices have firmware updates"
-                                 + (": " + ", ".join(upd) if upd else ""), value=float(len(upd)))
+                                 + (": " + ", ".join(upd) if upd else ""), value=float(len(upd)),
+                                 unit="{firmware update}")
             if upd and m.thresholds is None:
                 res.result = Result.WARN
             return res
@@ -331,7 +332,7 @@ class UniFiNetworkCheck(_UniFiCheck):
                 "state": p.get("state"), "poe": p.get("poe"), "vlan": None, "poe_w": None}
         up = sum(1 for v in ports.values() if v["state"] == "UP")
         return CheckResult.ok(f"{label} {up}/{len(ports)} ports up", value=float(up),
-                              detail={"ports": ports})
+                              unit="{port up}", detail={"ports": ports})
 
 
 class UniFiProtectCheck(_UniFiCheck):
@@ -348,7 +349,8 @@ class UniFiProtectCheck(_UniFiCheck):
             msg = f"{len(considered) - len(down)}/{len(considered)} cameras connected"
             if down:
                 msg += "; " + ", ".join(down)
-            res = CheckResult.ok(msg, value=float(len(down)), detail={"not_connected": down})
+            res = CheckResult.ok(msg, value=float(len(down)), unit="{camera disconnected}",
+                                 detail={"not_connected": down})
             if down and m.thresholds is None:
                 res.result = Result.FAIL
             return res
@@ -392,11 +394,11 @@ class TechnitiumCheck(_HttpApiCheck):
             cur = r.get("currentVersion", "?")
             if r.get("updateAvailable"):
                 res = CheckResult(Result.WARN, f"update available: {cur} -> "
-                                  f"{r.get('updateVersion', '?')}", value=1.0)
+                                  f"{r.get('updateVersion', '?')}", value=1.0, unit="{update}")
                 if m.thresholds is not None:
                     res.result = Result.OK
                 return res
-            return CheckResult.ok(f"version {cur} is current", value=0.0)
+            return CheckResult.ok(f"version {cur} is current", value=0.0, unit="{update}")
         r = await self.call("/api/dashboard/stats/get", type=m.range, utc="true")
         st = r.get("stats") or {}
         total = int(st.get("totalQueries") or 0)

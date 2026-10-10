@@ -63,7 +63,7 @@ function drawIdentity() {
   for (const [k, v] of rows) list.append(el("dt", null, k), el("dd", null, v));
   $("identity-note").textContent = s.enrolled ? ""
     : "This host was not added through the console, so its allowlist and install command are not managed here. You can still revoke its keys or remove it below.";
-  $("summary").replaceChildren(statusChip(s.reporting ? "up" : "pending", s.reporting ? "Reporting" : "Not reporting"));
+  $("reporting").replaceChildren(statusChip(s.reporting ? "up" : "pending", s.reporting ? "Reporting" : "Not reporting"));
 }
 
 // ---- allowlist ----

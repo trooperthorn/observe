@@ -373,6 +373,20 @@ ALERT_TABLES = (
 )""",
 )
 
+# The state each monitor was last in and since when (observe/state.py), so a restart neither logs
+# nor alerts "pending -> up" or a long-standing outage again. Seeded from the newest state change
+# in the event log, so the first restart after the upgrade is quiet too.
+MONITOR_STATE_TABLES = (
+    """CREATE TABLE IF NOT EXISTS monitor_state (
+  monitor TEXT PRIMARY KEY, state TEXT NOT NULL, since REAL NOT NULL
+)""",
+    """INSERT INTO monitor_state (monitor, state, since)
+SELECT e.monitor, e.current, e.ts FROM events e
+WHERE e.previous <> e.current AND e.current <> 'pending' AND e.ts = (
+  SELECT MAX(x.ts) FROM events x WHERE x.monitor = e.monitor AND x.previous <> x.current)
+ON CONFLICT (monitor) DO NOTHING""",
+)
+
 # The step that creates the summary levels. TimescaleDB runs its own version of it.
 ROLLUP_STEP = 17
 
@@ -402,6 +416,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     21: BATCH_BODY_HASH,
     22: SAMPLE_SEQ_TABLES,
     23: ALERT_TABLES,
+    24: MONITOR_STATE_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

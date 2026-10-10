@@ -8,7 +8,7 @@ import { statusChip, neutralChip } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { STATUS_STATE, ageText, filterRows, hostRows, summaryText } from "/static/js/hosts-logic.js";
 
-const summary = document.getElementById("summary");
+const summary = document.getElementById("hosts-summary");
 const footer = document.getElementById("footer");
 const search = document.getElementById("q");
 let isAdmin = false;

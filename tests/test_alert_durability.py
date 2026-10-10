@@ -242,11 +242,11 @@ async def test_open_alert_marks_of_removed_monitors_are_pruned(tmp_path):
 def test_a_version_22_database_with_rows_migrates_to_23(tmp_path):
     path = str(tmp_path / "m.db")
     db = sqlite3.connect(path)
-    newest = MIGRATIONS.pop(23)
+    newer = {v: MIGRATIONS.pop(v) for v in [v for v in MIGRATIONS if v > 22]}
     try:
         migrate(db)
     finally:
-        MIGRATIONS[23] = newest
+        MIGRATIONS.update(newer)
     assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 22
     db.execute("INSERT INTO events VALUES ('a', 1.0, 'up', 'down', 'fine')")
     db.commit()
@@ -257,7 +257,7 @@ def test_a_version_22_database_with_rows_migrates_to_23(tmp_path):
     assert asyncio.run(store.outbox_depth()) == 0
     store.close()
     db = sqlite3.connect(path)
-    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == SCHEMA_VERSION == 23
+    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == SCHEMA_VERSION
     db.close()
 
 

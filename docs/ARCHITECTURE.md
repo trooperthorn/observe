@@ -219,6 +219,18 @@ between them repeats the problem alert after the restart instead of losing it. S
 scheduler cancels delivery tasks; their alerts are already in the outbox and go out on the next
 start. `outbox_due` limits each target to 100 rows, so one target's backlog never delays another's.
 
+Schema step 24 adds `monitor_state`: the state each monitor is in and the time it entered it,
+written by `Store.record_event` in the same unit as the event of every real state change (and
+seeded from the newest state change in `events` on upgrade). `Scheduler.restore` hands it to the
+state machine as `MonitorState.prior`. The monitor starts PENDING and earns its state with the
+ordinary counts; reaching the prior state is silent (no event, no alert) and keeps the prior
+`since`, and reaching another is a transition from the prior state, logged and alerted as such.
+A kept Up state with a good result no older than three intervals comes back Up at once, again
+with the kept `since`. A missed reply of a monitor whose prior state is Down starts no Degraded
+episode. Built-in YAML `thresholds` have a clear band (`hysteresis`, default 5% of each
+threshold): `Check` keeps the level they gave the last value and `threshold_level` holds it until
+the value is back past the threshold by the band.
+
 A host or field push refused with `StorageBusy` is answered 503 at once and writes no audit row,
 so a refused push adds no unit to the full queue. Writes made by plugin collectors run with
 `SERVER_WORK` set and are critical like the other pollers, so a full queue never drops a cycle.

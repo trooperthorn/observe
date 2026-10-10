@@ -1,7 +1,7 @@
 // Run with: node --test tests/js (the tests workflow runs this too).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatValue, formatReading } from "../../observe/static/js/format.js";
+import { eventText, formatValue, formatReading, monitorReading, plural } from "../../observe/static/js/format.js";
 
 test("a ratio of unit 1 is shown as a percentage", () => {
   assert.equal(formatValue(0.35, "1"), "35 %");
@@ -69,4 +69,39 @@ test("monitor units with a leading space keep the one-decimal display", () => {
   assert.equal(formatReading(7, ""), "7");
   assert.equal(formatReading(0.35, "1"), "35 %");
   assert.equal(formatReading(8e9, "By"), "7.45 GiB");
+});
+
+test("count units in curly braces are shown as words", () => {
+  assert.equal(formatReading(3682, "{entity}"), "3682 entities");
+  assert.equal(formatReading(586, "{entity unavailable}"), "586 entities unavailable");
+  assert.equal(formatReading(1, "{update}"), "1 update");
+  assert.equal(formatReading(0, "{update}"), "0 updates");
+  assert.equal(formatReading(2, "{device offline}"), "2 devices offline");
+  assert.equal(formatReading(1, "{camera disconnected}"), "1 camera disconnected");
+  assert.equal(formatValue(4, "{}"), "4");
+  assert.deepEqual(["entity", "day", "box", "switch", "alert"].map(plural),
+    ["entities", "days", "boxes", "switches", "alerts"]);
+});
+
+test("a monitor card value always says what it is", () => {
+  assert.equal(monitorReading({ type: "pushed_host", value: 67, unit: "s", result: "ok" }),
+    "data 1m 7s old");
+  assert.equal(monitorReading({ type: "home_assistant", value: 586, unit: "{entity unavailable}" }),
+    "586 entities unavailable");
+  assert.equal(monitorReading({ type: "technitium", value: 2.1, unit: "%" }), "2.1%");
+  assert.equal(monitorReading({ type: "http", value: null, latency_ms: 41.6 }), "42 ms");
+  assert.equal(monitorReading({ type: "http", value: null, latency_ms: 41.6, result: "fail" }), "");
+  assert.equal(monitorReading({ type: "http", value: null, latency_ms: null }), "");
+});
+
+test("an event row names the monitor by its display name", () => {
+  const e = {
+    event_name: "observe.monitor.transition", body: "2.1% SERVFAIL",
+    resource: { name: "dns1-servfail-rate" },
+    attributes: { "observe.monitor.state.previous": "up", "observe.monitor.state": "warn" },
+  };
+  const names = new Map([["dns1-servfail-rate", "DNS1 SERVFAIL rate"]]);
+  assert.equal(eventText(e, names), "DNS1 SERVFAIL rate: up → warn (2.1% SERVFAIL)");
+  assert.equal(eventText(e, new Map()), "dns1-servfail-rate: up → warn (2.1% SERVFAIL)");
+  assert.equal(eventText({ event_name: "x.y", body: "b", resource: { name: "h" } }, null), "h: x.y (b)");
 });

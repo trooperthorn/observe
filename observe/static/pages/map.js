@@ -269,7 +269,7 @@ function fillOptions(all) {
 function summarize(nodes) {
   const counts = {};
   for (const n of nodes.filter((x) => x.kind === "switch")) counts[n.state] = (counts[n.state] || 0) + 1;
-  document.getElementById("summary").replaceChildren(
+  document.getElementById("map-summary").replaceChildren(
     ...Object.entries(counts).map(([s, c]) => el("span", `pill ${s}`, `${c} ${STATE_WORDS[s] || s}`)));
 }
 
