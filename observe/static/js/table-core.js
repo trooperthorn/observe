@@ -39,8 +39,9 @@ export function ariaSort(current, key) {
 }
 
 // The rows of one page. The page number is clamped, so a shrinking result never shows nothing.
-export function pageSlice(rows, page, size) {
-  const n = PAGE_SIZES.includes(size) ? size : PAGE_SIZES[0];
+// `sizes` is the list the page offers; a size outside it falls back to the first.
+export function pageSlice(rows, page, size, sizes = PAGE_SIZES) {
+  const n = sizes.includes(size) ? size : sizes[0];
   const pages = Math.max(1, Math.ceil(rows.length / n));
   const p = Math.min(Math.max(0, page | 0), pages - 1);
   return { rows: rows.slice(p * n, p * n + n), page: p, pages, size: n, total: rows.length };

@@ -39,7 +39,7 @@ from observe.portkey import mac_digits, port_key, switch_id, unifi_port_key
 from observe.storage import Conn, savepoint
 from observe.store import Store
 
-from .records import Device, write_devices
+from .records import Device, write_devices, write_site_status_integration
 
 log = logging.getLogger(__name__)
 
@@ -143,14 +143,19 @@ def _noted(feed: str, result: FeedResult) -> FeedResult:
 
 
 async def feed_integration(store: Store, devices: Iterable[Device], now: float, *,
-                           save_devices: bool = False) -> FeedResult:
+                           save_devices: bool = False,
+                           site_status: tuple[str, str, dict[str, Any]] | None = None
+                           ) -> FeedResult:
     """One Integration cycle in one transaction. With `save_devices` the poll's device rows
-    (the plugin's `unifi_devices` table) are written in the same unit."""
+    (the plugin's `unifi_devices` table) are written in the same unit, and `site_status`
+    (site id, gateway id, uplink statistics) goes to `unifi_site_status` with them."""
     items = list(devices)
 
     def cycle(db: Conn) -> FeedResult:
         if save_devices:
             write_devices(db, items, now)
+        if site_status is not None:
+            write_site_status_integration(db, site_status[0], site_status[1], site_status[2], now)
         return integrate_devices(db, items, now)
     return _noted("integration", await write_cycle(store, cycle, now=now, touches=("unifi",)))
 

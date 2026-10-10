@@ -3,7 +3,7 @@
 // same cases through node when it is installed.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { windowFor, filterClients, attachment, clientState, markClientsStale, markCamerasStale } from "../../plugins/unifi/observe_unifi/static/vlist-core.js";
+import { windowFor, filterClients, attachment, clientState, markClientsStale, markCamerasStale, vlanOptions, ssidOptions, uptimeSeconds, defaultSsid, permittedApsText, carryingText, bandText } from "../../plugins/unifi/observe_unifi/static/vlist-core.js";
 
 const rows = Array.from({ length: 500 }, (_, i) => ({
   name: `c${i}`, mac: `m${i}`, ip: "", ssid: "", uplink_name: i % 2 ? "AP" : "SW",
@@ -54,4 +54,45 @@ test("a camera is stale when it is connected or recording and not refreshed in t
     { connected: false, recording: false, last_seen: old },
     { connected: true, recording: true, last_seen: "2026-10-07T11:59:00.000Z" }], now, 300);
   assert.deepEqual(got.map((c) => c.stale), [true, true, false, false]);
+});
+
+test("the VLAN and SSID filters match exactly and the option lists are sorted", () => {
+  const rows = [
+    { name: "a", vlan: 30, ssid: "IoT", kind: "wireless", connected: true },
+    { name: "b", vlan: 1, ssid: "Home", kind: "wireless", connected: true },
+    { name: "c", vlan: null, ssid: "", kind: "wired", connected: true, network: "LAN" },
+    { name: "d", vlan: 300, ssid: "IoT", kind: "wireless", connected: false }];
+  assert.deepEqual(vlanOptions(rows), ["1", "30", "300"]);
+  assert.deepEqual(ssidOptions(rows), ["Home", "IoT"]);
+  assert.deepEqual(filterClients(rows, { vlan: "30" }).map((c) => c.name), ["a"]);  // not 300
+  assert.deepEqual(filterClients(rows, { ssid: "IoT" }).map((c) => c.name), ["a", "d"]);
+  assert.deepEqual(filterClients(rows, { ssid: "IoT", state: "connected" }).map((c) => c.name), ["a"]);
+  assert.deepEqual(filterClients(rows, { q: "lan" }).map((c) => c.name), ["c"]);  // the network name
+  assert.equal(filterClients(rows, { vlan: "" }).length, 4);
+});
+
+test("uptime is the classic value, else the time since connected_at, else unknown", () => {
+  const now = "2026-10-07T12:00:00.000Z";
+  assert.equal(uptimeSeconds({ connected: true, uptime_s: 90, connected_at: "2026-10-07T11:00:00.000Z" }, now), 90);
+  assert.equal(uptimeSeconds({ connected: true, uptime_s: null, connected_at: "2026-10-07T11:00:00.000Z" }, now), 3600);
+  assert.equal(uptimeSeconds({ connected: true, uptime_s: null, connected_at: null }, now), null);
+  assert.equal(uptimeSeconds({ connected: true, connected_at: "2026-10-07T13:00:00.000Z" }, now), null);  // the future
+  assert.equal(uptimeSeconds({ connected: false, uptime_s: 90 }, now), null);
+  assert.equal(uptimeSeconds({ connected: null, connected_at: "2026-10-07T11:00:00.000Z" }, now), null);
+});
+
+test("the Wi-Fi words: default SSID, permitted and carrying access points, bands", () => {
+  assert.equal(defaultSsid([{ name: "Home" }, { name: "WiFIoT" }]), "WiFIoT");
+  assert.equal(defaultSsid([{ name: "Home" }]), "");
+  assert.equal(permittedApsText({ ap_group_mode: "all" }), "Every access point");
+  assert.equal(permittedApsText({ ap_group_mode: "" }), "Every access point");
+  assert.equal(permittedApsText({ ap_group_mode: "specific", ap_names: ["Attic", "Shed"] }), "Attic, Shed");
+  assert.match(permittedApsText({ ap_group_mode: "specific", ap_names: [] }), /cannot be named/);
+  assert.equal(carryingText({ carrying_aps: [], client_count: 0 }), "none");
+  assert.equal(carryingText({ carrying_aps: ["Attic"], client_count: 1 }), "Attic (1 client)");
+  assert.equal(carryingText({ carrying_aps: [], client_count: 2 }), "an access point the poll did not name (2 clients)");
+  assert.equal(bandText("both"), "2.4 GHz, 5 GHz");
+  assert.equal(bandText("2g"), "2.4 GHz");
+  assert.equal(bandText("5g"), "5 GHz");
+  assert.equal(bandText(""), "Not reported");
 });

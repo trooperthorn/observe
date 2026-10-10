@@ -37,6 +37,9 @@ test("pageSlice clamps the page and the size", () => {
   assert.equal(pageSlice(many, 9, 10).page, 2);
   assert.equal(pageSlice(many, 0, 7).size, 10);
   assert.equal(pageSlice([], 3, 10).pages, 1);
+  // A page may offer its own sizes; a size outside that list falls back to its first.
+  assert.equal(pageSlice(many, 0, 25, [25, 50, 100]).rows.length, 23);
+  assert.equal(pageSlice(many, 0, 10, [25, 50, 100]).size, 25);
 });
 
 test("every state has a word and a known icon, and unknown states fall back", () => {

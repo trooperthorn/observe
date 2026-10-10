@@ -1,5 +1,6 @@
 /* The UniFi page. Tokens only, no colour literals. The clients table draws only the rows in view:
-   every row is one fixed height, and the spacer rows above and below carry the rest. */
+   every row is one fixed height, and the spacer rows above and below carry the rest. Layout
+   follows the HA SOC network view (ha_Int_soc, MIT, same owner) on Observe's components. */
 .crumbs { color: var(--o-text-muted); font-size: var(--o-fs-sm); margin: 0; }
 .tabs { display: flex; gap: var(--o-s2); margin: var(--o-s3) 0; flex-wrap: wrap; }
 .tab { border: 1px solid var(--o-border); background: var(--o-surface); color: var(--o-text);
@@ -8,17 +9,89 @@
   color: var(--o-accent); }
 .filters { display: flex; gap: var(--o-s2); align-items: center; flex-wrap: wrap;
   margin: 0 0 var(--o-s3); }
-.filters input, .filters select { border: 1px solid var(--o-border); border-radius: 6px;
+.filters input, .filters select { border: 1px solid var(--o-border-input); border-radius: 6px;
   background: var(--o-surface); color: var(--o-text); padding: 0 var(--o-s2); min-height: 32px;
   font: inherit; }
 .filters input { min-width: 220px; }
-.vscroll { max-height: 480px; overflow: auto; border: 1px solid var(--o-border);
+.filters label { display: flex; align-items: center; gap: var(--o-s1); color: var(--o-text-muted);
+  font-size: var(--o-fs-sm); }
+.vscroll { max-height: 520px; overflow: auto; border: 1px solid var(--o-border);
   border-radius: 6px; }
 .vscroll:focus-visible { outline: 2px solid var(--o-accent); outline-offset: 1px; }
 .vscroll table.data thead th { position: sticky; top: 0; background: var(--o-surface);
   z-index: 1; }
-.vscroll tr.vrow { height: 40px; }
+.vscroll tr.vrow { height: 48px; }
 .vscroll tr.vrow td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  max-width: 22ch; padding-top: 0; padding-bottom: 0; }
+  max-width: 24ch; padding-top: 0; padding-bottom: 0; }
 .vscroll tr.vspace td { padding: 0; border: 0; }
 .vscroll tr.vspace:hover { background: transparent; }
+
+/* Two-line cells: the name, then a muted word (wireless, the device state). */
+.cell-main { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.cell-sub { display: flex; align-items: center; gap: var(--o-s1); color: var(--o-text-muted);
+  font-size: var(--o-fs-xs); line-height: 1.4; }
+td.mono { font-family: var(--o-mono); font-size: var(--o-fs-sm); }
+.dash { color: var(--o-text-muted); }
+.rates { display: inline-flex; gap: var(--o-s2); font-variant-numeric: tabular-nums;
+  white-space: nowrap; }
+.rates .dir { color: var(--o-text-muted); }
+
+/* The five tiles. The shared .kpi-row is four across; this page shows five. */
+.kpi-row.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.kpi .kpi-value { display: flex; align-items: center; gap: var(--o-s2); min-height: 1.2em; }
+.kpi .kpi-value .chip { font-size: var(--o-fs-base); }
+.kpi .kpi-sub { color: var(--o-text-muted); font-size: var(--o-fs-sm);
+  overflow-wrap: anywhere; }
+.kpi .kpi-value.small { font-size: var(--o-fs-h); }
+@media (max-width: 1100px) { .kpi-row.five { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .kpi-row.five { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 420px) { .kpi-row.five { grid-template-columns: minmax(0, 1fr); } }
+
+/* Clients per SSID: a button, a bar and the count per row. The bar is a progress element, so
+   its length needs no inline style. */
+.ssid-list { display: grid; gap: var(--o-s1); margin: 0; }
+.ssid-row { display: grid; grid-template-columns: minmax(8rem, 16rem) minmax(0, 1fr) 3.5rem;
+  gap: var(--o-s3); align-items: center; }
+.ssid-row .ssid-name { text-align: left; background: transparent; border: 1px solid transparent;
+  border-radius: 6px; color: var(--o-text); font: inherit; padding: var(--o-s1) var(--o-s2);
+  min-height: 32px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssid-row .ssid-name:hover { background: var(--o-surface-subtle); }
+.ssid-row .ssid-name[aria-pressed="true"] { background: var(--o-accent-tint);
+  border-color: var(--o-accent); color: var(--o-accent); }
+.ssid-row progress { width: 100%; height: 10px; border: 0; border-radius: var(--o-radius-pill);
+  background: var(--o-surface-subtle); accent-color: var(--o-accent); overflow: hidden; }
+.ssid-row progress::-webkit-progress-bar { background: var(--o-surface-subtle);
+  border-radius: var(--o-radius-pill); }
+.ssid-row progress::-webkit-progress-value { background: var(--o-accent);
+  border-radius: var(--o-radius-pill); }
+.ssid-row progress::-moz-progress-bar { background: var(--o-accent);
+  border-radius: var(--o-radius-pill); }
+.ssid-row .ssid-count { text-align: right; font-variant-numeric: tabular-nums; }
+.card .card-hint { color: var(--o-text-muted); font-size: var(--o-fs-sm); font-weight: 400;
+  margin-left: var(--o-s2); }
+
+/* Wi-Fi join diagnostics: one card per SSID. */
+.wifi-ssid { border: 1px solid var(--o-border); border-radius: var(--o-radius-sm);
+  padding: var(--o-s3); margin: 0 0 var(--o-s3); background: var(--o-surface); }
+.wifi-head { display: flex; align-items: center; gap: var(--o-s2); flex-wrap: wrap;
+  margin-bottom: var(--o-s2); }
+.wifi-head strong { font-size: var(--o-fs-title); }
+.wifi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--o-s1) var(--o-s4); font-size: var(--o-fs-sm); margin: 0; }
+.wifi-grid dt { display: block; font-size: var(--o-fs-xs); text-transform: uppercase;
+  letter-spacing: .04em; color: var(--o-text-muted); }
+.wifi-grid dd { margin: 0 0 var(--o-s1); overflow-wrap: anywhere; }
+ul.wifi-findings { margin: var(--o-s2) 0 0; padding: 0; list-style: none; display: grid;
+  gap: var(--o-s1); }
+.finding { display: flex; gap: var(--o-s2); align-items: baseline; font-size: var(--o-fs-sm); }
+.finding .sev { flex: 0 0 auto; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  border-radius: 4px; padding: 1px 6px; font-weight: 650; border: 1px solid var(--o-border);
+  background: var(--o-surface-subtle); color: var(--o-text-muted); }
+.finding.blocking .sev { background: var(--o-down-bg); color: var(--o-down);
+  border-color: var(--o-down); }
+.finding.possible .sev { background: var(--o-warn-bg); color: var(--o-warn);
+  border-color: var(--o-warn); }
+.wifi-ok { color: var(--o-up); font-size: var(--o-fs-sm); margin: var(--o-s2) 0 0; }
+.wifi-ok .chip { font-size: var(--o-fs-xs); }
+.card h4 { font-size: var(--o-fs-base); margin: var(--o-s4) 0 var(--o-s2); }
+.card p.intro { margin: 0 0 var(--o-s3); color: var(--o-text-muted); font-size: var(--o-fs-sm); }

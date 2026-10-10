@@ -1210,7 +1210,7 @@ level and the change counters, and never a connection string. A list that no wri
 domain for (keys, users, storage status) sends no ETag.
 
 The UniFi, Pockethernet and control plugins each have an `api.py` and a `register_api` hook
-(`/unifi/devices`, `/unifi/clients`, `/unifi/cameras`; `/pockethernet/reports`, `/reports/{source}/{report_id}`,
+(`/unifi/devices`, `/unifi/clients`, `/unifi/cameras`, `/unifi/overview`, `/unifi/wlans`, `/unifi/absent-clients`; `/pockethernet/reports`, `/reports/{source}/{report_id}`,
 `/jacks/{key}`; `/control/commands`, `/control/capabilities`). They read their own tables on the
 read connection and page by primary key. The control list never writes: a command that expired
 without an answer is shown as `unknown` from the clock, where the legacy admin route (removed in
