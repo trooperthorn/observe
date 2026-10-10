@@ -38,6 +38,13 @@ export function ariaSort(current, key) {
   return current.dir === "asc" ? "ascending" : "descending";
 }
 
+// The accessible name of a column's sort button: what it sorts and how it is sorted now.
+export function sortLabel(label, aria) {
+  const now = aria === "ascending" ? "sorted ascending" : aria === "descending" ? "sorted descending"
+    : "not sorted";
+  return `Sort by ${label}, ${now}`;
+}
+
 // The rows of one page. The page number is clamped, so a shrinking result never shows nothing.
 // `sizes` is the list the page offers; a size outside it falls back to the first.
 export function pageSlice(rows, page, size, sizes = PAGE_SIZES) {

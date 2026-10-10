@@ -5,6 +5,9 @@
 .admin-title { display: grid; gap: var(--o-s1); }
 .admin-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--o-s4); }
 .admin-cols > .card { min-width: 0; }
+/* The keys table has seven columns (Kind joined them), more than half the page holds: it takes the
+   whole row so Last used and Revoke stay inside the card. */
+.admin-cols > #keys-card { grid-column: 1 / -1; }
 @media (max-width: 900px) { .admin-cols { grid-template-columns: minmax(0, 1fr); } }
 /* Words break only when one is wider than its whole column; the table scrolls inside .table-wrap
    rather than splitting a host name or a button label mid-word. */

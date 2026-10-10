@@ -1,5 +1,5 @@
 /* The console shell: header brand, theme toggle and the navigation row. Colours come from
-   tokens.css only. Both rows wrap, and the nav scrolls sideways on narrow screens. */
+   tokens.css only. Both rows wrap; on narrow screens the nav groups wrap onto rows too. */
 .shell-head { gap: var(--o-s2) var(--o-s4); }
 .shell-brand { font-size: var(--o-fs-h); letter-spacing: .01em; }
 .shell-home { display: inline-flex; align-items: center; gap: var(--o-s2); color: var(--o-text);
@@ -44,3 +44,13 @@ header {
    window edge. */
 #footer { max-width: var(--o-maxw); margin: 0 auto; padding: var(--o-s3) var(--o-s4) var(--o-s5);
           color: var(--o-text-muted); font-size: var(--o-fs-sm); }
+/* Narrow screens: the nav groups wrap onto rows instead of scrolling sideways out of sight, each
+   group keeping its label with its links, and the links wrap inside a group. */
+@media (max-width: 760px) {
+  #shell-nav { overflow-x: visible; }
+  .shell-groups { flex-wrap: wrap; white-space: normal; gap: var(--o-s1) var(--o-s4);
+                  padding: var(--o-s1) var(--o-s3); }
+  .shell-group { flex-wrap: wrap; gap: 0 var(--o-s1); }
+  .shell-links { flex-wrap: wrap; }
+  .shell-link { padding: 0 var(--o-s2); }
+}

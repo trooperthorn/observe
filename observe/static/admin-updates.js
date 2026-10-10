@@ -15,10 +15,7 @@ import { notAdmin, showError } from "/static/js/admin-ui.js";
 import { hostHref } from "/static/js/wizard-logic.js";
 import { settingsHref } from "/static/js/settings-logic.js";
 import { refreshedText } from "/static/js/format.js";
-import {
-  agentRowState, overallChip, phaseChips, polling, pullAgeText, updateAllSummary, updateResultText,
-  upstreamText, versionChanged,
-} from "/static/js/updates-logic.js";
+import { agentRowState, overallChip, phaseChips, polling, pullAgeText, updateAllNote, updateAllSummary, updateResultText, upstreamText, versionChanged } from "/static/js/updates-logic.js";
 
 const $ = (id) => document.getElementById(id);
 let csrf = "";
@@ -159,6 +156,8 @@ function latestUpdate(r) {
   return box;
 }
 
+let eligibleNow = 0;
+
 function drawAgents(rows) {
   const columns = [
     { key: "host", label: "Host", get: (r) => r.host, render: (r) => { const a = el("a", null, r.host); a.href = hostHref(r.host); return a; } },
@@ -192,13 +191,16 @@ async function refreshAgents() {
     agent: byHost.get(h.host) || null, last: latest.get(h.host) || null,
   }));
   drawAgents(rows);
-  const eligible = rows.filter((r) => r.agent && r.agent.eligible).length;
+  // The button starts disabled in the page and is enabled only here, when a refresh found at
+  // least one eligible host, so a slow or failed refresh never leaves it offered for nothing.
+  eligibleNow = rows.filter((r) => r.agent && r.agent.eligible).length;
   const button = $("update-all");
-  button.disabled = !controlLoaded || eligible === 0;
-  button.textContent = eligible ? `Update all eligible agents (${eligible})...` : "Update all eligible agents...";
+  button.disabled = !controlLoaded || eligibleNow === 0;
+  button.textContent = eligibleNow ? `Update all eligible agents (${eligibleNow})...` : "Update all eligible agents...";
+  $("update-all-note").textContent = updateAllNote(controlLoaded, eligibleNow);
   if (agentsDraw === null) {
     agentsDraw = true;
-    button.addEventListener("click", () => updateAll(rows.filter((r) => r.agent && r.agent.eligible).length));
+    button.addEventListener("click", () => updateAll(eligibleNow));
   }
 }
 

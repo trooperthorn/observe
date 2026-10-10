@@ -38,7 +38,8 @@
     <h3 id="agents-h">Agents</h3>
     <p class="card-sub">Every host that has pushed, its hostwatch version and whether its control daemon can be asked to update the agent. Windows and TrueNAS hosts take a new install command from their settings page.</p>
     <p class="row-actions">
-      <button type="button" class="btn" id="update-all">Update all eligible agents...</button>
+      <button type="button" class="btn" id="update-all" disabled>Update all eligible agents...</button>
+      <span class="muted" id="update-all-note"></span>
     </p>
     <p id="agents-summary" aria-live="polite"></p>
     <ul id="agents-refused" class="finding-list"></ul>

@@ -138,3 +138,6 @@ ul.findings { list-style: none; padding: 0; margin: 0; }
 ul.findings li { padding: .3rem 0; border-top: 1px solid var(--o-border); overflow-wrap: anywhere; }
 .row-note { display: block; color: var(--o-text-muted); font-size: var(--o-fs-sm); margin-top: var(--o-s1); }
 .row-note::before { content: "Note: "; font-weight: 600; }
+/* A form field's error line, and the field it belongs to. */
+.field-error { color: var(--o-down); font-weight: 600; }
+input[aria-invalid="true"] { border-color: var(--o-down); outline-color: var(--o-down); }

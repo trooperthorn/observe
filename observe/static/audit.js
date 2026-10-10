@@ -16,7 +16,7 @@ let rows = [];
 
 // The outcome chip, with the HTTP status beside it only when the row has a real one.
 function statusCell(a) {
-  const cell = el("span", null);
+  const cell = el("span", "nowrap");  // never "HTTP / 200" over two lines
   cell.append(statusChip(CHIP[outcomeOf(a)], outcomeWord(a)));
   const code = httpCode(a.status);
   if (code) cell.append(" ", el("span", "muted", code));
