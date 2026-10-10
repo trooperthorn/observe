@@ -175,45 +175,70 @@ class Device:
 
 GATEWAY_ROLES = ("gateway", "console", "ugw")
 # A model or name token that marks a gateway, consulted only when no device declares a role.
-GATEWAY_TOKENS = ("gateway", "udm", "uxg", "usg", "ugw", "ucg", "udr", "uxr", "udw", "dream",
-                  "console")
+GATEWAY_TOKENS = ("gateway", "udm", "uxg", "usg", "ugw", "ucg", "udr", "uxr", "udw", "efg",
+                  "dream", "console")
 
 
-# The map device type of a UniFi device (observe.infra.DEVICE_TYPES). The features list is the
-# strongest signal and is read in this order, so a gateway that also switches is a gateway. Then
-# the row's type or role, then the model name. Names are compared without case or underscores,
-# so ACCESS_POINT and accessPoint are the same (UNVERIFIED which spelling a console sends).
-FEATURE_TYPES = (("gateway", "gateway"), ("switching", "switch"), ("accesspoint", "access_point"))
+# The map device type of a UniFi device (observe.infra.DEVICE_TYPES). Names are compared
+# without case, spaces, dashes or underscores, so ACCESS_POINT, accessPoint, "UCG Fiber",
+# "UCG-Fiber" and "UCGFIBER" each read the same (UNVERIFIED which spelling a console sends).
+FEATURE_TYPES = (("switching", "switch"), ("accesspoint", "access_point"))
 ROLE_TYPES = {"gateway": "gateway", "console": "gateway", "ugw": "gateway", "udm": "gateway",
               "uxg": "gateway", "switch": "switch", "usw": "switch", "accesspoint": "access_point",
-              "ap": "access_point", "uap": "access_point", "bridge": "bridge", "ubb": "bridge"}
-MODEL_TYPES = (("gateway", ("UCG", "UDM", "UXG", "UDR")),
-               ("access_point", ("U6", "U7", "UAP", "UAL")),
-               ("switch", ("USW", "US-")))
+              "ap": "access_point", "uap": "access_point", "bridge": "bridge", "ubb": "bridge",
+              "udb": "bridge"}
+# Model codes that settle the type even against a SWITCHING or ACCESS_POINT feature: a UniFi
+# gateway or console switches too (a UCG Fiber was drawn as a switch), and a Device Bridge
+# (UDB, e.g. "UDB Pro" or UDBPRO) or Building Bridge (UBB) carries an access point radio.
+MODEL_STRONG = (("gateway", ("ucg", "udm", "udr", "uxg", "efg", "usg", "udw", "uxr")),
+                ("bridge", ("udb", "ubb")))
+MODEL_TYPES = (("access_point", ("u6", "u7", "uap", "ual")),
+               ("switch", ("usw", "us8", "us16", "us24", "us48")))
+LEGACY_SWITCH = "us-"  # US-8-60W and the other first generation switches, matched as written
 
 
 def _squash(value: str) -> str:
     return "".join(ch for ch in value.lower() if ch.isalnum())
 
 
+def _model_kind(model: str, table: tuple[tuple[str, tuple[str, ...]], ...]) -> str:
+    name = _squash(model or "")
+    for kind, prefixes in table:
+        if name.startswith(prefixes):
+            return kind
+    return ""
+
+
 def device_type_of(features: Iterable[str] = (), device_type: str = "", role: str = "",
                    model: str = "") -> str:
-    """gateway, switch, access_point, bridge or other, or empty when nothing says. Features first
-    (GATEWAY, then SWITCHING, then ACCESS_POINT), then the type and role, then a model prefix
-    (UCG, UDM, UXG and UDR are gateways, U6, U7, UAP and UAL access points, USW and US-
-    switches). A device that names features or a type that none of these match is other."""
+    """gateway, switch, access_point, bridge or other, or empty when nothing says. In order: a
+    GATEWAY feature or a gateway or bridge type or role; then a gateway model code (UCG, UDM,
+    UDR, UXG, EFG, USG, UDW, UXR) or bridge code (UDB, UBB), which win over a SWITCHING or
+    ACCESS_POINT feature because those devices also switch or carry a radio; then the
+    SWITCHING and ACCESS_POINT features; then any other type or role; then an access point
+    (U6, U7, UAP, UAL) or switch (USW, US-) model. A device that names features or a type
+    that none of these match is other."""
     feats = {_squash(f) for f in features if isinstance(f, str)}
+    if "gateway" in feats:
+        return "gateway"
+    roles = [ROLE_TYPES.get(_squash(text or ""), "") for text in (device_type, role)]
+    for kind in roles:
+        if kind in ("gateway", "bridge"):
+            return kind
+    strong = _model_kind(model, MODEL_STRONG)
+    if strong:
+        return strong
     for feat, kind in FEATURE_TYPES:
         if feat in feats:
             return kind
-    for text in (device_type, role):
-        kind = ROLE_TYPES.get(_squash(text or ""))
+    for kind in roles:
         if kind:
             return kind
-    name = (model or "").strip().upper()
-    for kind, prefixes in MODEL_TYPES:
-        if name.startswith(prefixes):
-            return kind
+    weak = _model_kind(model, MODEL_TYPES)
+    if weak:
+        return weak
+    if (model or "").strip().lower().startswith(LEGACY_SWITCH):
+        return "switch"
     return "other" if feats or device_type or role else ""
 
 
