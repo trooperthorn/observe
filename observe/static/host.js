@@ -22,7 +22,10 @@ const STATE_TEXT = {
 };
 const STATUS_STATE = { good: "up", warning: "warn", critical: "down" };
 const page = document.getElementById("page");
-const name = new URLSearchParams(location.search).get("name") || "";
+// The host is the path after /hosts/ (the old /host?name= form redirects here).
+const PATH_NAME = location.pathname.startsWith("/hosts/")
+  ? decodeURIComponent(location.pathname.slice("/hosts/".length)) : "";
+const name = PATH_NAME || new URLSearchParams(location.search).get("name") || "";
 let isAdmin = false;
 
 function chip(status, text) {
@@ -235,20 +238,23 @@ function render(h) {
   ignoredIds = collectIgnored(h);
   document.getElementById("summary").replaceChildren(chip(h.status, `${h.host}: ${h.status}`));
   const frag = document.createDocumentFragment();
-  const head = el("div", "host-title");
-  const crumb = el("p", "card-sub");
+  // The same title block as the other pages: crumbs, then the title row with its action.
+  const head = el("div", "admin-title host-title");
+  const crumb = el("p", "crumbs muted");
   const back = el("a", null, "Hosts");
   back.href = "/hosts";
   crumb.append(back, " / ", h.host);
+  const titleRow = el("div", "title-row");
   const line = el("h1");
   line.append(h.host, " ", chip(h.status));
-  head.append(crumb, line);
+  titleRow.append(line);
   if (isAdmin) {
     // The settings page needs an admin session; a viewer would only see a refusal there.
     const settings = el("a", "btn", "Settings");
     settings.href = `/hosts/${encodeURIComponent(h.host)}/settings`;
-    head.append(settings);
+    titleRow.append(settings);
   }
+  head.append(crumb, titleRow);
   head.append(el("p", "card-sub",
     `${h.platform || "unknown platform"}, agent ${h.agent_version || "unknown"}. ` +
     (h.heard ? `Last report ${ago(h.age_seconds)}.` : "No batch has ever arrived.")));

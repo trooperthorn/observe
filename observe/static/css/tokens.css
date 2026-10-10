@@ -39,6 +39,7 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --o-page: #0f1218; --o-surface: #181c24; --o-surface-subtle: rgba(230, 233, 239, .04);
     --o-border: #2a303b; --o-text: #e6e9ef; --o-text-muted: #a3acba; --o-accent: #3987e5;
     --o-accent-tint: rgba(57, 135, 229, .16); --o-accent-line: rgba(57, 135, 229, .34);
@@ -58,6 +59,7 @@
   }
 }
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --o-page: #0f1218; --o-surface: #181c24; --o-surface-subtle: rgba(230, 233, 239, .04);
   --o-border: #2a303b; --o-text: #e6e9ef; --o-text-muted: #a3acba; --o-accent: #3987e5;
   --o-accent-tint: rgba(57, 135, 229, .16); --o-accent-line: rgba(57, 135, 229, .34);
@@ -76,3 +78,5 @@
   --g-label-fg: #e8eef6;
 }
 @media (prefers-reduced-motion: reduce) { :root { --o-dur: 0ms; } }
+/* A page set to light keeps native controls light even on a dark system. */
+:root[data-theme="light"] { color-scheme: light; }

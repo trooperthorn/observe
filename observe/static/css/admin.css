@@ -6,7 +6,9 @@
 .admin-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--o-s4); }
 .admin-cols > .card { min-width: 0; }
 @media (max-width: 900px) { .admin-cols { grid-template-columns: minmax(0, 1fr); } }
-.admin-main table.data { overflow-wrap: anywhere; }
+/* Words break only when one is wider than its whole column; the table scrolls inside .table-wrap
+   rather than splitting a host name or a button label mid-word. */
+.admin-main table.data { overflow-wrap: break-word; }
 .admin-form { display: flex; flex-wrap: wrap; gap: var(--o-s2) var(--o-s3); align-items: flex-end; margin: var(--o-s3) 0; }
 .admin-form label { display: flex; flex-direction: column; gap: var(--o-s1); font-size: var(--o-fs-sm); }
 .admin-form label.inline { flex-direction: row; align-items: center; gap: var(--o-s2); }

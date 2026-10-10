@@ -33,14 +33,14 @@ test("ageText says never for a host that has not reported", () => {
 
 test("a host row carries the page link, the settings link and the monitor listing", () => {
   const r = hostRow(nas);
-  assert.equal(r.href, "/host?name=nas01");
+  assert.equal(r.href, "/hosts/nas01");
   assert.equal(r.settings, "/hosts/nas01/settings");
   assert.equal(r.monitored, true);
   assert.equal(r.monitor, "nas");
   assert.equal(r.age, 12);
   assert.equal(r.waiting, false);
   const s = hostRow(silent);
-  assert.equal(s.href, "/host?name=rack%2Fsw%2001");
+  assert.equal(s.href, "/hosts/rack%2Fsw%2001");
   assert.equal(s.age, null);  // never heard, so the age column sinks in both sort directions
   assert.equal(s.detail, "no batch received yet");
 });

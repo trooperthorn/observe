@@ -12,6 +12,13 @@ a { color: var(--o-accent); }
 code, kbd, samp, pre, .mono { font-family: var(--o-mono); }
 img, svg, canvas { max-width: 100%; }
 button, input, select, textarea { font: inherit; color: inherit; }
+/* Form controls take their colours from the tokens, so a select or a search box is never a white
+   block on the dark theme (color-scheme in tokens.css covers the native parts: arrows, pickers). */
+select, textarea, input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+  background-color: var(--o-surface); color: var(--o-text);
+  border: 1px solid var(--o-border-input); border-radius: 4px;
+}
+select option { background-color: var(--o-surface); color: var(--o-text); }
 button, select, input:not([type="checkbox"]):not([type="radio"]) { min-height: 32px; }
 button { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--o-focus); outline-offset: 2px; }

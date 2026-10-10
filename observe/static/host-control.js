@@ -9,7 +9,9 @@ import { toast } from "/static/js/toast.js";
 import { updateResultText } from "/static/js/updates-logic.js";
 
 const ctlBox = document.getElementById("control");
-const ctlHost = new URLSearchParams(location.search).get("name") || "";
+const ctlHost = (location.pathname.startsWith("/hosts/")
+  ? decodeURIComponent(location.pathname.slice("/hosts/".length)) : "")
+  || new URLSearchParams(location.search).get("name") || "";
 const BASE = "/api/plugins/control";  // requesting and cancelling; the reads are on /api/v2/control
 const ACTION_TEXT = {
   "fan.set_floor": "Set a fan floor", "fan.set_mode": "Switch fan controller mode",

@@ -16,7 +16,7 @@ export function ageText(s) {
 }
 
 export function hostHref(name) {
-  return `/host?name=${encodeURIComponent(name)}`;
+  return `/hosts/${encodeURIComponent(name)}`;
 }
 
 export function settingsHref(name) {

@@ -26,10 +26,13 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, RedirectResponse,
+                               Response)
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -105,6 +108,10 @@ def scripts_machine_id() -> str:
     return ""
 
 
+# Paths whose clients are programs, never browsers: a 404 there stays JSON.
+MACHINE_PATHS = ("/api/", "/internal/", "/v1/", "/metrics", "/static/", "/healthz", "/i/", "/t/")
+
+
 def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Alerter,
                ingest_clock: Callable[[], float] = time.monotonic,
                auth_clock: Callable[[], float] = time.time,
@@ -112,6 +119,21 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                map_clock: Callable[[], float] = time.time) -> FastAPI:
     app = FastAPI(title="Observe", version=__version__, docs_url=None, redoc_url=None,
                   openapi_url=None)
+
+    def not_found_page() -> FileResponse:
+        return FileResponse(STATIC / "404.html", status_code=404)
+
+    async def on_http_error(request: Request, exc: Exception) -> Response:
+        """A browser asking for a page that does not exist gets the HTML 404 page; API and agent
+        clients, and every other error, keep the JSON answer."""
+        assert isinstance(exc, StarletteHTTPException)
+        accept = request.headers.get("accept", "")
+        if (exc.status_code == 404 and request.method == "GET" and "text/html" in accept
+                and not request.url.path.startswith(MACHINE_PATHS)):
+            return not_found_page()
+        return await http_exception_handler(request, exc)
+
+    app.add_exception_handler(StarletteHTTPException, on_http_error)
     user, pw = config.server.basic_auth_user, config.server.basic_auth_password
 
     guards = authmod.build_guards(config, store, auth_clock)
@@ -1525,8 +1547,34 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         return PlainTextResponse(body, media_type=scripts.media_type(task.platform))
 
     @app.get("/host", include_in_schema=False)
-    async def host_page() -> FileResponse:
-        # Like /login, the page holds no data; host.js sends a visitor without a session to /login.
+    async def host_page_old(request: Request) -> Response:
+        """The old address of a host page, /host?name=x, sent on to /hosts/x."""
+        name = request.query_params.get("name", "")
+        if not name:
+            return not_found_page()
+        return RedirectResponse(f"/hosts/{quote(name, safe='')}", status_code=301)
+
+    async def known_host(name: str) -> bool:
+        """Whether a host page has anything to show: a host that reported, or one the YAML
+        lists as a pushed_host, a Home Assistant host or an SNMP host."""
+        if any(r["host"] == name for r in await store.host_rows()):
+            return True
+        for m in scheduler.monitors:
+            if (m.type == "pushed_host" and m.host == name) or (
+                    m.type in ("homeassistant", "snmp")
+                    and getattr(m, "host_name", None) == name):
+                return True
+        return False
+
+    @app.get("/hosts/{name:path}", include_in_schema=False)
+    async def host_page(name: str, request: Request) -> Response:
+        # Like /login, the page holds no data; host.js sends a visitor without a session to
+        # /login. A signed-in visitor asking for a host nobody knows gets a 404 page; an
+        # anonymous one is not told which hosts exist.
+        signed_in = await authmod.load_session(
+            store, config, request.cookies.get(authmod.COOKIE), auth_clock()) is not None
+        if signed_in and not await known_host(name):
+            return not_found_page()
         return FileResponse(STATIC / "host.html")
 
     @app.get("/metrics", dependencies=guarded, response_class=PlainTextResponse)

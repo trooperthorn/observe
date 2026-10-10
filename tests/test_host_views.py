@@ -286,8 +286,12 @@ def test_listing_unknown_host_and_monitor_state(tmp_path):
 
 
 def test_host_page_is_static_and_dashboard_links_to_it(env):
-    r = env.client.get("/host")
+    r = env.client.get("/hosts/nas01")
     assert r.status_code == 200 and "host.js" in r.text
+    # The old address redirects; without a name it is the 404 page.
+    old = env.client.get("/host?name=nas01", follow_redirects=False)
+    assert old.status_code == 301 and old.headers["location"] == "/hosts/nas01"
+    assert env.client.get("/host").status_code == 404
     assert "/api/v2/hosts/" in env.client.get("/static/host.js").text
     assert "hostlink" in env.client.get("/static/app.js").text
 
@@ -300,7 +304,10 @@ def test_host_name_with_slash_opens_in_api_and_page_link(env):
     r = env.client.get(f"/api/v2/hosts/{quote('rack/nas 01?#%', safe='')}")
     assert r.status_code == 200 and r.json()["host"] == "rack/nas 01?#%"
     assert env.client.get("/api/v2/hosts/rack/nas 01?#%".replace("?#%", "%3F%23%25")).status_code == 200
-    assert env.client.get("/host?name=rack%2Fnas%2001").status_code == 200
+    old = env.client.get("/host?name=rack%2Fnas%2001%3F%23%25", follow_redirects=False)
+    assert old.headers["location"] == "/hosts/rack%2Fnas%2001%3F%23%25"
+    page = env.client.get(old.headers["location"])
+    assert page.status_code == 200 and "host.js" in page.text
 
 
 def test_configured_component_silent_for_long_stays_stale_on_the_page(tmp_path):
@@ -317,3 +324,20 @@ def test_configured_component_silent_for_long_stays_stale_on_the_page(tmp_path):
         assert d["cpu"]["state"] == "stale"
     finally:
         e.close()
+
+
+def test_unknown_host_and_unknown_page_answer_404(env):
+    """Bug plan WP8: an unknown host rendered bare text and an unknown URL raw JSON."""
+    env.push(batch(samples=FULL, sources=FULL_SOURCES))
+    env.login()
+    html = {"Accept": "text/html,application/xhtml+xml"}
+    r = env.client.get("/hosts/nope", headers=html)
+    assert r.status_code == 404 and "<h1>Not found</h1>" in r.text
+    r = env.client.get("/no/such/page", headers=html)
+    assert r.status_code == 404 and "<h1>Not found</h1>" in r.text
+    # Programs keep the JSON answer.
+    r = env.client.get("/no/such/page", headers={"Accept": "application/json"})
+    assert r.status_code == 404 and r.json() == {"detail": "Not Found"}
+    assert env.client.get("/api/nope", headers=html).headers["content-type"].startswith(
+        "application/json")
+    assert env.client.get("/hosts/nas01", headers=html).status_code == 200

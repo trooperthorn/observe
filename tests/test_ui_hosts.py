@@ -155,7 +155,7 @@ def test_hosts_script_uses_the_shared_table_and_chips_and_writes_text_only():
     assert "import" not in logic and "document" not in logic  # pure, so Node can run it
     for name in ["hostRow", "waitingRow", "hostRows", "filterRows", "summaryText", "ageText"]:
         assert f"export function {name}(" in logic, name
-    assert "/host?name=${encodeURIComponent(name)}" in logic
+    assert "/hosts/${encodeURIComponent(name)}" in logic
     assert "/hosts/${encodeURIComponent(name)}/settings" in logic
 
 

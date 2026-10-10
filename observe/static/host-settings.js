@@ -46,7 +46,7 @@ function drawIdentity() {
   const home = el("a", null, "Hosts");
   home.href = "/hosts";
   const page = el("a", null, host);
-  page.href = `/host?name=${encodeURIComponent(host)}`;
+  page.href = `/hosts/${encodeURIComponent(host)}`;
   crumbs.append(home, " / ", page, " / Settings");
   const rows = [["Host", host]];
   if (s.enrolled) {
