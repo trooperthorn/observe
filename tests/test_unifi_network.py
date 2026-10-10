@@ -12,6 +12,7 @@ import json
 import sqlite3
 from typing import Any
 
+import httpx
 import pytest
 
 from observe_unifi import resolve_wlans
@@ -626,3 +627,39 @@ def test_the_new_routes_are_reads_only_and_hostile_text_stays_data(tmp_path):
         assert e.client.get(API + "/absent-clients").json()["items"][0]["name"] == HOSTILE_TEXT
     finally:
         e.close()
+
+
+class WithDetails(Full):
+    """A console whose device list rows carry no uplink, as the Integration API does, and whose
+    `GET /devices/{id}` detail names the device each one is uplinked to."""
+
+    def __init__(self, devices, uplinks):
+        super().__init__([], devices=devices)
+        self.uplinks = uplinks
+
+    def __call__(self, request):
+        p = request.url.path
+        prefix = "/proxy/network/integration/v1/sites/site-1/devices/"
+        if p.startswith(prefix) and "/" not in p[len(prefix):]:
+            self.requests.append(request)
+            did = p[len(prefix):]
+            up = self.uplinks.get(did)
+            return httpx.Response(200, json={"id": did, **({"uplink": {"deviceId": up}}
+                                                          if up else {})})
+        return super().__call__(request)
+
+
+def test_devices_poll_reads_uplinks_from_the_device_detail_and_draws_links(tmp_path):
+    """Bug plan WP4: the map had seven devices and no links, because the list rows carry no
+    uplink. Each AP and switch now gets its uplink link from its detail."""
+    gw = device(1, type="gateway", name="UCG Fiber", features=["GATEWAY", "SWITCHING"])
+    devices = [gw, device(2, name="Core switch", features=["SWITCHING"]),
+               device(3, name="AP hall", features=["ACCESS_POINT"]),
+               device(4, name="AP office", features=["ACCESS_POINT"])]
+    console = WithDetails(devices, {"dev-2": "dev-1", "dev-3": "dev-2", "dev-4": "dev-2"})
+    env = env_with(tmp_path, console)
+    assert run(env.plugin.collect_devices(env.store)) == 4
+    links = table(env, "SELECT a_ref, b_ref, source FROM infra_links WHERE closed_at IS NULL")
+    assert len(links) == 3 and {s for _, _, s in links} == {"config"}
+    edges = table(env, "SELECT a, b FROM map_edges")
+    assert len(edges) == 3

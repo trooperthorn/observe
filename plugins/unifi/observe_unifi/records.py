@@ -272,10 +272,11 @@ def parse_device(site_id: str, raw: Any) -> Device | None:
     Field names (id, macAddress, name, model, state, ipAddress, firmwareVersion,
     firmwareUpdatable) follow ha_Int_soc docs/UNIFI-LOCAL-API-CONTRACT.md and its fakes.
     UNVERIFIED against a live console: that firmwareUpdatable is on the list row; an absent or
-    non-boolean value is stored as NULL (unknown), never as false. Also UNVERIFIED: that a device
-    row names the device it is uplinked to, as `uplink.deviceId` or `uplinkDeviceId` (the contract
-    verifies `uplinkDeviceId` only on client rows); when neither is a string the device has no
-    device-level link.
+    non-boolean value is stored as NULL (unknown), never as false. A live console's list rows
+    carry no uplink (bug plan WP4: the map had devices but no links), so the devices poll reads
+    `uplink.deviceId` from each device's detail and sets it on the row before this runs
+    (`UniFiPlugin._uplinks`); a row that names `uplink.deviceId` or `uplinkDeviceId` itself is used
+    as it is. When neither is a string the device has no device-level link.
     """
     if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not raw["id"]:
         return None
