@@ -249,8 +249,8 @@ def test_the_step_is_raised_to_keep_at_most_a_thousand_points(env):
     assert body["step"] >= math.ceil(10 * 86400 / 999) and "raised" in body["note"]
     assert body["tier"] == "rollup_5m" and body["step"] % 300 == 0
     assert all(len(s["points"]) <= 1000 for s in body["series"])
-    big = get(env, "/metrics/query?metric=monitor.latency&resource=core&from=-30d&step=1").json()
-    assert big["tier"] == "rollup_1h" and big["step"] == 3600  # 5 minute data is kept 14 days
+    big = get(env, "/metrics/query?metric=monitor.latency&resource=core&from=-40d&step=1").json()
+    assert big["tier"] == "rollup_1h" and big["step"] == 3600  # 5 minute data follows raw (30 days)
     assert len(big["series"][0]["points"]) == 4  # every sample is in the hourly level
     # Even on raw data the bound holds.
     seed_latency(env, minutes=60, every=1, slug="nas")

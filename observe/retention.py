@@ -72,10 +72,14 @@ def _overrides(raw: Any) -> str | None:
 
 
 def describe(levels: rollups.RetentionLevels) -> dict[str, Any]:
-    """The effective settings with the bounds and defaults an admin form needs."""
+    """The saved settings (`load_levels(..., as_saved=True)`) with the bounds and defaults an
+    admin form needs, the order the levels must keep and any place the saved values break it.
+    Compaction uses the levels lifted into order (`rollups.ordered`) until they are fixed."""
     default = rollups.RetentionLevels()
     return {
         "settings": rollups.settings_view(levels),
+        "order": list(rollups.ORDERED_FIELDS),
+        "problems": rollups.order_problems(levels),
         "bounds": {n: {"min": lo, "max": hi, "default": getattr(default, n)}
                    for n, (lo, hi) in rollups.FIELD_BOUNDS.items()},
         "override_fields": list(rollups.OVERRIDE_FIELDS),
@@ -84,15 +88,22 @@ def describe(levels: rollups.RetentionLevels) -> dict[str, Any]:
 
 
 async def read_settings(store: Store, fallback_raw_days: int) -> dict[str, Any]:
-    levels = await store.storage.read(lambda db: rollups.load_levels(db, fallback_raw_days))
+    levels = await store.storage.read(
+        lambda db: rollups.load_levels(db, fallback_raw_days, as_saved=True))
     return describe(levels)
 
 
 async def update_settings(store: Store, body: Any, *, actor: str, remote: str, now: float,
                           fallback_raw_days: int) -> dict[str, Any]:
-    """Validate, write and audit. Raises RetentionError before anything is written."""
+    """Validate, write and audit. Raises RetentionError before anything is written, also when
+    the saved levels would be out of order (checked in the write unit, against the stored values
+    the change does not touch)."""
     changes = validate(body)
-    await store.storage.save_retention_settings(
-        changes, now=now, actor=actor, remote=remote, path=PATH,
-        fallback_raw_days=fallback_raw_days)
+    try:
+        await store.storage.save_retention_settings(
+            changes, now=now, actor=actor, remote=remote, path=PATH,
+            fallback_raw_days=fallback_raw_days)
+    except rollups.RetentionOrderError as err:
+        raise RetentionError(f"{err}; each level must keep at least as long as the one before "
+                             "it (raw, 5 minute, hourly, daily)") from None
     return await read_settings(store, fallback_raw_days)

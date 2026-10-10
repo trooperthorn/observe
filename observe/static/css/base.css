@@ -28,6 +28,7 @@ table { border-collapse: collapse; }
 .scroll-x { overflow-x: auto; max-width: 100%; }
 .mono-text { font-family: var(--o-mono); font-size: var(--o-fs-sm); }
 .muted { color: var(--o-text-muted); }
+.nowrap { white-space: nowrap; }
 .tabular { font-variant-numeric: tabular-nums; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;

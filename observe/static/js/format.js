@@ -107,10 +107,51 @@ const STATE_GAUGES = {
   "observe.ups.status": "observe.ups.flag", "observe.mdraid.sync_action": "observe.mdraid.action",
 };
 
-// The value cell of one host reading: a state gauge as its state word, else the value with its
-// unit in words.
+// Health levels, not one-hot gauges: 0 healthy, 1 warning, 2 or more critical (`_level_value`
+// in observe/hostview.py). The Windows storage collector sends `hw.status` this way, with the
+// state word the OS gives in `hw.state`; keyed on the scope, since other collectors send
+// `hw.status` as a state gauge.
+const LEVEL_GAUGES = {
+  "hostwatch.collector.win_storage|hw.status": "hw.state",
+  "hostwatch.collector.truenas|observe.zfs.pool.health": "hw.state",
+};
+const LEVEL_WORDS = ["healthy", "warning", "critical"];
+
+// Readings that are yes or no, 1 or 0. They carry the unit "1", so formatValue would print
+// "100 %". The value names the attribute with a word to show instead of "Yes", if any.
+const FLAGS = {
+  "observe.ha.update.pending": "", "observe.ha.safe_mode": "", "observe.ha.recovery_mode": "",
+  "observe.ha.running": "observe.ha.state", "observe.ha.soc.suspicious_activity": "",
+  "observe.ha.supervisor.healthy": "", "observe.ha.supervisor.supported": "",
+  "observe.ha.container.running": "", "observe.ha.backup.last_ok": "",
+  "observe.ha.backup.unprotected": "", "observe.scrutiny.up": "",
+  "observe.network.interface.up": "observe.network.interface.status",
+};
+
+// Readings whose value is only a marker and whose meaning is in a label (the version string).
+const LABEL_VALUES = { "observe.ha.version": "observe.ha.version" };
+
+// The value cell of one host reading: a state gauge as its state word, a level as its word, a
+// flag as Yes or No, else the value with its unit in words.
 export function readingText(item) {
   if (!item || item.value == null) return "no value";
+  const labels = item.labels || {};
+  const levelKey = LEVEL_GAUGES[`${item.source}|${item.metric}`];
+  if (levelKey) {
+    const word = LEVEL_WORDS[Math.max(0, Math.min(2, Math.floor(item.value)))];
+    const said = labels[levelKey];
+    // The OS word is shown unless it contradicts the level ("Healthy" on a level of 1).
+    if (said && (item.value <= 0 || said.toLowerCase() !== "healthy")) return said;
+    return word;
+  }
+  if (Object.prototype.hasOwnProperty.call(LABEL_VALUES, item.metric)) {
+    const text = labels[LABEL_VALUES[item.metric]];
+    if (text) return text;
+  }
+  if (Object.prototype.hasOwnProperty.call(FLAGS, item.metric)) {
+    const word = FLAGS[item.metric] && labels[FLAGS[item.metric]];
+    return item.value ? (word || "Yes") : (word ? `No (${word})` : "No");
+  }
   const key = STATE_GAUGES[item.metric];
   if (key) {
     const state = item.labels && item.labels[key];
@@ -132,16 +173,26 @@ export function formatReading(value, unit) {
   return formatValue(value, unit);
 }
 
+// An age in seconds as a card headline: one decimal below 10 s ("9.5 s"), whole seconds up to a
+// minute ("16 s", never "15.95 s"), then minutes and seconds ("1m 7s").
+export function ageText(seconds) {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return formatValue(seconds, "s");
+  const a = Math.abs(seconds);
+  if (Math.round(a * 10) / 10 < 10) return `${Math.round(seconds * 10) / 10} s`;
+  if (Math.round(a) < 60) return `${Math.round(seconds)} s`;
+  return duration(Math.round(seconds));
+}
+
 // The value a monitor card shows. A pushed host's value is the age of its newest batch, so it is
-// said as such; a monitor with no value shows its latency, and a failed probe shows nothing.
+// said as such, rounded (ageText); a monitor with no value shows its latency, and a failed probe
+// shows nothing.
 export function monitorReading(m) {
   if (m.result === "fail" && m.value == null) return "";  // a failed probe has no latency
   if (m.value === null || m.value === undefined) {
     return m.latency_ms != null ? `${Math.round(m.latency_ms)} ms` : "";
   }
-  const text = formatReading(m.value, m.unit);
-  if (m.type === "pushed_host" && (m.unit || "").trim() === "s") return `data ${text} old`;
-  return text;
+  if (m.type === "pushed_host" && (m.unit || "").trim() === "s") return `data ${ageText(m.value)} old`;
+  return formatReading(m.value, m.unit);
 }
 
 // The text of one event row of the dashboard, with the monitor's display name (from `names`,

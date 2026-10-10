@@ -27,6 +27,10 @@
 /* Map page layers, nodes and edges. */
 /* The page itself is the standard .admin-main container (admin.css); the view buttons and the
    site and building filters share its filter bar. */
+/* No blank band under the heading: the message line takes no room until it has a message, and
+   the note has no margins of its own on top of the page grid's gap. */
+.mappage .msg-line:empty { display: none; }
+.mappage > p.note { margin: 0; }
 .map-toolbar { margin: 0; }
 .map-toolbar .graph-toolbar { margin-bottom: 0; }
 .selectedcard .btn { margin-top: var(--o-s3); }

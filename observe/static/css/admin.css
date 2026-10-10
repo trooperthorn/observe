@@ -1,10 +1,17 @@
 /* Admin, audit, map admin and port pages. Tokens only, no colour literals. Loaded after
    components.css so these rules come last. */
-.admin-main { max-width: var(--o-maxw); margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4); }
+.admin-main { max-width: var(--o-maxw); margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4);
+              grid-template-columns: minmax(0, 1fr); }
+/* Grid items may shrink below their content, so a wide table scrolls inside its .table-wrap on a
+   phone instead of widening the whole page. */
+.admin-main > *, .admin-main .card { min-width: 0; }
 .admin-main h1 { font-size: var(--o-fs-h); margin: 0; }
 .admin-title { display: grid; gap: var(--o-s1); }
 .admin-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--o-s4); }
 .admin-cols > .card { min-width: 0; }
+/* The keys table has seven columns (Kind joined them), more than half the page holds: it takes the
+   whole row so Last used and Revoke stay inside the card. */
+.admin-cols > #keys-card { grid-column: 1 / -1; }
 @media (max-width: 900px) { .admin-cols { grid-template-columns: minmax(0, 1fr); } }
 /* Words break only when one is wider than its whole column; the table scrolls inside .table-wrap
    rather than splitting a host name or a button label mid-word. */
@@ -35,6 +42,10 @@
 .finding-list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--o-s2); }
 .finding-list li { display: flex; flex-wrap: wrap; gap: var(--o-s2); align-items: center; }
 .admin-note { color: var(--o-text-muted); font-size: var(--o-fs-sm); margin: var(--o-s1) 0 0; }
+/* A saved setting that needs the admin's attention, e.g. retention levels out of order. */
+.card-warn { background: var(--o-warn-bg); color: var(--o-warn); border-radius: var(--o-radius-sm);
+             padding: var(--o-s2) var(--o-s3); margin: var(--o-s2) 0; }
+.card-warn p, .card-warn ul { margin: var(--o-s1) 0 0; }
 /* Updates page: the phase chips in a row, and the host helper's log as a scrolling block. */
 .phase-row { display: flex; flex-wrap: wrap; gap: var(--o-s2); margin: var(--o-s2) 0; }
 pre.update-log { margin: var(--o-s2) 0; padding: var(--o-s3); max-height: 20rem; overflow: auto;

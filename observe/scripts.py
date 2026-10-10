@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .enrol import DEFAULT_POOL, PLATFORMS, POOL, Redeemed
+from .enrol import DEFAULT_POOL, PLATFORMS, POOL, Redeemed, controller_id
 
 LINUX_PLATFORMS = ("linux", "raspberry-pi")
 SCRIPT_PLATFORMS = ("linux", "raspberry-pi", "truenas", "windows")
@@ -98,7 +98,10 @@ def control_toml(host: str, allow: dict[str, Any], public_key: str) -> str:
             raise ScriptError("a fan header has characters that are not allowed; hostwatch-control "
                               "accepts letters, digits, underscore and hyphen only, so remove "
                               "or rename that header in the allowlist")
-        headers.append(header)
+        # The daemon's header list holds the controller's ids (enrol.controller_id), the names
+        # thermalctl knows and the names a signed fan.set_floor carries.
+        if controller_id(header) not in headers:
+            headers.append(controller_id(header))
         if isinstance(fan, dict) and fan.get("min_duty_limit") is not None:
             limit = fan["min_duty_limit"]
             if type(limit) is not int or not 0 <= limit <= 100:

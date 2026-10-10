@@ -1,6 +1,12 @@
 """The guards shared by the ingest routes: the per-key rate limit, the per-peer limit on failures, the aggregated denial audit
 and the agent-config route.
 
+The per-key limit is a token bucket (observe/api/ratelimit.py): `server.ingest_burst` requests at
+once, refilled at `server.ingest_rate_per_minute`. The burst lets an agent replay the outbox it
+built during an outage or a restart (truenas-svr queued 1,625 requests) without a 429, while the
+refill rate still bounds what one key can send over time. Every 429 says in `Retry-After` when the
+next request will be accepted, and an agent must wait that long before it sends again.
+
 Data is pushed only as OTLP (observe/otlp/api.py, POST /v1/metrics and /v1/logs). This module holds
 what both routes share. Denials are written to the audit log through DenialAggregator, adapted
 from hostwatch/hub.py (hostwatch, same owner): at most one row per peer per window with a count of
@@ -105,12 +111,18 @@ class Guard:
         # Failed or missing keys, per peer. A valid key is never counted against its peer, so
         # hosts behind one NAT or proxy do not throttle each other.
         self.fail_limiter = RateLimiter(config.server.ingest_rate_per_minute, clock)
-        self.key_limiter = RateLimiter(config.server.ingest_rate_per_minute, clock)
+        # A valid key, per key: a token bucket, so a backlog replay fits in its burst. Imported
+        # here because the observe.api package imports this module.
+        from ..api.ratelimit import TokenBucket
+        rate = config.server.ingest_rate_per_minute
+        self.key_limiter = TokenBucket(rate / 60.0, max(config.server.ingest_burst, rate), clock)
         self.denials = DenialAggregator(clock)
         self.clock = clock
 
     async def deny(self, request: Request, status: int, reason: str, actor: str = "",
-                   extra: dict[str, Any] | None = None) -> JSONResponse:
+                   extra: dict[str, Any] | None = None, retry_after: int = 60) -> JSONResponse:
+        """The refusal, audited. A 429 always carries Retry-After (`retry_after` seconds, the
+        fixed window of the per-peer limit unless the key's bucket says sooner)."""
         peer = request.client.host if request.client else "unknown"
         covered = self.denials.note(peer)
         if covered is not None:
@@ -121,7 +133,7 @@ class Guard:
                                path=request.url.path, status=status, remote=peer, detail=detail)
         headers = None
         if status == 429:
-            headers = {"Retry-After": "60"}
+            headers = {"Retry-After": str(max(1, int(retry_after)))}
         elif status == 401:
             headers = {"WWW-Authenticate": "Bearer"}
         return JSONResponse({"detail": reason}, status_code=status, headers=headers)
@@ -144,8 +156,9 @@ def build_router(config: Config, store: Store, guard: Guard) -> APIRouter:
                 return await deny(request, 429, "rate limit exceeded")
             return await deny(request, 401, "missing or invalid ingest key")
         prefix, host = bound
-        if not guard.key_limiter.allow(prefix):
-            return await deny(request, 429, "rate limit exceeded", prefix)
+        wait = guard.key_limiter.take(prefix)
+        if wait:
+            return await deny(request, 429, "rate limit exceeded", prefix, retry_after=wait)
         glob, hosts = await store.storage.read(tiers.load)
         return JSONResponse({"host": host, "intervals": tiers.effective(host, glob, hosts)},
                             headers={"Cache-Control": "no-store"})

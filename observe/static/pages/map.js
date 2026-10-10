@@ -4,16 +4,20 @@
 import { el, stateText, portHref, api, poller, STATE_WORDS } from "/static/infra-common.js";
 import { svg as svgEl } from "/static/js/dom.js";
 import { statusChip } from "/static/js/chips.js";
-import { deviceRows, deviceTypeWord, linkRows, switchTiers } from "/static/js/map-logic.js";
+import {
+  deviceRows, deviceTypeWord, linkRows, portNames, portShortName, portText, switchTiers,
+} from "/static/js/map-logic.js";
 import "/static/js/theme.js";
 import { layoutForce } from "/static/js/graph/force.js";
 import { createGraphView, structureKey, mergeLayout } from "/static/js/graph/view.js";
 import { GROUPS, buildGraph, defaultView, viewFromHash } from "/static/js/graph/infra.js";
 import { refreshedText } from "/static/js/format.js";
 
+// "Unplaced" holds devices with no known uplink, so they are not drawn as roots beside the
+// gateway (map-logic.js switchTiers).
 const LAYER_TITLES = [
   ["core", "Core"], ["distribution", "Distribution"], ["access", "Access"],
-  ["jack", "Jacks"], ["endpoint", "Endpoints"],
+  ["jack", "Jacks"], ["endpoint", "Endpoints"], ["unplaced", "Unplaced"],
 ];
 const layersEl = document.getElementById("layers");
 const msg = document.getElementById("msg");
@@ -56,7 +60,7 @@ function showSelected(id) {
     const other = graph.byId.get(l.other);
     const li = el("li");
     const a = el("a", `chip ${l.stale ? "pending" : "up"}`,
-      `${l.own[0]} to ${other ? other.label : l.other}${l.stale ? " (stale)" : ""}`);
+      `${portShortName({ label: l.own[0] })} to ${other ? other.label : l.other}${l.stale ? " (stale)" : ""}`);
     a.href = portHref(sid, l.own[0]);
     li.append(a);
     list.append(li);
@@ -135,11 +139,11 @@ function box(node, extra) {
   return b;
 }
 
-function switchBox(node, ports) {
+function switchBox(node, ports, names) {
   const list = el("ul", "chips");
   for (const p of ports) {
     const li = el("li");
-    const a = el("a", `chip ${p.state}`, `${p.label} (${stateText(p)})`);
+    const a = el("a", `chip ${p.state}`, portText(p, names, stateText(p)));
     a.href = portHref(p.id.slice(5).split("|")[0], p.label);
     li.append(a);
     if (p.findings && p.findings.length) {
@@ -156,12 +160,13 @@ function switchBox(node, ports) {
 function draw(data) {
   const nodes = data.nodes, edges = data.edges;
   const tier = switchTiers(nodes, edges);
+  const names = portNames(nodes, edges);
   const rows = new Map(LAYER_TITLES.map(([k]) => [k, []]));
   const boxOf = new Map();
   for (const n of nodes) {
     if (n.kind === "switch") {
       const ports = nodes.filter((p) => p.kind === "port" && p.parent === n.id);
-      const b = switchBox(n, ports);
+      const b = switchBox(n, ports, names);
       boxOf.set(n.id, b);
       for (const p of ports) boxOf.set(p.id, b);
       rows.get(tier.get(n.id)).push(b);

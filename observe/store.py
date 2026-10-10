@@ -354,12 +354,15 @@ class Store:
             points=[series.Point(s.source, s.metric, s.unit, series.canonical(s.labels),
                                  series.to_ms(clamp(s.ts)), s.value) for s in batch.samples])
         db.executemany(
-            "INSERT INTO host_sources (host, source, available, reason, updated) VALUES (?,?,?,?,?) "
+            "INSERT INTO host_sources (host, source, available, reason, updated, present_at) "
+            "VALUES (?,?,?,?,?,?) "
             "ON CONFLICT(host, source) DO UPDATE SET available=excluded.available, "
-            "reason=excluded.reason, updated=excluded.updated "
+            "reason=excluded.reason, updated=excluded.updated, "
+            "present_at=COALESCE(excluded.present_at, host_sources.present_at) "
             "WHERE excluded.updated >= host_sources.updated",
             [(batch.host, st.source, int(st.available and st.present),
-              st.reason or ("" if st.present else ABSENT_REASON), sent)
+              st.reason or ("" if st.present else ABSENT_REASON), sent,
+              sent if st.present else None)
              for st in batch.sources])
         stored = 0
         for i, ev in enumerate(batch.events):
@@ -462,23 +465,58 @@ class Store:
             lambda db: self._latest_host_unit(db, host, since, fallback, want))
 
     async def host_rows(self) -> list[dict[str, Any]]:
-        """One row per host that has ever pushed, ordered by name."""
+        """One row per host that has ever pushed, ordered by name. `platform` is the one the
+        admin chose when enrolling the host (enrolments.platform, e.g. truenas), else what the
+        agent reports (hosts.platform, e.g. linux on a TrueNAS box), so the host list, the host
+        page, its settings and Updates name the same platform; `reported_platform` keeps the
+        agent's own word."""
         rows = await self.fetch(
             "SELECT h.host, h.platform, h.agent_version, h.first_seen, h.last_seen, h.boot_id, "
-            "h.boot_ts, h.clean_shutdown, h.confirmed, e.reports FROM hosts h "
+            "h.boot_ts, h.clean_shutdown, h.confirmed, e.reports, e.platform FROM hosts h "
             "LEFT JOIN enrolments e ON e.host = h.host ORDER BY h.host")
         # install_reports: the console install's step reports (enrol.record_step), or None for a
         # host that was not added through the console.
         keys = ("host", "platform", "agent_version", "first_seen", "last_seen", "boot_id",
                 "boot_ts", "clean_shutdown", "confirmed", "install_reports")
-        return [dict(zip(keys, r)) for r in rows]
+        out = []
+        for r in rows:
+            row = dict(zip(keys, r[:10]))
+            row["reported_platform"] = r[1]
+            row["platform"] = r[10] or r[1]
+            out.append(row)
+        return out
 
     async def host_sources(self, host: str) -> dict[str, dict[str, Any]]:
         """Source status for a host, with when each source was last reported."""
         rows = await self.fetch(
-            "SELECT source, available, reason, updated FROM host_sources WHERE host=?",
+            "SELECT source, available, reason, updated, present_at FROM host_sources WHERE host=?",
             (host,))
-        return {r[0]: {"available": bool(r[1]), "reason": r[2], "updated": r[3]} for r in rows}
+        return {r[0]: {"available": bool(r[1]), "reason": r[2], "updated": r[3],
+                      "present_at": r[4]} for r in rows}
+
+    async def forget_source(self, host: str, source: str, *, actor: str, remote: str,
+                            path: str, now: float | None = None) -> bool:
+        """Accept that a source which disappeared is gone for good: its last-present time is
+        cleared, so it reads as hardware the host does not have instead of a missing source
+        (observe/hostview.py). Only a source the agent now reports as not present can be
+        forgotten; the change is audited in the same write. False when there was nothing to
+        clear. If the agent reports the source again it counts as present from then on."""
+        at = time.time() if now is None else now
+
+        def work(db: Conn) -> bool:
+            cur = db.execute(
+                "UPDATE host_sources SET present_at = NULL WHERE host=? AND source=? "
+                "AND available = 0 AND reason = ? AND present_at IS NOT NULL",
+                (host, source, ABSENT_REASON))
+            if not cur.rowcount:
+                return False
+            db.execute(
+                "INSERT INTO audit (ts, actor, kind, method, path, status, remote, detail) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (at, actor, "host_source_forgotten", "POST", path, 200, remote,
+                 json.dumps({"host": host, "source": source}, sort_keys=True)))
+            return True
+        return await self.storage.write(work, touches=("hosts", "audit"))
 
     async def host_events(self, host: str, since: float = 0.0,
                           limit: int = 50) -> list[dict[str, Any]]:
@@ -540,19 +578,22 @@ class Store:
             out[host]["samples"] = [
                 {"source": r[0], "metric": r[1], "labels": json.loads(r[2]), "value": r[3],
                  "unit": r[4], "ts": r[5] / 1000.0} for r in samples]
-        for host, source, available, reason, updated in db.execute(
-                "SELECT host, source, available, reason, updated FROM host_sources").fetchall():
+        for host, source, available, reason, updated, present_at in db.execute(
+                "SELECT host, source, available, reason, updated, present_at FROM host_sources"
+                ).fetchall():
             if host in out:
                 out[host]["sources"][source] = {"available": bool(available), "reason": reason,
-                                                "updated": updated}
+                                                "updated": updated, "present_at": present_at}
         # Of the 50 newest events of a host, only the warnings and criticals inside the alert
-        # window reach the list (the summary shows the alert section, not the event rows).
+        # window reach the list (the summary shows the alert section, not the event rows), and
+        # the agent's outbox reports, which say whether it is dropping data (agentdrops.py).
         for host, ts, kind, severity, src, title, detail, boot_id in db.execute(
                 "SELECT host, ts, kind, severity, source, title, detail, boot_id FROM ("
                 "SELECT host, ts, kind, severity, source, title, detail, boot_id, id, "
                 "ROW_NUMBER() OVER (PARTITION BY host ORDER BY ts DESC, id DESC) AS rn "
                 "FROM host_events WHERE ts >= ?) e WHERE rn <= 50 "
-                "AND severity IN ('warning','critical') ORDER BY host, ts DESC, id DESC",
+                "AND (severity IN ('warning','critical') OR LOWER(kind) LIKE '%outbox%' "
+                "OR LOWER(title) LIKE '%outbox%') ORDER BY host, ts DESC, id DESC",
                 (alert_since,)).fetchall():
             if host in out:
                 out[host]["events"].append(

@@ -139,6 +139,11 @@ MIGRATIONS = (
         "ALTER TABLE unifi_devices ADD COLUMN online_at REAL",
         "UPDATE unifi_devices SET online_at = last_seen WHERE state = 'ONLINE'",
     )),
+    # Version 6: the site's name from the Integration /sites list, so the overview names the
+    # site instead of showing its id. Empty until the next devices poll.
+    Migration(6, (
+        "ALTER TABLE unifi_site_status ADD COLUMN site_name TEXT NOT NULL DEFAULT ''",
+    )),
 )
 
 
@@ -166,49 +171,94 @@ class Device:
     tx_bytes: int | None = None
     rx_rate_bps: float | None = None
     tx_rate_bps: float | None = None
+    # The port of the parent device this one is uplinked through, when the row or detail names
+    # it (UPLINK_PORT_KEYS, UNVERIFIED). The map feed then names that port "Port N" instead of a
+    # placeholder. Not stored in the table.
+    uplink_port_idx: int | None = None
+
+
+# Keys of the `uplink` object that may give the parent's port index (UNVERIFIED: the Network
+# 10.4.57 contract shows only uplink.deviceId; these are the spellings other UniFi APIs use).
+UPLINK_PORT_KEYS = ("portIdx", "portIndex", "port_idx", "uplinkPortIdx")
+
+
+def uplink_port_of(up: Any) -> int | None:
+    """The parent's port index from an `uplink` object, or None."""
+    if not isinstance(up, dict):
+        return None
+    for key in UPLINK_PORT_KEYS:
+        v = up.get(key)
+        if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 1024:
+            return v
+    return None
 
 
 GATEWAY_ROLES = ("gateway", "console", "ugw")
 # A model or name token that marks a gateway, consulted only when no device declares a role.
-GATEWAY_TOKENS = ("gateway", "udm", "uxg", "usg", "ugw", "ucg", "udr", "uxr", "udw", "dream",
-                  "console")
+GATEWAY_TOKENS = ("gateway", "udm", "uxg", "usg", "ugw", "ucg", "udr", "uxr", "udw", "efg",
+                  "dream", "console")
 
 
-# The map device type of a UniFi device (observe.infra.DEVICE_TYPES). The features list is the
-# strongest signal and is read in this order, so a gateway that also switches is a gateway. Then
-# the row's type or role, then the model name. Names are compared without case or underscores,
-# so ACCESS_POINT and accessPoint are the same (UNVERIFIED which spelling a console sends).
-FEATURE_TYPES = (("gateway", "gateway"), ("switching", "switch"), ("accesspoint", "access_point"))
+# The map device type of a UniFi device (observe.infra.DEVICE_TYPES). Names are compared
+# without case, spaces, dashes or underscores, so ACCESS_POINT, accessPoint, "UCG Fiber",
+# "UCG-Fiber" and "UCGFIBER" each read the same (UNVERIFIED which spelling a console sends).
+FEATURE_TYPES = (("switching", "switch"), ("accesspoint", "access_point"))
 ROLE_TYPES = {"gateway": "gateway", "console": "gateway", "ugw": "gateway", "udm": "gateway",
               "uxg": "gateway", "switch": "switch", "usw": "switch", "accesspoint": "access_point",
-              "ap": "access_point", "uap": "access_point", "bridge": "bridge", "ubb": "bridge"}
-MODEL_TYPES = (("gateway", ("UCG", "UDM", "UXG", "UDR")),
-               ("access_point", ("U6", "U7", "UAP", "UAL")),
-               ("switch", ("USW", "US-")))
+              "ap": "access_point", "uap": "access_point", "bridge": "bridge", "ubb": "bridge",
+              "udb": "bridge"}
+# Model codes that settle the type even against a SWITCHING or ACCESS_POINT feature: a UniFi
+# gateway or console switches too (a UCG Fiber was drawn as a switch), and a Device Bridge
+# (UDB, e.g. "UDB Pro" or UDBPRO) or Building Bridge (UBB) carries an access point radio.
+MODEL_STRONG = (("gateway", ("ucg", "udm", "udr", "uxg", "efg", "usg", "udw", "uxr")),
+                ("bridge", ("udb", "ubb")))
+MODEL_TYPES = (("access_point", ("u6", "u7", "uap", "ual")),
+               ("switch", ("usw", "us8", "us16", "us24", "us48")))
+LEGACY_SWITCH = "us-"  # US-8-60W and the other first generation switches, matched as written
 
 
 def _squash(value: str) -> str:
     return "".join(ch for ch in value.lower() if ch.isalnum())
 
 
+def _model_kind(model: str, table: tuple[tuple[str, tuple[str, ...]], ...]) -> str:
+    name = _squash(model or "")
+    for kind, prefixes in table:
+        if name.startswith(prefixes):
+            return kind
+    return ""
+
+
 def device_type_of(features: Iterable[str] = (), device_type: str = "", role: str = "",
                    model: str = "") -> str:
-    """gateway, switch, access_point, bridge or other, or empty when nothing says. Features first
-    (GATEWAY, then SWITCHING, then ACCESS_POINT), then the type and role, then a model prefix
-    (UCG, UDM, UXG and UDR are gateways, U6, U7, UAP and UAL access points, USW and US-
-    switches). A device that names features or a type that none of these match is other."""
+    """gateway, switch, access_point, bridge or other, or empty when nothing says. In order: a
+    GATEWAY feature or a gateway or bridge type or role; then a gateway model code (UCG, UDM,
+    UDR, UXG, EFG, USG, UDW, UXR) or bridge code (UDB, UBB), which win over a SWITCHING or
+    ACCESS_POINT feature because those devices also switch or carry a radio; then the
+    SWITCHING and ACCESS_POINT features; then any other type or role; then an access point
+    (U6, U7, UAP, UAL) or switch (USW, US-) model. A device that names features or a type
+    that none of these match is other."""
     feats = {_squash(f) for f in features if isinstance(f, str)}
+    if "gateway" in feats:
+        return "gateway"
+    roles = [ROLE_TYPES.get(_squash(text or ""), "") for text in (device_type, role)]
+    for kind in roles:
+        if kind in ("gateway", "bridge"):
+            return kind
+    strong = _model_kind(model, MODEL_STRONG)
+    if strong:
+        return strong
     for feat, kind in FEATURE_TYPES:
         if feat in feats:
             return kind
-    for text in (device_type, role):
-        kind = ROLE_TYPES.get(_squash(text or ""))
+    for kind in roles:
         if kind:
             return kind
-    name = (model or "").strip().upper()
-    for kind, prefixes in MODEL_TYPES:
-        if name.startswith(prefixes):
-            return kind
+    weak = _model_kind(model, MODEL_TYPES)
+    if weak:
+        return weak
+    if (model or "").strip().lower().startswith(LEGACY_SWITCH):
+        return "switch"
     return "other" if feats or device_type or role else ""
 
 
@@ -337,7 +387,8 @@ def parse_device(site_id: str, raw: Any) -> Device | None:
                   _text(raw.get("firmwareVersion")), fu if isinstance(fu, bool) else None, uplink,
                   _text(raw.get("type")) or _text(raw.get("deviceType")), _text(raw.get("role")),
                   tuple(str(f) for f in feats if isinstance(f, str)) if isinstance(feats, list)
-                  else (), c["rx_bytes"], c["tx_bytes"], c["rx_rate_bps"], c["tx_rate_bps"])
+                  else (), c["rx_bytes"], c["tx_bytes"], c["rx_rate_bps"], c["tx_rate_bps"],
+                  uplink_port_of(up))
 
 
 def write_devices(db: Conn, devices: list[Device], now: float) -> int:
@@ -372,12 +423,15 @@ def _flag(v: bool | None) -> int | None:
 def write_site_status_integration(db: Conn, site_id: str, gateway_device_id: str,
                                   wan: dict[str, Any], now: float) -> None:
     """The devices poll's share of `unifi_site_status`: the gateway and the uplink rates, port
-    and (when the statistics node says) Internet state. The classic columns are left as they
-    are. With no gateway the row still records the poll time, so the overview can say it ran."""
+    and (when the statistics node says) Internet state, and the site's name when `wan` carries
+    `site_name` (from the /sites list). The classic columns are left as they are. With no
+    gateway the row still records the poll time, so the overview can say it ran."""
     db.execute(
         """INSERT INTO unifi_site_status (site_id, gateway_device_id, wan_port, wan_rx_rate_bps,
-           wan_tx_rate_bps, internet_up, updated) VALUES (?,?,?,?,?,?,?)
+           wan_tx_rate_bps, internet_up, updated, site_name) VALUES (?,?,?,?,?,?,?,?)
            ON CONFLICT (site_id) DO UPDATE SET gateway_device_id=excluded.gateway_device_id,
+           site_name=CASE WHEN excluded.site_name != '' THEN excluded.site_name
+                          ELSE unifi_site_status.site_name END,
            wan_port=CASE WHEN excluded.wan_port != '' THEN excluded.wan_port
                          ELSE unifi_site_status.wan_port END,
            wan_rx_rate_bps=excluded.wan_rx_rate_bps, wan_tx_rate_bps=excluded.wan_tx_rate_bps,
@@ -385,7 +439,7 @@ def write_site_status_integration(db: Conn, site_id: str, gateway_device_id: str
                             ELSE excluded.internet_up END,
            updated=excluded.updated""",
         (site_id, gateway_device_id, wan.get("port") or "", wan.get("rx_rate_bps"),
-         wan.get("tx_rate_bps"), _flag(wan.get("up")), now))
+         wan.get("tx_rate_bps"), _flag(wan.get("up")), now, _text(wan.get("site_name"))))
 
 
 def write_site_status_classic(db: Conn, site_id: str, wan: dict[str, Any],

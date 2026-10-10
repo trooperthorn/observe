@@ -108,7 +108,11 @@ class RetentionLevels:
 
 
 # setting key -> (field, lowest, highest). The keys live in app_settings, where the admin
-# endpoint writes them with an audit record.
+# endpoint writes them with an audit record. The hourly level's floor of 90 days is the owner's
+# bound in docs/DATA-API-DESIGN.md section 10.2: a chart of up to a quarter (steps under a day)
+# is drawn from hourly summaries, and below 90 days it would fall to the daily level and lose
+# its shape. Across levels the order raw <= 5 minute <= hourly <= daily is checked when saving
+# (order_problems), so daily has no floor of its own beyond the hourly level.
 RETENTION_SETTINGS = {
     "retention.raw_days": ("raw_days", 1, 30),
     "retention.5m_days": ("rollup_5m_days", 1, 365),
@@ -149,9 +153,18 @@ def parse_overrides(text: object) -> dict[str, dict[str, int]]:
     return out
 
 
-def load_levels(db: Conn, fallback_raw_days: int | None = None) -> RetentionLevels:
+def load_levels(db: Conn, fallback_raw_days: int | None = None, *,
+                as_saved: bool = False) -> RetentionLevels:
     """The admin's retention settings, defaults for a missing or out-of-range value. When no raw
-    setting exists, `fallback_raw_days` (server.retention_days) is the raw level."""
+    setting exists, `fallback_raw_days` (server.retention_days) is the raw level. A level with
+    no saved value keeps at least as long as the level below it, within its own bounds, so a
+    default never contradicts a saved value (a 30 day raw fallback lifts the 14 day 5 minute
+    default to 30).
+
+    By default the result is what compaction and queries use: `ordered`, so a saved order that
+    contradicts itself (raw longer than its own summary) never trims a summary before the level
+    it summarises. `as_saved` returns the saved values unchanged, for the admin page and the
+    audit record, which report a contradiction with `order_problems`."""
     values: dict[str, int] = {}
     overrides: dict[str, dict[str, int]] = {}
     if fallback_raw_days is not None:
@@ -170,7 +183,71 @@ def load_levels(db: Conn, fallback_raw_days: int | None = None) -> RetentionLeve
             continue
         if low <= days <= high:
             values[name] = days
-    return RetentionLevels(**values, overrides=overrides)
+    below = 0
+    for name in ORDERED_FIELDS:
+        if name not in values:
+            values[name] = min(max(getattr(DEFAULTS, name), below), FIELD_BOUNDS[name][1])
+        below = values[name]
+    levels = RetentionLevels(**values, overrides=overrides)
+    return levels if as_saved else ordered(levels)
+
+
+# The summary chain, finest first: each level must keep at least as long as the one before it,
+# because it is what remains of that level once its rows are trimmed.
+ORDERED_FIELDS = ("raw_days", "rollup_5m_days", "hourly_days", "daily_days")
+LEVEL_LABELS = {"raw_days": "Raw samples", "rollup_5m_days": "5 minute summaries",
+                "hourly_days": "Hourly summaries", "daily_days": "Daily summaries"}
+DEFAULTS = RetentionLevels()
+
+
+def _lifted(glob: dict[str, int], own: dict[str, int]) -> list[int]:
+    """A metric's chain: what its override sets, and for a level it leaves out the global value
+    or, when the override keeps a finer level longer, that finer level's days."""
+    chain: list[int] = []
+    below = 0
+    for name in ORDERED_FIELDS:
+        days = own[name] if name in own else max(glob[name], below)
+        chain.append(days)
+        below = days
+    return chain
+
+
+def order_problems(levels: RetentionLevels) -> list[str]:
+    """Each place where a saved level keeps longer than the level that summarises it, in words
+    for the admin. A level an override leaves out follows the levels below it, so an override is
+    reported only where it sets a summary shorter than a finer level."""
+    out: list[str] = []
+    glob = [getattr(levels, name) for name in ORDERED_FIELDS]
+    scopes: list[tuple[str, list[int]]] = [("", glob)]
+    base = dict(zip(ORDERED_FIELDS, _lifted(dict(zip(ORDERED_FIELDS, glob)), {}), strict=True))
+    for metric, own in sorted(levels.overrides.items()):
+        scopes.append((f"For {metric}: ", _lifted(base, own)))
+    for where, chain in scopes:
+        for i in range(len(ORDERED_FIELDS) - 1):
+            if chain[i] > chain[i + 1]:
+                fine, coarse = ORDERED_FIELDS[i], ORDERED_FIELDS[i + 1]
+                out.append(f"{where}{LEVEL_LABELS[fine]} keep {chain[i]} days, longer than "
+                           f"{LEVEL_LABELS[coarse].lower()} ({chain[i + 1]} days)")
+    return out
+
+
+def ordered(levels: RetentionLevels) -> RetentionLevels:
+    """The levels with each one lifted to at least the level below it, globally and for each
+    metric with an override. Nothing is ever shortened, so data is only kept longer."""
+    glob = dict(zip(ORDERED_FIELDS, _lifted(
+        {name: getattr(levels, name) for name in ORDERED_FIELDS}, {}), strict=True))
+    overrides: dict[str, dict[str, int]] = {}
+    for metric, own in levels.overrides.items():
+        kept: dict[str, int] = {}
+        below = 0
+        for name in ORDERED_FIELDS:
+            days = max(own.get(name, glob[name]), below)
+            if name in own or days != glob[name]:
+                kept[name] = days
+            below = days
+        overrides[metric] = kept
+    return RetentionLevels(**{**{n: getattr(levels, n) for n in FIELD_BOUNDS}, **glob},
+                           overrides=overrides)
 
 
 def days_for(levels: RetentionLevels, metric: str, name: str) -> int:
@@ -195,12 +272,18 @@ def settings_view(levels: RetentionLevels) -> dict:
     return out
 
 
+class RetentionOrderError(ValueError):
+    """A change that would leave a level keeping longer than its own summary. Raised inside the
+    write unit, so nothing of the change is written."""
+
+
 def save_settings(db: Conn, changes: dict[str, str | None], *, now: float, actor: str,
                   remote: str, path: str, fallback_raw_days: int | None = None) -> dict:
     """Inside one write unit: write the changed keys (None resets one to its default), read the
     settings before and after, and append the one audit row that records both. Returns
-    {"old": ..., "new": ...}."""
-    old = settings_view(load_levels(db, fallback_raw_days))
+    {"old": ..., "new": ...}. Raises RetentionOrderError, writing nothing, when the saved
+    levels would be out of order (raw <= 5 minute <= hourly <= daily, for each metric too)."""
+    old = settings_view(load_levels(db, fallback_raw_days, as_saved=True))
     for key, value in changes.items():
         if value is None:
             db.execute("DELETE FROM app_settings WHERE key = ?", (key,))
@@ -209,7 +292,11 @@ def save_settings(db: Conn, changes: dict[str, str | None], *, now: float, actor
                 "INSERT INTO app_settings (key, value, updated) VALUES (?, ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
                 (key, value, now))
-    new = settings_view(load_levels(db, fallback_raw_days))
+    saved = load_levels(db, fallback_raw_days, as_saved=True)
+    problems = order_problems(saved)
+    if problems:
+        raise RetentionOrderError(problems[0])
+    new = settings_view(saved)
     db.execute(
         "INSERT INTO audit (ts, actor, kind, method, path, status, remote, detail) "
         "VALUES (?,?,?,?,?,?,?,?)",

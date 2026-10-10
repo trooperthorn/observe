@@ -1,7 +1,7 @@
 // Sortable, paged tables. Columns are {key, label, numeric, get, render(row) -> Node}; a render
 // function must return a Node, never markup text.
 import { el } from "/static/js/dom.js";
-import { PAGE_SIZES, ariaSort, nextSort, pageSlice, sortRows } from "/static/js/table-core.js";
+import { PAGE_SIZES, ariaSort, nextSort, pageSlice, sortLabel, sortRows } from "/static/js/table-core.js";
 
 export { PAGE_SIZES, ariaSort, nextSort, pageSlice, sortRows };
 
@@ -13,7 +13,9 @@ function sortableTh(col, sort, onSort) {
   th.setAttribute("aria-sort", ariaSort(sort, col.key));
   const b = el("button", "th-sort");
   b.type = "button";
-  b.setAttribute("aria-label", `Sort by ${col.label}`);
+  // aria-sort is "none" until a column is sorted, which many accessibility trees leave out, so
+  // the button's name says the state too.
+  b.setAttribute("aria-label", sortLabel(col.label, ariaSort(sort, col.key)));
   const arrow = sort && sort.key === col.key ? (sort.dir === "asc" ? "▲" : "▼") : "↕";
   const a = el("span", "th-arrow", arrow);
   a.setAttribute("aria-hidden", "true");
@@ -89,5 +91,8 @@ export function sortableTable({ columns, rows, empty, pageSizes, caption, defaul
     root.append(foot);
   };
   draw();
-  return { root, setRows(r) { data = r || []; draw(); } };
+  // setEmpty swaps the empty note, so a page can say "Loading" until its first answer and only
+  // then say that there is nothing.
+  return { root, setRows(r) { data = r || []; draw(); },
+    setEmpty(e) { empty = e; draw(); } };
 }

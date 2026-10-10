@@ -61,6 +61,19 @@ DEFAULT_POOL = "Apps"
 # Same shapes the control daemon accepts (docs/CONTROL.md). None can hold a space, quote, slash,
 # semicolon, dollar sign, backtick or pipe, so an entry is safe inside a shell word or a TOML string.
 _HEADER = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
+# The Add host wizard offers fan headers by their board label (fan1, fan2, fan3), while thermalctl
+# names a header by the hwmon PWM channel that drives it, and reports it as hw.id fan:pwm1 to
+# fan:pwmN. fanN is driven by pwmN. This is the one mapping between the two names: control.toml
+# and every signed fan.set_floor carry the controller id, so a floor set on fan1 reaches pwm1.
+_BOARD_FAN = re.compile(r"^fan([0-9]{1,3})$")
+
+
+def controller_id(header: str) -> str:
+    """The controller's id for an allowlist header name: fanN is pwmN, any other name is kept."""
+    m = _BOARD_FAN.fullmatch(header)
+    return f"pwm{int(m.group(1))}" if m else header
+
+
 # Matches hostwatch SERVICE_NAME (an optional docker: prefix, no @, no leading dash, no "..").
 _SERVICE = re.compile(r"^(?:docker:)?[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 

@@ -69,14 +69,47 @@ async def test_levels_come_from_the_admin_settings_and_bad_values_fall_back(db):
                        ("retention.history_days", "x"), ("retention.other", "1")):
         await db.execute("INSERT INTO app_settings (key, value, updated) VALUES (?, ?, 1)",
                          (key, value))
-    levels = await db.read(lambda c: load_levels(c, 30))
+    levels = await db.read(lambda c: load_levels(c, 30, as_saved=True))
     assert levels == RetentionLevels(raw_days=3, rollup_5m_days=14, hourly_days=120,
                                      daily_days=9, history_days=730)
+    # Daily (9 days) is shorter than hourly (120): what compaction uses keeps daily for 120.
+    assert (await db.read(lambda c: load_levels(c, 30))).daily_days == 120
 
 
 async def test_the_raw_level_falls_back_to_the_server_setting(db):
     assert (await db.read(lambda c: load_levels(c, 30))).raw_days == 30
     assert (await db.read(lambda c: load_levels(c))).raw_days == 7
+
+
+async def test_a_30_day_raw_fallback_lifts_the_unsaved_5_minute_default(db):
+    """The reported case: server.retention_days 30 with no saved levels left raw (30 days)
+    outliving its own 5 minute summary (default 14 days)."""
+    saved = await db.read(lambda c: load_levels(c, 30, as_saved=True))
+    assert (saved.raw_days, saved.rollup_5m_days, saved.hourly_days) == (30, 30, 90)
+    await db.execute("INSERT INTO app_settings (key, value, updated) VALUES (?, ?, 1)",
+                     ("retention.5m_days", "20"))
+    saved = await db.read(lambda c: load_levels(c, 30, as_saved=True))
+    assert saved.rollup_5m_days == 20  # a saved value is never changed, only reported
+
+
+async def test_saved_levels_out_of_order_keep_compaction_safe(db):
+    """Settings saved before the order check (raw 30 days, 5 minute 14, daily 9) load without
+    error; compaction keeps each summary at least as long as the level it summarises."""
+    now = 800 * DAY
+    for key, value in (("retention.raw_days", "30"), ("retention.5m_days", "14"),
+                       ("retention.daily_days", "9")):
+        await db.execute("INSERT INTO app_settings (key, value, updated) VALUES (?, ?, 1)",
+                         (key, value))
+    await one(db, now - 20 * DAY, 1.0)
+    await one(db, now - 100 * DAY, 2.0)
+    await db.apply_retention(now=now, retention_days=7, audit_retention_days=365)
+    # 20 days old: still raw (30) and in the 5 minute level, lifted from 14 to 30 days.
+    assert await count(db, "samples") == 1
+    assert await count(db, "metric_5m") == 1
+    # 100 days old: past hourly (90) and past daily, which is lifted from 9 to 90 days, so the
+    # 20 day old point is still in it.
+    assert await count(db, "metric_hourly") == 1
+    assert await count(db, "metric_daily") == 1
 
 
 def test_cuts_are_aligned_to_the_width_of_the_level_that_covers_them():

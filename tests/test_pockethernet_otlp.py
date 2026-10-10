@@ -75,7 +75,7 @@ class Env:
             [{"name": "p", "type": "ping", "host": "127.0.0.1"}],
             plugins=["pockethernet"],
             plugin_settings={"pockethernet": settings or {}},
-            server={"db_path": self.path, "ingest_rate_per_minute": rate})
+            server={"db_path": self.path, "ingest_rate_per_minute": rate, "ingest_burst": rate})
         loaded = load_plugins(self.cfg, lambda: [EntryPoint(
             "pockethernet", "observe_pockethernet:plugin", GROUP)])
         self.store = Store(self.path, loaded)
@@ -342,7 +342,8 @@ def test_rate_limit_is_429_and_uploads_stop(tmp_path):
         assert e.post(FIXTURE).status_code == 200
         assert e.post(FIXTURE).status_code == 200
         r = e.post(FIXTURE)
-        assert r.status_code == 429 and r.headers["retry-after"] == "60"
+        # The bucket refills one request in 30 s at 2 a minute; Retry-After says so.
+        assert r.status_code == 429 and 1 <= int(r.headers["retry-after"]) <= 30
         assert e.rows("SELECT status FROM audit WHERE kind='ingest_denied'") == [(429,)]
     finally:
         e.close()

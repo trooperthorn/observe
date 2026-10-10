@@ -28,6 +28,7 @@ server:
   # The audit log has its own retention, separate from polls and host samples.
   audit_retention_days: 365
   ingest_rate_per_minute: 120  # POST /v1/metrics and /v1/logs requests per ingest key per minute (wrong keys: per peer)
+  # ingest_burst: 2000  # requests one key may send at once, so an agent can replay its outbox
   # plugin_rate_per_minute: 300  # requests per peer to /api/plugins/* routes
   # The address install commands tell hosts to call, http(s)://host[:port] with no path and never
   # localhost. When unset, an admin confirms one in the Add host wizard. The request's Host
@@ -205,6 +206,8 @@ monitors:
     # Once a threshold holds, the value must come back past it by `hysteresis` (in the value's
     # unit) before it clears, so a value hovering at the line does not flap between Warning and
     # Up. Leave it out for 5% of each threshold (here 1 ms for warn, 5 ms for crit); 0 turns it off.
+    # It must also stay back for `clear_polls` polls in a row before it clears (default 3, like
+    # a threshold rule's `clear`); 1 clears on the first good poll.
     thresholds: {direction: above, warn: 20, crit: 100}   # avg RTT ms
 
   - name: Core switch

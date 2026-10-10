@@ -32,11 +32,19 @@ function rank(status) {
 export function hostRow(h) {
   return {
     name: h.host, platform: h.platform || "", status: h.status, statusRank: rank(h.status),
-    age: h.heard ? h.age_seconds : null, stale: !!h.stale, agent: h.agent_version || "",
+    age: h.heard ? h.age_seconds : null, stale: !!h.stale,
+    agent: h.agent_label || h.agent_version || "",
     monitored: !!h.monitored, monitor: h.monitor && h.monitor.name ? h.monitor.name : "",
     detail: h.status_reason || "", href: hostHref(h.host), settings: settingsHref(h.host),
-    waiting: false, heard: !!h.heard, notes: installNotes(h),
+    waiting: false, heard: !!h.heard, notes: [...installNotes(h), ...dropNotes(h)],
   };
+}
+
+// The agent is dropping data from its outbox (observe/agentdrops.py), until the count stops
+// growing.
+export function dropNotes(h) {
+  const d = h.agent_drops;
+  return d && d.text ? [d.text] : [];
 }
 
 // The newest failed console install step, until a later report clears it.
@@ -129,9 +137,19 @@ export function downHostCount(hosts) {
 }
 
 // The sub-label of the dashboard's Down tile. `hosts` is the Hosts list, or null when this
-// viewer may not read it; the count then falls back to Down pushed_host monitors.
+// viewer may not read it; the count then falls back to Down pushed_host monitors. Only a host
+// listed as a pushed_host monitor can alert, so only those count as down; a Down host that is
+// not monitored is named apart ("2 hosts down, plus 1 not monitored").
 export function downTileLabel(hosts, monitors) {
-  const n = hosts ? downHostCount(hosts)
-    : (monitors || []).filter((m) => m.effective_state === "down" && m.type === "pushed_host").length;
-  return n ? `${plural(n, "host")} down` : "";
+  if (!hosts) {
+    const n = (monitors || [])
+      .filter((m) => m.effective_state === "down" && m.type === "pushed_host").length;
+    return n ? `${plural(n, "host")} down` : "";
+  }
+  const down = hosts.filter((h) => h.status === "critical");
+  const n = down.filter((h) => h.monitored).length;
+  const other = down.length - n;
+  if (!other) return n ? `${plural(n, "host")} down` : "";
+  if (!n) return `${plural(other, "unmonitored host")} down`;
+  return `${plural(n, "host")} down, plus ${other} not monitored`;
 }

@@ -1,7 +1,7 @@
 // Run with: node --test tests/js (the tests workflow runs this too).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { eventText, formatValue, formatReading, monitorReading, plural } from "../../observe/static/js/format.js";
+import { ageText, eventText, formatValue, formatReading, monitorReading, plural } from "../../observe/static/js/format.js";
 
 test("a ratio of unit 1 is shown as a percentage", () => {
   assert.equal(formatValue(0.35, "1"), "35 %");
@@ -87,6 +87,15 @@ test("count units in curly braces are shown as words", () => {
 test("a monitor card value always says what it is", () => {
   assert.equal(monitorReading({ type: "pushed_host", value: 67, unit: "s", result: "ok" }),
     "data 1m 7s old");
+  // The reported card: "data 15.95 s old". An age over 10 s has no decimals.
+  assert.equal(monitorReading({ type: "pushed_host", value: 15.95, unit: "s", result: "ok" }),
+    "data 16 s old");
+  assert.equal(monitorReading({ type: "pushed_host", value: 66.6, unit: " s", result: "ok" }),
+    "data 1m 7s old");
+  assert.equal(ageText(4.26), "4.3 s");
+  assert.equal(ageText(9.96), "10 s");
+  assert.equal(ageText(59.6), "1m");
+  assert.equal(ageText(0), "0 s");
   assert.equal(monitorReading({ type: "home_assistant", value: 586, unit: "{entity unavailable}" }),
     "586 entities unavailable");
   assert.equal(monitorReading({ type: "technitium", value: 2.1, unit: "%" }), "2.1%");
@@ -131,4 +140,38 @@ test("agent unit codes read as words, and state gauges as their state", async ()
     labels: { "observe.thermal.mode": "auto" } }), "auto");
   assert.equal(readingText({ metric: "system.cpu.utilization", value: 0.12, unit: "1", labels: {} }), "12 %");
   assert.equal(readingText({ metric: "hw.temperature", value: null }), "no value");
+});
+
+test("Windows storage hw.status is a health level, not a one-hot state gauge", async () => {
+  const { readingText } = await import("../../observe/static/js/format.js");
+  const src = "hostwatch.collector.win_storage";
+  const labels = { "hw.state": "Healthy", "observe.win.operational": "OK",
+    "hw.type": "logical_disk" };
+  const r = (value, l) => readingText({ source: src, metric: "hw.status", value, unit: "1",
+    labels: l });
+  assert.equal(r(0, labels), "Healthy");
+  assert.equal(r(0, {}), "healthy");
+  assert.equal(r(1, labels), "warning");
+  assert.equal(r(2, { "hw.state": "Unhealthy" }), "Unhealthy");
+  // The mdraid state gauge keeps its one-hot reading.
+  assert.equal(readingText({ source: "hostwatch.collector.mdraid", metric: "hw.status", value: 0,
+    unit: "1", labels: { "hw.state": "degraded" } }), "not degraded");
+});
+
+test("flags read Yes or No and the version reads as its string, not a percentage", async () => {
+  const { readingText } = await import("../../observe/static/js/format.js");
+  const ha = "observe.check.homeassistant";
+  const r = (metric, value, labels = {}) =>
+    readingText({ source: ha, metric, value, unit: "1", labels });
+  assert.equal(r("observe.ha.update.pending", 0, { "observe.ha.entity_id": "update.x" }), "No");
+  assert.equal(r("observe.ha.update.pending", 1, { "observe.ha.entity_id": "update.x" }), "Yes");
+  assert.equal(r("observe.ha.safe_mode", 0), "No");
+  assert.equal(r("observe.ha.recovery_mode", 0), "No");
+  assert.equal(r("observe.ha.running", 1, { "observe.ha.state": "RUNNING" }), "RUNNING");
+  assert.equal(r("observe.ha.running", 0, { "observe.ha.state": "NOT_RUNNING" }),
+    "No (NOT_RUNNING)");
+  assert.equal(r("observe.ha.version", 1, { "observe.ha.component": "core",
+    "observe.ha.version": "2026.10.1" }), "2026.10.1");
+  assert.equal(readingText({ source: "observe.check.ha_soc",
+    metric: "observe.ha.soc.suspicious_activity", value: 1, unit: "1", labels: {} }), "Yes");
 });

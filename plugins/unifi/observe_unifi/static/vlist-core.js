@@ -91,6 +91,38 @@ export function markCamerasStale(rows, now, after) {
     stale: isStale(c.connected === true || c.recording === true, c.last_seen, now, after) }));
 }
 
+// What the "Last seen" column means for a client row. A connected client is seen now: its
+// connected_at is when it joined (the Uptime column), never a last-seen time. A stale row (said
+// connected but not refreshed lately) and an offline one show when it was last seen; with no
+// time the cell is empty. Returns { now: true } or { at: <time or null> }.
+export function lastSeenCell(c) {
+  if (clientState(c) === "connected") return { now: true };
+  return { at: c.last_seen ?? null };
+}
+
+// ---- Overview ----
+
+// The site line under Network status: the site's name, else its id, else not polled yet.
+export function siteText(o) {
+  if (o.site_name) return `site ${o.site_name}`;
+  return o.site_id ? `site ${o.site_id}` : "no site polled yet";
+}
+
+// The Internet tile, or null to leave it out when the state is not known (an "Unknown" tile
+// beside live WAN traffic only confused). `inferred` is set when the state comes from the
+// gateway's WAN traffic rather than a state the console reported.
+export function internetTile(o) {
+  if (o.internet_up !== true && o.internet_up !== false) return null;
+  return { up: o.internet_up, inferred: o.internet_source === "wan_traffic" };
+}
+
+// The SSID bars worth drawing: only named SSIDs. Without the classic account no client has an
+// SSID, so there are none and the card is left out.
+export function ssidBarRows(o) {
+  return (Array.isArray(o.clients_per_ssid) ? o.clients_per_ssid : []).filter(
+    (r) => typeof r.ssid === "string" && r.ssid && r.count > 0);
+}
+
 // ---- Wi-Fi readiness words ----
 
 // The SSID the Wi-Fi section opens on: the first whose name says IoT (the HA SOC rule), else all.

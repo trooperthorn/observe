@@ -95,6 +95,28 @@ def test_an_unknown_host_is_404_and_a_host_outside_the_console_is_readable(env):
     assert body["can_update"] is False and body["task"] is None
 
 
+def test_the_enrolled_platform_is_the_platform_everywhere(env):
+    """truenas-svr was "linux" on Hosts and its host page (the agent's word) but "TrueNAS" on
+    its settings page and Updates (the enrolment). The enrolled platform now wins everywhere."""
+    hdr = admin(env)
+    enrol_host(env, hdr, name="truenas-svr", platform="truenas", control=False, allowlist=None)
+    asyncio.run(env.store.execute(
+        "INSERT INTO hosts (host, platform, agent_version, first_seen, last_seen) "
+        "VALUES ('truenas-svr', 'linux', '1.0', 1.0, 2.0) ON CONFLICT (host) DO UPDATE SET "
+        "platform = excluded.platform"))
+    asyncio.run(env.store.execute(
+        "INSERT INTO hosts (host, platform, agent_version, first_seen, last_seen) "
+        "VALUES ('legacy', 'Linux', '1.0', 1.0, 2.0)"))
+    rows = {r["host"]: r for r in asyncio.run(env.store.host_rows())}
+    assert rows["truenas-svr"]["platform"] == "truenas"
+    assert rows["truenas-svr"]["reported_platform"] == "linux"
+    assert rows["legacy"]["platform"] == "Linux"  # not enrolled: the agent's word
+    listed = {h["host"]: h for h in env.client.get("/api/v2/hosts").json()["items"]}
+    assert listed["truenas-svr"]["platform"] == "truenas"
+    assert env.client.get("/api/v2/hosts/truenas-svr").json()["platform"] == "truenas"
+    assert settings(env, "truenas-svr").json()["platform"] == "truenas"
+
+
 # ---------------------------------------------------------------- the allowlist
 
 
@@ -130,7 +152,7 @@ def test_save_before_the_install_is_run_makes_no_command_and_lands_in_the_instal
     assert env.rows("SELECT COUNT(*) FROM host_tasks") == [(0,)]
     env.clock.now += 10
     script = run_install(env, token).text
-    assert "'headers = [\"fan1\", \"fan9\"]'" in script and "min_duty_floor = 20" in script
+    assert "'headers = [\"pwm1\", \"pwm9\"]'" in script and "min_duty_floor = 20" in script
     assert "fan2" not in script and "docker:scrutiny" not in script
     # The install wrote the saved list, so the status moves on once the host has pulled.
     assert settings(env).json()["allowlist_status"]["state"] == "written"
@@ -225,7 +247,7 @@ def test_fetching_the_update_command_serves_a_guarded_script_once(env, tmp_path)
     assert text.startswith("#!/bin/sh\n# Observe settings update for nas01 (Linux server)")
     check_syntax(text, tmp_path)
     assert "HOST_NAME='nas01'" in text and "OBSERVE_MACHINE_ID='0123456789abcdef0123456789abcdef'" in text
-    assert "OBSERVE_ADDRS='192.0.2.50'" in text and "'headers = [\"fan1\", \"fan9\"]'" in text
+    assert "OBSERVE_ADDRS='192.0.2.50'" in text and "'headers = [\"pwm1\", \"pwm9\"]'" in text
     assert "wpi_" not in text and "wpc_" not in text
     again = env.client.get(f"/t/{token}")
     assert again.status_code == 410 and "wps_" not in again.text
@@ -375,7 +397,7 @@ def test_reissue_revokes_the_old_token_and_keys_and_makes_a_new_command(env):
     assert fresh.status_code == 200
     new_keys = secrets_of(fresh.text)
     assert new_keys["AGENT_KEY"] != keys["AGENT_KEY"]
-    assert "'headers = [\"fan1\", \"fan9\"]'" in fresh.text  # the saved allowlist, not the first
+    assert "'headers = [\"pwm1\", \"pwm9\"]'" in fresh.text  # the saved allowlist, not the first
     assert asyncio.run(verify_key(env.store, new_keys["AGENT_KEY"], "nas01"))
     assert env.client.get("/i/" + token).status_code == 410
     assert "enrol_reissued" in audit_kinds(env)

@@ -46,8 +46,9 @@ from .feed import feed_classic, feed_integration
 from .api import register as register_resources
 from .client import AuthRejected, IntegrationClient, UniFiError
 from .pages import PAGE_PATH, page_files
-from .records import (MIGRATIONS, parse_device, parse_uplink_stats, prune_unseen, read_networks,
-                      select_gateway, write_site_status_classic, write_wlans)
+from .records import (MIGRATIONS, UPLINK_PORT_KEYS, parse_device, parse_uplink_stats,
+                      prune_unseen, read_networks, select_gateway, write_site_status_classic,
+                      write_wlans)
 
 __version__ = "0.1.0"
 
@@ -111,6 +112,7 @@ class UniFiPlugin(PluginBase):
         # Wall time of the last devices poll that succeeded, for the devices page.
         self.devices_ok_at: float | None = None
         self._site_id: str | None = None
+        self._site_name = ""
 
     def config_model(self) -> type[BaseModel]:
         return UniFiSettings
@@ -267,6 +269,9 @@ class UniFiPlugin(PluginBase):
                 sites = await api.list_all(c, "/sites")
                 site_id = self._pick_site(sites)
                 self._site_id = site_id
+                self._site_name = next(
+                    (x["name"] for x in sites if isinstance(x, dict) and x.get("id") == site_id
+                     and isinstance(x.get("name"), str)), "")
                 rows = await api.list_all(c, f"/sites/{site_id}/{suffix}")
                 if then is not None:
                     extra = await then(api, c, site_id, rows)
@@ -317,7 +322,9 @@ class UniFiPlugin(PluginBase):
                 continue
             dup = detail.get("uplink") if isinstance(detail, dict) else None
             if isinstance(dup, dict) and isinstance(dup.get("deviceId"), str) and dup["deviceId"]:
-                row["uplink"] = {**(up if isinstance(up, dict) else {}),
+                # The parent's port index too, when the detail gives one (records.UPLINK_PORT_KEYS).
+                ports = {k: dup[k] for k in UPLINK_PORT_KEYS if k in dup}
+                row["uplink"] = {**(up if isinstance(up, dict) else {}), **ports,
                                  "deviceId": dup["deviceId"]}
                 found += 1
         return found
@@ -335,7 +342,7 @@ class UniFiPlugin(PluginBase):
         now = self.wall()
         # The device rows, the site status and the map feed are one cycle in one transaction.
         await feed_integration(store, devices, now, save_devices=True,
-                               site_status=(site_id, gid, wan))
+                               site_status=(site_id, gid, {**wan, "site_name": self._site_name}))
         self.devices_ok_at = now
         return len(devices)
 

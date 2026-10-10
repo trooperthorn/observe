@@ -85,3 +85,10 @@ test("pull ages read as seconds, minutes, hours or days", () => {
   assert.equal(pullAgeText(7200), "2 h ago");
   assert.equal(pullAgeText(3 * 86400), "3 d ago");
 });
+
+test("Update all says why it is not offered", async () => {
+  const { updateAllNote } = await import("../../observe/static/js/updates-logic.js");
+  assert.equal(updateAllNote(false, 3), "needs the control plugin");
+  assert.match(updateAllNote(true, 0), /^no host can take an agent update/);
+  assert.equal(updateAllNote(true, 2), "");
+});

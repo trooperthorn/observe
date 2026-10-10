@@ -23,7 +23,7 @@ from .problems import ApiProblem
 from .registry import ApiContext, ApiRegistry
 
 # Keys of the host document that hold a unix timestamp. They are written as RFC 3339 strings.
-TIME_KEYS = frozenset({"last_seen", "boot_ts", "ts", "updated", "at"})
+TIME_KEYS = frozenset({"last_seen", "boot_ts", "ts", "updated", "at", "since"})
 
 
 def _times(value: Any) -> Any:
@@ -141,8 +141,8 @@ class HostViews:
     async def views(self, names: list[str], rows: dict[str, dict[str, Any]]
                     ) -> list[dict[str, Any]]:
         """The views of `names` in the same order, from a constant number of statements. Each
-        view equals what `view` returns, except that the events hold only the alert-raising ones,
-        which is all the list summary reads."""
+        view equals what `view` returns, except that the events hold only the alert-raising ones
+        and the agent's outbox reports, which is all the list summary reads."""
         ctx = self.ctx
         now = ctx.now
         wanted: dict[str, tuple[float, tuple[tuple[str, str], ...]]] = {}

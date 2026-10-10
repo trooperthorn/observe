@@ -84,6 +84,43 @@ export function retentionBody(globalValues, rows) {
   return out;
 }
 
+// The summary chain, finest first: each level keeps at least as long as the one before it, so
+// raw data never outlives its own summary (the server refuses the same, see
+// observe/storage/rollups.py order_problems).
+export const RETENTION_ORDER = ["raw_days", "rollup_5m_days", "hourly_days", "daily_days"];
+
+// A chain of days, finest first: what `own` sets, and for a level it leaves out the global value
+// or, when a finer level keeps longer, that finer level's days.
+function liftedChain(glob, own) {
+  let below = 0;
+  return RETENTION_ORDER.map((name) => {
+    const days = name in own ? own[name] : Math.max(glob[name] ?? 0, below);
+    below = days;
+    return days;
+  });
+}
+
+// One sentence per pair out of order, for the global levels and each override row. A level an
+// override leaves empty follows the levels below it, so an override is reported only where it
+// sets a summary shorter than a finer level. `label` names a level.
+export function retentionOrderProblems(body, label = (name) => name) {
+  const out = [];
+  const check = (chain, prefix) => {
+    for (let i = 0; i < RETENTION_ORDER.length - 1; i++) {
+      if (chain[i] > chain[i + 1]) {
+        out.push(`${prefix}${label(RETENTION_ORDER[i + 1])} must keep at least as long as ` +
+          `${label(RETENTION_ORDER[i]).toLowerCase()} (${chain[i]} days)`);
+      }
+    }
+  };
+  const glob = {};
+  for (const name of RETENTION_ORDER) if (typeof body[name] === "number") glob[name] = body[name];
+  check(RETENTION_ORDER.map((name) => glob[name]), "");
+  const base = Object.fromEntries(RETENTION_ORDER.map((name, i) => [name, liftedChain(glob, {})[i]]));
+  for (const [metric, own] of Object.entries(body.overrides || {})) check(liftedChain(base, own), `For ${metric}: `);
+  return out;
+}
+
 // ---- threshold rules (PUT /api/admin/rules) -------------------------------------------------
 
 export const RULE_KINDS = [

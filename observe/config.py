@@ -253,6 +253,9 @@ Credential = Annotated[
 
 # The default clear band of a threshold, as a fraction of the threshold (Thresholds.hysteresis).
 DEFAULT_HYSTERESIS = 0.05
+# The default number of polls in a row a value must be back inside its band before a held
+# threshold clears (Thresholds.clear_polls), as threshold rules do with `clear`.
+DEFAULT_CLEAR_POLLS = 3
 
 
 class Thresholds(Strict):
@@ -263,13 +266,20 @@ class Thresholds(Strict):
 
     Once a threshold holds, the value must move back past it by `hysteresis` (in the value's
     unit) before it clears, so a value hovering at a threshold does not flap. None means 5% of
-    each threshold; 0 turns it off.
+    each threshold; 0 turns it off. It must also stay back for `clear_polls` polls in a row
+    (default 3, as threshold rules' `clear`), so one quiet poll in a noisy series does not clear
+    it either; 1 clears on the first good poll.
     """
 
     direction: Literal["above", "below"] = "above"
     warn: float | None = None
     crit: float | None = None
     hysteresis: float | None = Field(default=None, ge=0)
+    clear_polls: int | None = Field(default=None, ge=1, le=100)
+
+    def clear_after(self) -> int:
+        """Polls in a row back inside the band before a held threshold clears."""
+        return DEFAULT_CLEAR_POLLS if self.clear_polls is None else self.clear_polls
 
     def band(self, limit: float) -> float:
         """How far past `limit` the value must return before that threshold clears."""
@@ -767,6 +777,11 @@ class ServerConfig(Strict):
     # OTLP requests per ingest key per minute. One host sends about 8 a minute (metrics and
     # logs every 15 s). Requests with a missing or wrong key are limited per peer at the same number.
     ingest_rate_per_minute: int = Field(default=120, ge=1)
+    # How many requests one ingest key may send at once above that rate (a token bucket refilled
+    # at ingest_rate_per_minute; never less than one minute's worth). An agent restarted after an
+    # outage replays its outbox, which can hold over 1,600 requests, and must not be refused
+    # while it does. Refilling 2,000 at 120 a minute takes about 17 minutes.
+    ingest_burst: int = Field(default=2000, ge=1)
     basic_auth_user: str | None = None
     basic_auth_password: str | None = None
     max_concurrency: int = 32

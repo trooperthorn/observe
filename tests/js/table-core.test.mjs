@@ -56,3 +56,11 @@ test("typedMatches needs an exact, non-empty match", () => {
   assert.equal(typedMatches("pi", "pi1"), false);
   assert.equal(typedMatches("", ""), false);
 });
+
+test("a sort button names its column and the current sort", async () => {
+  const { ariaSort, sortLabel } = await import("../../observe/static/js/table-core.js");
+  assert.equal(sortLabel("Host", ariaSort(null, "host")), "Sort by Host, not sorted");
+  assert.equal(sortLabel("Host", ariaSort({ key: "host", dir: "asc" }, "host")),
+    "Sort by Host, sorted ascending");
+  assert.equal(ariaSort({ key: "host", dir: "desc" }, "host"), "descending");
+});

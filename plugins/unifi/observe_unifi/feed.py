@@ -8,8 +8,10 @@ write, and each one cycle in one write unit and so one commit (docs/DATA-API-DES
   its chassis MAC (switch_id), with its name, address, model and device type (gateway, switch,
   access point; records.device_type_of), which the map uses to name and place it. A device that
   names the device it is uplinked to gets a device-level link of source `config`, drawn between
-  a port named `uplink` on the child and a port named `to-<child mac>` on the parent, because a
-  link joins ports. That placeholder link is skipped when a link with real port numbers already
+  a port named `uplink` on the child and, on the parent, the port the device detail names
+  (`uplink.portIdx`, keyed like a classic port so both feeds meet on "Port N") or else a port
+  named `to-<child mac>`, because a link joins ports. The map page words the placeholders as
+  "uplink to <parent>" and "link to <child>" (observe/static/js/map-logic.js portNames). That placeholder link is skipped when a link with real port numbers already
   joins the two devices. The poll's device rows (`save_devices`) go in the same unit as the feed.
 - feed_classic takes the parsed classic views (classic.py) and is used only when the optional
   classic credential is set. It adds the ports, keyed by unifi_port_key(port_idx) with
@@ -124,11 +126,16 @@ def integrate_devices(db: Conn, devices: Iterable[Device], now: float) -> FeedRe
             with savepoint(db, "link"):
                 if _joined_by_ports(db, child_sid, parent_sid):
                     continue
-                parent_port = port_key(f"to-{child_sid[4:]}")
                 tx.upsert_port(child_sid, UPLINK_PORT, raw_port_id="uplink", role="uplink",
                                now=now)
-                tx.upsert_port(parent_sid, parent_port,
-                               raw_port_id=f"link to {d.name or child_sid}", now=now)
+                if d.uplink_port_idx is not None:
+                    parent_port = tx.upsert_port(
+                        parent_sid, unifi_port_key(d.uplink_port_idx),
+                        unifi_index=d.uplink_port_idx, now=now)
+                else:
+                    parent_port = port_key(f"to-{child_sid[4:]}")
+                    tx.upsert_port(parent_sid, parent_port,
+                                   raw_port_id=f"link to {d.name or child_sid}", now=now)
                 tx.upsert_link(tx.port_ref(child_sid, UPLINK_PORT),
                                tx.port_ref(parent_sid, parent_port), source="config",
                                confidence=DEVICE_LINK_CONFIDENCE, now=now)

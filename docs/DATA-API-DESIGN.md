@@ -1018,6 +1018,7 @@ These decisions replace any conflicting numbers earlier in this document.
 | Daily summaries | 2 years | Yes, admin | min, max, avg, count |
 | Up and down history | 2 years | Yes, admin | Every state change |
 
+- Each level keeps at least as long as the level below it (raw ≤ 5 minute ≤ hourly ≤ daily, for each metric's overrides too), because it is what remains of that level once its rows are trimmed. The admin endpoint refuses a change that breaks the order; a level with no saved value follows the level below it within its bounds; settings saved out of order before this check are listed on the retention page, and compaction keeps each summary at least as long as the level it summarises until they are fixed. The hourly floor of 90 days keeps charts of up to a quarter on hourly summaries.
 - Settings live in Observe (admin page, audited) with per-metric-group overrides allowed later; the defaults above apply until changed. A change takes effect at the next compaction and never deletes a level that is still needed to build the next one.
 - SQLite has no stored procedures. The equivalent is built as:
   1. Incremental rollup at ingest: every new sample updates its 5 minute, hourly and daily rows (min, max, sum, count) in the same transaction, so summaries are always current and never recomputed from raw data at query time. Replays update rollups only when the raw point is newly inserted.

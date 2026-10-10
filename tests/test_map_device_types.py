@@ -44,6 +44,27 @@ from .test_unifi_plugin import device
     ((["PROTECT"], "", "", "UNVR"), "other"),
     (((), "", "", "Catalyst 9300"), ""),
     (((), "", "", ""), ""),
+    # The reported devices: Ranchero-Fiber (a UCG Fiber) and MainUDBPro (a UniFi Device Bridge
+    # Pro) were drawn as switches. A gateway or bridge model code wins over SWITCHING or
+    # ACCESS_POINT, in any case and spacing.
+    ((["SWITCHING"], "", "", "UCG-Fiber"), "gateway"),
+    ((["switching"], "", "", "UCG Fiber"), "gateway"),
+    ((["SWITCHING"], "", "", "UCGF"), "gateway"),
+    ((["switching", "accessPoint"], "", "", "ucg fiber"), "gateway"),
+    ((["SWITCHING"], "", "", "UDM-Pro-Max"), "gateway"),
+    ((["SWITCHING"], "", "", "UDR7"), "gateway"),
+    ((["SWITCHING"], "", "", "UXG Pro"), "gateway"),
+    ((["SWITCHING"], "", "", "EFG"), "gateway"),
+    ((["SWITCHING"], "usw", "", "UCG-Ultra"), "gateway"),
+    ((["SWITCHING"], "", "", "UDB Pro"), "bridge"),
+    ((["ACCESS_POINT"], "", "", "UDBPRO"), "bridge"),
+    ((["switching"], "", "", "UDB-Pro"), "bridge"),
+    ((["ACCESS_POINT"], "", "", "UBB-XG"), "bridge"),
+    ((["SWITCHING"], "udb", "", ""), "bridge"),
+    ((["SWITCHING"], "", "bridge", ""), "bridge"),
+    # A switch or access point keeps its type.
+    ((["SWITCHING"], "", "", "USW Flex"), "switch"),
+    ((["ACCESS_POINT"], "", "", "U7 Pro"), "access_point"),
 ])
 def test_device_type_prefers_features_then_type_then_model(args, want):
     assert device_type_of(*args) == want

@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  STATUS_STATE, ageText, downTileLabel, filterRows, hostRow, hostRows, plural, summaryText,
+  STATUS_STATE, ageText, downTileLabel, dropNotes, filterRows, hostRow, hostRows, plural, summaryText,
   waitingRow,
 } from "../../observe/static/js/hosts-logic.js";
 
@@ -89,9 +89,32 @@ test("the dashboard Down tile counts what the Hosts list calls Down", () => {
   assert.equal(plural(2, "host"), "2 hosts");
 });
 
+test("the Down tile counts only hosts that can alert and names the others apart", () => {
+  const ha = { ...silent, host: "homeassistant", heard: true, monitored: false, monitor: null };
+  assert.equal(downTileLabel([silent, { ...silent, host: "b" }, ha], []),
+    "2 hosts down, plus 1 not monitored");
+  assert.equal(downTileLabel([ha], []), "1 unmonitored host down");
+  assert.equal(downTileLabel([ha, { ...ha, host: "x" }, nas], []), "2 unmonitored hosts down");
+});
+
 test("a failed install step shows on the row until cleared", () => {
   const h = { ...nas, install_problem: { step: "agent", status: "failed", note: "", at: 1 } };
   assert.deepEqual(hostRow(h).notes, ["install step agent failed"]);
+  assert.deepEqual(hostRow(nas).notes, []);
+});
+
+test("a host Observe polls shows how in the Agent column, not its producer marker", () => {
+  const ha = { ...nas, host: "homeassistant", agent_version: "observe-ha-host",
+    agent_label: "polled by Observe (Home Assistant monitor)" };
+  assert.equal(hostRow(ha).agent, "polled by Observe (Home Assistant monitor)");
+  assert.equal(hostRow(nas).agent, "0.9.0");
+});
+
+test("an agent dropping data shows on the row until the count stops growing", () => {
+  const text = "agent dropped 434,541 data points since 2026-10-10 03:19 UTC";
+  const h = { ...nas, status: "warning", agent_drops: { dropped: 434541, text } };
+  assert.deepEqual(hostRow(h).notes, [text]);
+  assert.deepEqual(dropNotes({ ...nas, agent_drops: null }), []);
   assert.deepEqual(hostRow(nas).notes, []);
 });
 

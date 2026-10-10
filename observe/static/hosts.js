@@ -80,6 +80,8 @@ function columns() {
   return cols;
 }
 
+let loaded = false;
+
 function emptyNote() {
   const p = el("span", null, "No host has reported and none is waiting to.");
   if (isAdmin) {
@@ -102,6 +104,7 @@ async function refresh() {
     const [hosts, waiting] = await Promise.all([
       getAll("/api/v2/hosts"), get("/api/v2/waiting-hosts")]);
     rows = hostRows(hosts, waiting.items);
+    if (!loaded) { loaded = true; table.setEmpty(emptyNote()); }
     draw();
     footer.textContent = refreshedText();
   } catch (e) {
@@ -115,8 +118,9 @@ async function start() {
   try {
     isAdmin = !!(await whoami()).is_admin;
   } catch (_) { /* a viewer view is the safe default */ }
+  // Until the first answer the table says it is loading, never that there are no hosts.
   table = sortableTable({ columns: columns(), rows: [], defaultSize: 25,
-                          empty: emptyNote(), caption: "Hosts" });
+                          empty: "Loading hosts…", caption: "Hosts" });
   document.getElementById("hosts").append(table.root);
   search.addEventListener("input", draw);
   poller(refresh, { interval: 15000, domains: ["hosts"] });

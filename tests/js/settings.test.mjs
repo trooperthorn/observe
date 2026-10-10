@@ -3,8 +3,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  allowlistChip, allowlistFromDraft, diffAllowlist, draftFromAllowlist, hostFromPath, settingsHref,
-  shouldPoll, taskChip,
+  agentText, allowlistChip, allowlistFromDraft, dataPathText, diffAllowlist, draftFromAllowlist,
+  hostFromPath, settingsHref, shouldPoll, taskChip,
 } from "../../observe/static/js/settings-logic.js";
 
 const saved = () => ({
@@ -75,4 +75,20 @@ test("polling goes on only while something can still change", () => {
   assert.ok(shouldPoll({ task: null }, true));
   assert.ok(shouldPoll({ task: null, enrolment: { token_state: "valid" } }, false));
   assert.ok(!shouldPoll({ task: null, enrolment: { token_state: "used" } }, false));
+});
+
+test("a host Observe polls says so instead of a fake agent version and a bare no keys", () => {
+  const ha = { enrolled: false, agent_version: "observe-ha-host",
+    agent_label: "polled by Observe (Home Assistant monitor)", active_keys: 0,
+    polled_by: [{ monitor: "HA host", kind: "Home Assistant", credential: "ha_reader" }] };
+  assert.equal(agentText(ha), "polled by Observe (Home Assistant monitor)");
+  assert.match(dataPathText(ha), /^Polled by Observe: Home Assistant monitor HA host \(credential ha_reader\)\./);
+  assert.match(dataPathText(ha), /no ingest key is needed/);
+  // A pushed agent keeps its version, and has no polling line.
+  const nas = { enrolled: true, agent: true, agent_version: "0.9.0", agent_label: "", polled_by: [] };
+  assert.equal(agentText(nas), "hostwatch 0.9.0");
+  assert.equal(dataPathText(nas), "");
+  assert.equal(agentText({ enrolled: true, agent: true }), "hostwatch, not reporting yet");
+  assert.equal(agentText({ enrolled: true, agent: false }), "not chosen");
+  assert.equal(agentText({ enrolled: false }), "unknown");
 });

@@ -124,3 +124,24 @@ export function shouldPoll(settings, watchingInstall) {
   const task = settings && settings.task;
   return !!task && (task.state === "waiting" || task.state === "fetched");
 }
+
+// The Agent row of the identity list. A host Observe polls itself has a producer marker in
+// agent_version ("observe-ha-host"), not a hostwatch version, so the server's agent_label is
+// shown instead (observe/producers.py).
+export function agentText(s) {
+  if (s.agent_label) return s.agent_label;
+  if (s.agent_version) return `hostwatch ${s.agent_version}`;
+  if (s.enrolled) return s.agent ? "hostwatch, not reporting yet" : "not chosen";
+  return "unknown";
+}
+
+// How the host's data arrives when Observe polls it: the monitor and the name of the credential
+// it reads the device with. Such a host pushes nothing, so it needs no ingest key. "" when no
+// monitor polls the host.
+export function dataPathText(s) {
+  const polled = s.polled_by || [];
+  if (!polled.length) return "";
+  const each = polled.map((p) => `${p.kind} monitor ${p.monitor} (credential ${p.credential})`);
+  return `Polled by Observe: ${each.join("; ")}. Observe reads the device and stores the ` +
+    "readings itself, so no ingest key is needed.";
+}

@@ -101,3 +101,10 @@ export function pullAgeText(seconds) {
   if (s < 172800) return `${Math.round(s / 3600)} h ago`;
   return `${Math.round(s / 86400)} d ago`;
 }
+
+// Why "Update all eligible agents" is not offered, next to the disabled button.
+export function updateAllNote(controlLoaded, eligible) {
+  if (!controlLoaded) return "needs the control plugin";
+  if (!eligible) return "no host can take an agent update now; see each row for why";
+  return "";
+}

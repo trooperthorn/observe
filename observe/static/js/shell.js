@@ -4,7 +4,7 @@
 // Admin entries are left out for viewers. That is only tidiness: the server still decides.
 import { el } from "/static/js/dom.js";
 import { applyStoredTheme, currentTheme, cycleTheme } from "/static/js/theme.js";
-import { api, get, getAll, poller } from "/static/js/api.js";
+import { api, get, getAll, poller, whoami } from "/static/js/api.js";
 import { statusChip } from "/static/js/chips.js";
 import { stateInfo } from "/static/js/chip-states.js";
 import { monitorCounts, summaryLabel } from "/static/js/summary-logic.js";
@@ -195,12 +195,15 @@ export async function mountShell() {
   header.append(themeButton());
   renderNav(nav, visibleItems(cachedAdmin(), null), window.location.pathname);
   mountSummary();
-  const [session, plugins] = await Promise.all([read("/api/v2/session"), read("/api/v2/plugins")]);
-  if (session && session.expired) { toLogin(); return; }
-  const isAdmin = !!(session && session.is_admin);
+  // The session comes from whoami(), the one read every page module shares, so a page load asks
+  // for it once, not once for the shell and once for the page.
+  const session = whoami().catch((err) => (err && err.status === 401 ? { expired: true } : null));
+  const [me, plugins] = await Promise.all([session, read("/api/v2/plugins")]);
+  if (me && me.expired) { toLogin(); return; }
+  const isAdmin = !!(me && me.is_admin);
   rememberAdmin(isAdmin);
-  if (session && typeof session.username === "string") {
-    header.append(el("span", "shell-user", session.username), signOutButton());
+  if (me && typeof me.username === "string") {
+    header.append(el("span", "shell-user", me.username), signOutButton());
   }
   renderNav(nav, visibleItems(isAdmin, pluginNav(plugins)), window.location.pathname);
 }

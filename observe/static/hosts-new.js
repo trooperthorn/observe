@@ -82,13 +82,25 @@ function onHash() { show(stepFromHash(window.location.hash, created), true); }
 // ---- step 1: host ----
 function platform() { return document.querySelector('input[name="platform"]:checked').value; }
 
+// The name check's answer: an error is styled as one and marks the field aria-invalid, so it is
+// announced (the status line is aria-live and named by the field's aria-describedby).
+function nameStatus(text, bad) {
+  const out = $("name-status");
+  out.textContent = text;
+  out.classList.toggle("field-error", bad);
+  if (bad) $("host-name").setAttribute("aria-invalid", "true");
+  else $("host-name").removeAttribute("aria-invalid");
+}
+
 function checkName() {
   const name = $("host-name").value.trim();
-  const out = $("name-status");
-  if (!name) { out.textContent = ""; return false; }
-  if (!validName(name)) { out.textContent = "That name is not valid."; return false; }
-  if (known.has(name)) { out.textContent = "A host with this name already exists."; return false; }
-  out.textContent = "That name is free.";
+  if (!name) { nameStatus("", false); return false; }
+  if (!validName(name)) {
+    nameStatus("That name is not valid: use lower-case letters, digits and dashes, at most 63.", true);
+    return false;
+  }
+  if (known.has(name)) { nameStatus("A host with this name already exists.", true); return false; }
+  nameStatus("That name is free.", false);
   return true;
 }
 

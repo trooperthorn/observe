@@ -40,8 +40,8 @@ from . import __version__
 from . import api as apimod
 from . import audit
 from . import auth as authmod
-from . import (enrol, hosttasks, ignored, layout, recheck_settings, retention, rules, scripts,
-               taskscripts, tiers, updates)
+from . import (enrol, hosttasks, ignored, layout, producers, recheck_settings, retention, rules,
+               scripts, taskscripts, tiers, updates)
 from .alerts import Alerter
 from .config import Config
 from .infra import InfraError, InfraService
@@ -946,6 +946,22 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             touches=("admin", "audit"))
         return JSONResponse({"host": host, "ignored": got["new"]})
 
+    @app.post("/api/hosts/{host}/sources/{source}/forget", include_in_schema=False)
+    async def forget_source(
+            host: str, source: str, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Accept that a source which disappeared from a host is gone for good, so it stops
+        holding the host Down (observe/hostview.py). Admin session and CSRF; audited. 404 when
+        the source is not one that disappeared."""
+        remote = request.client.host if request.client else ""
+        done = await store.forget_source(host, source, actor=sess.username, remote=remote,
+                                         path="/api/hosts/[host]/sources/[source]/forget",
+                                         now=auth_clock())
+        if not done:
+            return JSONResponse({"detail": "no disappeared source by that name on this host"},
+                                status_code=404)
+        return JSONResponse({"host": host, "source": source, "forgotten": True})
+
     @app.put("/api/admin/rules", include_in_schema=False)
     async def put_rules(
             request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
@@ -1286,13 +1302,18 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                 "AND revoked_at IS NULL GROUP BY scope", (host,)):
             by_scope[scope] = n
         active = sum(by_scope.values())
-        if row is None and reporting is None and host not in pushed and not active:
+        # A Home Assistant (mode host) or SNMP monitor polls the host and stores its readings in
+        # process: no push, so no ingest key. The page says so instead of a bare "none".
+        polled = producers.pollers(scheduler.monitors, host)
+        if row is None and reporting is None and host not in pushed and not active and not polled:
             return None
         out: dict[str, Any] = {
             "host": host, "enrolled": row is not None, "in_config": host in pushed,
             "reporting": reporting is not None, "active_keys": active,
             "active_by_scope": by_scope,
             "agent_version": reporting["agent_version"] if reporting else "",
+            "agent_label": producers.agent_label(reporting["agent_version"] if reporting else ""),
+            "polled_by": polled,
             "control_ready": bool(control_public_key()), "ttl_s": enrol.TOKEN_TTL_S,
             "platform": "", "platform_label": "", "agent": False, "control": False,
             "created": None, "created_by": "", "installed": False, "allowlist": None,

@@ -9,6 +9,7 @@ so none is ever written into the repository.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import threading
@@ -91,6 +92,15 @@ def test_map_views_and_unifi_footer_in_a_browser(served):
         assert page.locator("#shell-header #site").count() == 0
         assert page.locator("main#page #footer").count() == 1
         page.wait_for_timeout(600)
+        # No blank band under the heading (R10.9): an empty message line takes no room and the
+        # state summary pill is visible, not light text on the page background.
+        gap = page.evaluate("""() => document.querySelector("main#page > p.note")
+            .getBoundingClientRect().top
+            - document.querySelector("main#page h1").getBoundingClientRect().bottom""")
+        assert gap < 90, gap
+        pill = page.evaluate("""() => getComputedStyle(
+            document.querySelector("#map-summary .pill")).backgroundColor""")
+        assert pill not in ("rgba(0, 0, 0, 0)", "transparent"), pill
         page.screenshot(path=str(out / "map-graph.png"), full_page=True)
         # Select a device from the keyboard, then clear it with the button.
         page.focus("#graphcanvas")
@@ -112,7 +122,12 @@ def test_map_views_and_unifi_footer_in_a_browser(served):
         assert "Gateway" in page.inner_text("#layers .layer-core")
         access = page.inner_text("#layers .layer-access")
         assert all(n in access for n in ("AP hall", "AP office", "AP lab", "AP garden"))
-        assert "UCG Fiber" not in access and "Access point" in access
+        titles = page.locator("#layers .layer-access .node-title").all_inner_texts()
+        assert "UCG Fiber" not in titles and "Access point" in access
+        # Placeholder ports read as words with no state (R10.4), never "to-<mac>".
+        tiers = page.inner_text("#layers")
+        assert "uplink to UCG Fiber" in access and "link to AP garden" in tiers
+        assert "(State unknown)" not in tiers and not re.search(r"to-[0-9a-f]{12}", tiers)
         page.screenshot(path=str(out / "map-tiers.png"), full_page=True)
 
         page.click("button.viewbtn[data-view='table']")

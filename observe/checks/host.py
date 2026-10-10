@@ -35,6 +35,7 @@ from icmplib.exceptions import ICMPLibError
 from .. import ignored, tiers
 from ..config import Config, Thresholds
 from ..otelnames import short_source
+from ..units import value_text
 from .base import Check, CheckResult, Result
 
 GOOD, WARNING, CRITICAL, STALE = "good", "warning", "critical", "stale"
@@ -139,7 +140,8 @@ def grade_components(monitor: Any, samples: list[dict[str, Any]],
             level = grade(s["value"], th)
             if level != GOOD:
                 limit = th.crit if level == CRITICAL else th.warn
-                mark(name, level, f"{s['value']:g}{s['unit']} past {limit:g}")
+                mark(name, level, f"{value_text(s['value'], s['unit'])} past "
+                                  f"{value_text(limit, s['unit'])}")
     for src in monitor.require_sources:
         info = sources.get(src)
         if info is None or not info["available"]:

@@ -203,7 +203,9 @@ def test_the_page_builds_the_five_tiles_from_the_overview_resource():
     assert '"kpi-row five"' in js
     for label in ("Network status", "Internet", "WAN bandwidth", "Wireless clients", "Total clients"):
         assert f'"{label}"' in js, label
-    assert "`site ${o.site_id}`" in js and "`WAN ${o.wan.ip}`" in js
+    assert "siteText(o)" in js and "`WAN ${o.wan.ip}`" in js
+    core = (PKG / "static" / "vlist-core.js").read_text(encoding="utf-8")
+    assert "`site ${o.site_name}`" in core and "`site ${o.site_id}`" in core
     assert "`${o.wired_clients} wired`" in js and "`${o.device_count} network devices`" in js
     # Status words are chips with an icon, never colour alone.
     assert 'statusChip("up", "Online")' in js and 'statusChip("down", "Offline")' in js
@@ -238,6 +240,9 @@ def test_clients_tab_has_the_vlan_and_ssid_filters_and_the_eight_columns():
     assert "vlanOptions(all)" in js and "ssidOptions(all)" in js
     assert "filterClients(all, { q: q.value, state: state.value, vlan: vlan.value, ssid: ssid.value })" in js
     assert '"wireless"' in js  # the subline word
+    # Last seen: a connected client is "Connected now", never its connect time (now - uptime).
+    assert "lastSeenCell(c)" in js and '"Connected now"' in js
+    assert "when(c.connected_at" not in js
     assert "windowFor(scroll.scrollTop" in js  # still virtualised
     assert "const DASH = \"—\"" in js  # the em dash of a classic-only value
 
@@ -286,8 +291,14 @@ def test_wifi_join_section_copies_the_ha_soc_intro_and_builds_one_card_per_ssid(
 def test_every_classic_only_value_degrades_to_a_dash_and_the_note_explains_why():
     js = _js("unifi.js")
     assert "CLASSIC_NOTE" in js and "classic controller account" in js
-    assert "if (!d.classic_configured) notes.push(note(CLASSIC_NOTE))" in js
+    # One "needs the classic account" state, with where it is configured, in place of the
+    # widgets only the classic views fill: above the tabs, and as the whole Wi-Fi tab.
+    assert 'classicNeeded("Classic controller account not set up")' in js
+    assert 'classicNeeded("Wi-Fi Join Diagnostics")' in js
+    assert "plugin_settings.unifi.classic_credential" in js
+    assert "Setting up UniFi and Home Assistant sources" in js
     assert "if (!d.classic_configured) {" in js  # the Wi-Fi section
+    assert "This list needs the classic controller account" not in js  # no placeholder text
     assert "status.classic_configured" in js
     assert js.count("dash()") >= 6
 

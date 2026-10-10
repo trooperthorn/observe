@@ -3,7 +3,7 @@
 // same cases through node when it is installed.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { windowFor, filterClients, attachment, clientState, markClientsStale, markCamerasStale, vlanOptions, ssidOptions, uptimeSeconds, defaultSsid, permittedApsText, carryingText, bandText } from "../../plugins/unifi/observe_unifi/static/vlist-core.js";
+import { windowFor, filterClients, attachment, clientState, markClientsStale, markCamerasStale, vlanOptions, ssidOptions, uptimeSeconds, defaultSsid, permittedApsText, carryingText, bandText, lastSeenCell, siteText, internetTile, ssidBarRows } from "../../plugins/unifi/observe_unifi/static/vlist-core.js";
 
 const rows = Array.from({ length: 500 }, (_, i) => ({
   name: `c${i}`, mac: `m${i}`, ip: "", ssid: "", uplink_name: i % 2 ? "AP" : "SW",
@@ -95,4 +95,25 @@ test("the Wi-Fi words: default SSID, permitted and carrying access points, bands
   assert.equal(bandText("2g"), "2.4 GHz");
   assert.equal(bandText("5g"), "5 GHz");
   assert.equal(bandText(""), "Not reported");
+});
+
+test("a connected client is seen now; its connect time is never shown as last seen", () => {
+  // The reported row: connected, connected_at = now minus uptime, shown under "Last seen".
+  assert.deepEqual(lastSeenCell({ connected: true, connected_at: 900, last_seen: null }), { now: true });
+  assert.deepEqual(lastSeenCell({ connected: true, stale: true, connected_at: 900, last_seen: 950 }), { at: 950 });
+  assert.deepEqual(lastSeenCell({ connected: false, last_seen: 800 }), { at: 800 });
+  assert.deepEqual(lastSeenCell({ connected: null }), { at: null });
+});
+
+test("the overview names the site, hides an unknown Internet tile and unnamed SSID bars", () => {
+  assert.equal(siteText({ site_id: "88f7af54-98f8-306a-a1c7-c9349722b1f6", site_name: "Default" }), "site Default");
+  assert.equal(siteText({ site_id: "abc", site_name: "" }), "site abc");
+  assert.equal(siteText({ site_id: null }), "no site polled yet");
+  assert.equal(internetTile({ internet_up: null }), null);
+  assert.deepEqual(internetTile({ internet_up: true, internet_source: "wan_traffic" }), { up: true, inferred: true });
+  assert.deepEqual(internetTile({ internet_up: false, internet_source: "console" }), { up: false, inferred: false });
+  assert.deepEqual(ssidBarRows({ clients_per_ssid: [] }), []);
+  assert.deepEqual(ssidBarRows({ clients_per_ssid: [{ ssid: "", count: 3 }, { ssid: "IoT", count: 2 }] }),
+    [{ ssid: "IoT", count: 2 }]);
+  assert.deepEqual(ssidBarRows({}), []);
 });
