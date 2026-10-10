@@ -702,7 +702,7 @@ retention; `GET /api/v2/hosts` and `GET /api/v2/hosts/{host}` use the same bound
 Warning or Critical, and returns OK, WARN or FAIL for the worst one. Those go
 through `MonitorState.observe` like any other result, so `failures_to_down`
 confirmation applies before a host is DOWN or pages. No batch within
-`stale_after` seconds (default three intervals), or none ever, is FAIL. A component whose newest sample is older than `stale_after` is graded stale and is also FAIL, so an outbox replay or a lagging agent clock can not read as healthy. The dashboard and host page refresh timers skip a tick while the previous refresh is still running.
+`stale_after` seconds (default: the larger of three intervals and 2.5 times the host's effective Availability tier rate), or none ever, is FAIL. A component whose newest sample is older than the window of its polling tier (2.5 times the host's effective rate for that tier, never less than the silence limit; `observe/tiers.py`) is graded stale and is also FAIL, so an outbox replay or a lagging agent clock can not read as healthy. The dashboard and host page refresh timers skip a tick while the previous refresh is still running.
 Because the result is an ordinary check result, `group`, `depends_on`,
 `critical`, rollup, alerts and `/metrics` work unchanged, and `/metrics` adds
 `observe_host_age_seconds` and `observe_host_component_state`. The grouped
@@ -864,8 +864,12 @@ has no such hardware) or `not_reported` (no source for it ever reported). Stale
 and unavailable make the section at least Warning; absent and not_reported claim
 nothing and stay Good. A reading with no value is a Warning and never zero. A
 host with no batch inside its stale window is Critical, matching the monitor.
-The stale window is the monitor's `stale_after`, or three default intervals for
-a host that is not listed. The routes need a login session and ignore basic auth.
+The host's silence limit is the monitor's `stale_after`, else the larger of three
+intervals (the default interval for a host that is not listed) and 2.5 times its
+Availability tier rate. A reading is stale after 2.5 times the effective rate of
+its collector's tier (device metrics, storage health or SMART), never sooner than
+the silence limit; readings Observe polls itself (SNMP, Home Assistant) keep the
+silence limit. Tier rates are re-read when the admin change counter moves. The routes need a login session and ignore basic auth.
 Views are read-only. Device-supplied text is rendered as text only, as in the
 rest of the dashboard. The page has no actions section yet; phase 2 adds one.
 

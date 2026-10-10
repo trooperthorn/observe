@@ -12,9 +12,12 @@ points it grades; its name in the result is the short collector id and the metri
 names collector ids, as the agent reports them in `observe.source`.
 
 Mapping: Critical is FAIL (DOWN once confirmed), Warning is WARN, Good is OK.
-No batch within `stale_after` seconds is FAIL, the same as an unreachable host.
-A component whose newest sample is older than `stale_after` is stale, also FAIL, even
-when a recent batch arrived (an outbox replay or a lagging agent clock).
+No batch within the silence limit is FAIL, the same as an unreachable host. The limit is the
+monitor's `stale_after` when set, else the larger of three monitor intervals and the window of the
+host's effective availability tier (observe/tiers.py). A component whose newest sample is older
+than the window of its own tier is stale, also FAIL, even when a recent batch arrived (an outbox
+replay or a lagging agent clock). The tier rates are read on every probe, so a change in the
+console applies without a restart.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from typing import Any
 from icmplib import async_ping
 from icmplib.exceptions import ICMPLibError
 
+from .. import tiers
 from ..config import Config, Thresholds
 from ..otelnames import short_source
 from .base import Check, CheckResult, Result
@@ -112,8 +116,14 @@ class PushedHostCheck(Check):
         self.store = store
         self.clock = clock
         self.reach = reach
-        interval = config.effective(monitor, "interval")
-        self.stale_after: float = monitor.stale_after or 3 * interval
+        self.base_stale: float = 3 * config.effective(monitor, "interval")
+        self.stale_after: float = monitor.stale_after or self.base_stale
+
+    async def staleness(self) -> tiers.Staleness:
+        """The stale windows from the host's effective tier rates, read fresh each probe."""
+        glob, hosts = await tiers.load_rates(self.store)
+        return tiers.staleness(self.monitor.host, glob, hosts, base=self.base_stale,
+                               explicit=self.monitor.stale_after)
 
     def thresholds(self) -> Thresholds | None:
         return None  # the component thresholds are applied here, not to one value
@@ -144,8 +154,10 @@ class PushedHostCheck(Check):
     async def probe(self) -> CheckResult:
         m = self.monitor
         now = self.clock()
+        windows = await self.staleness()
+        self.stale_after = windows.batch
         data = await self.store.latest_host(
-            m.host, window=max(self.stale_after, LATEST_WINDOW_S), now=now,
+            m.host, window=max(windows.longest, LATEST_WINDOW_S), now=now,
             series=tuple((c.source, c.metric) for c in m.components))
         if data is None:
             return CheckResult.fail(f"no batch ever received from {m.host}",
@@ -168,9 +180,10 @@ class PushedHostCheck(Check):
             for s in data["samples"]:
                 if s["source"] != th.source or s["metric"] != th.metric or s["value"] is None:
                     continue  # a null value is unavailable, never zero
-                if now - s["ts"] > self.stale_after:
+                window = windows.for_scope(s["source"])
+                if now - s["ts"] > window:
                     mark(name, STALE, f"last reading {now - s['ts']:.0f}s old "
-                                      f"(limit {self.stale_after:.0f}s)")
+                                      f"(limit {window:.0f}s)")
                     continue
                 level = grade(s["value"], th)
                 if level != GOOD:

@@ -6,7 +6,9 @@ reading is graded Good, Warning or Critical here. Nothing is guessed:
 
 - A reading with no value this cycle is a Warning, never zero.
 - A reading, a source, or a whole host that has not reported within the stale
-  window is marked stale and is at least a Warning. A host that has gone silent
+  window is marked stale and is at least a Warning. A reading's window comes from
+  the polling tier its collector runs in (observe/tiers.py), so a reading polled
+  every 300 seconds is not stale at 286 seconds. A host that has gone silent
   is Critical, the same as the pushed_host check.
 - A source the agent says does not exist on the host (state "absent") and a
   source nobody ever reported (state "not_reported") claim nothing, so they do
@@ -29,6 +31,7 @@ from typing import Any
 
 from .checks.host import CRITICAL, GOOD, WARNING, grade
 from .config import Thresholds
+from .tiers import Staleness
 from .otelnames import HA_SOC_PREFIX, RETIRED_SOURCES, collector_scope, short_source
 from .store import ABSENT_REASON
 
@@ -358,8 +361,13 @@ def _sources_of(section: str) -> list[str]:
 RETIRED_SNMP_SOURCE = "snmp"  # with the old Home Assistant ids, otelnames.RETIRED_SOURCES
 
 
+def _windows(stale_after: float | Staleness) -> Staleness:
+    return stale_after if isinstance(stale_after, Staleness) else Staleness(stale_after)
+
+
 def source_views(sources: dict[str, dict[str, Any]], now: float,
-                 stale_after: float) -> list[dict[str, Any]]:
+                 stale_after: float | Staleness) -> list[dict[str, Any]]:
+    windows = _windows(stale_after)
     out = []
     for name in sorted(sources):
         if name in RETIRED_SOURCES:
@@ -367,19 +375,20 @@ def source_views(sources: dict[str, dict[str, Any]], now: float,
         info = sources[name]
         absent = not info["available"] and info["reason"] == ABSENT_REASON
         age = max(0.0, now - info["updated"])
+        limit = windows.for_source(name)
         out.append({"source": name, "available": info["available"], "present": not absent,
                     "reason": info["reason"], "updated": info["updated"], "age_seconds": age,
-                    "stale": age > stale_after,
-                    "status": GOOD if absent or (info["available"] and age <= stale_after)
+                    "stale": age > limit,
+                    "status": GOOD if absent or (info["available"] and age <= limit)
                     else WARNING})
     return out
 
 
 def _item(rule: Grader, override: Thresholds | None, s: dict[str, Any], now: float,
-          stale_after: float, src_info: dict[str, Any] | None,
+          windows: Staleness, src_info: dict[str, Any] | None,
           host_stale: bool) -> dict[str, Any]:
     age = max(0.0, now - s["ts"])
-    stale = host_stale or age > stale_after
+    stale = host_stale or age > windows.for_scope(s["source"])
     labels = s["labels"]
     reasons: list[str] = []
     if s["value"] is None:
@@ -404,7 +413,7 @@ def _item(rule: Grader, override: Thresholds | None, s: dict[str, Any], now: flo
 
 
 def _section(name: str, samples: list[dict[str, Any]], sources: dict[str, dict[str, Any]],
-             overrides: dict[tuple[str, str], Thresholds], now: float, stale_after: float,
+             overrides: dict[tuple[str, str], Thresholds], now: float, windows: Staleness,
              host_stale: bool) -> dict[str, Any]:
     rules = RULES[name]
     items = []
@@ -415,7 +424,7 @@ def _section(name: str, samples: list[dict[str, Any]], sources: dict[str, dict[s
             continue
         info = sources.get(short_source(s["source"]))
         items.append(_item(rule, overrides.get((s["source"], s["metric"])), s, now,
-                           stale_after, info, host_stale))
+                           windows, info, host_stale))
     names = _sources_of(name)
     infos = {n: sources[n] for n in names if n in sources}
     bad = {n: i for n, i in infos.items()
@@ -484,12 +493,14 @@ def _alerts(events: list[dict[str, Any]], now: float) -> dict[str, Any]:
 
 def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
                     sources: dict[str, dict[str, Any]], events: list[dict[str, Any]],
-                    now: float, stale_after: float, monitor: Any | None,
+                    now: float, stale_after: float | Staleness, monitor: Any | None,
                     overrides: dict[tuple[str, str], Thresholds],
                     monitor_state: dict[str, Any] | None) -> dict[str, Any]:
     """The JSON document for one host. `row` is the hosts table row (or a stub for a
     monitor that has never heard from its host), `data` the output of Store.latest_host
-    with since=0."""
+    with since=0. `stale_after` is the host's silence limit, or its per-tier windows."""
+    windows = _windows(stale_after)
+    stale_after = windows.batch
     heard = data is not None
     age = max(0.0, now - row["last_seen"]) if heard else None
     host_stale = (not heard) or (age or 0.0) > stale_after
@@ -506,11 +517,11 @@ def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
                  else bool(row["clean_shutdown"])},
     }
     for name in SECTIONS:
-        out[name] = _section(name, samples, sources, overrides, now, stale_after, host_stale)
+        out[name] = _section(name, samples, sources, overrides, now, windows, host_stale)
     _memory_extra(out["memory"], overrides)
     out["alerts"] = _alerts(events, now)
     out["events"] = events
-    out["sources"] = source_views(sources, now, stale_after)
+    out["sources"] = source_views(sources, now, windows)
     levels = [out[n]["status"] for n in (*SECTIONS, "alerts")]
     if host_stale:
         out["status"] = CRITICAL

@@ -5714,7 +5714,8 @@
         "x-change-domains": [
           "hosts",
           "metrics",
-          "events"
+          "events",
+          "admin"
         ],
         "x-rate-cost": 1.0,
         "x-roles": [
@@ -6075,7 +6076,8 @@
         "x-change-domains": [
           "hosts",
           "metrics",
-          "events"
+          "events",
+          "admin"
         ],
         "x-rate-cost": 1.0,
         "x-roles": [

@@ -12,8 +12,10 @@ host the effective rate is its override, then the saved global value, then the d
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
+from .otelnames import COLLECTOR_PREFIX
 from .storage.base import Conn
 
 PATH = "/api/admin/tiers"
@@ -121,6 +123,88 @@ def effective(host: str, glob: dict[str, float],
     """The rates one host is told: its override, then the saved global value, then the default."""
     own = hosts.get(host, {})
     return {n: own.get(n, glob.get(n, DEFAULTS[n])) for n in TIERS}
+
+
+# How many intervals a reading of a tier may miss before it reads as stale, and the shortest window
+# any tier gets, so a fast tier is not marked stale by ordinary batch jitter.
+STALE_FACTOR = 2.5
+STALE_FLOOR_S = 90.0
+
+# The tier a hostwatch collector polls in (section 10.1). A collector not listed here is in the
+# device metrics tier, which is what every collector used before the agent had tiers.
+SOURCE_TIERS: dict[str, str] = {
+    "mdraid": "storage_health", "zfs": "storage_health", "truenas": "storage_health",
+    "win_storage": "storage_health",
+    "scrutiny": "smart", "win_smartctl": "smart",
+}
+
+READING_TIERS = ("device_metrics", "storage_health", "smart")
+
+
+def tier_of(scope: str) -> str | None:
+    """The tier of a reading by its scope, or None for a scope the agent's tiers do not govern
+    (Observe's own pollers, the Home Assistant push), whose readings keep the host's window."""
+    if not scope.startswith(COLLECTOR_PREFIX):
+        return None
+    return SOURCE_TIERS.get(scope[len(COLLECTOR_PREFIX):], "device_metrics")
+
+
+def stale_window(interval: float) -> float:
+    """How long a reading polled every `interval` seconds stays current."""
+    return max(STALE_FLOOR_S, STALE_FACTOR * interval)
+
+
+@dataclass(frozen=True)
+class Staleness:
+    """The stale windows of one host. `batch` is how long the host may stay silent; a reading of
+    a tier stays current for that tier's window, never less than `batch`, since no reading can
+    arrive more often than its batch."""
+
+    batch: float
+    tiers: dict[str, float] = field(default_factory=dict)
+
+    def for_scope(self, scope: str) -> float:
+        tier = tier_of(scope)
+        return max(self.batch, self.tiers.get(tier, 0.0)) if tier is not None else self.batch
+
+    def for_source(self, source: str) -> float:
+        """The window of a source row, named by its short collector id."""
+        return self.for_scope(source if "." in source else COLLECTOR_PREFIX + source)
+
+    @property
+    def longest(self) -> float:
+        return max([self.batch, *self.tiers.values()])
+
+
+def staleness(host: str, glob: dict[str, float], hosts: dict[str, dict[str, float]], *,
+              base: float, explicit: float | None = None) -> Staleness:
+    """The stale windows of a pushed host from its effective rates. `base` is the window the
+    host's monitor interval gives (three intervals); the silence limit is the larger of that and
+    the availability tier's window, unless the monitor sets `stale_after` itself."""
+    rates = effective(host, glob, hosts)
+    batch = explicit if explicit is not None else max(base, stale_window(rates["availability"]))
+    return Staleness(batch, {n: stale_window(rates[n]) for n in READING_TIERS})
+
+
+async def load_rates(store: Any) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
+    """The saved rates. They are kept on the store until the `admin` change counter moves, which
+    every save bumps, so a change in the console applies on the next check without a restart and
+    an unchanged page reads nothing. A store without a storage backend (a test double) has only
+    the defaults."""
+    storage = getattr(store, "storage", None)
+    if storage is None:
+        return {}, {}
+    try:
+        seq = storage.change_seqs().get("admin")
+    except (AttributeError, NotImplementedError):
+        seq = None
+    kept = getattr(store, "_tier_rates", None)
+    if seq is not None and kept is not None and kept[0] == seq:
+        return kept[1]
+    rates = await storage.read(load)
+    if seq is not None:
+        store._tier_rates = (seq, rates)
+    return rates
 
 
 def describe(glob: dict[str, float], hosts: dict[str, dict[str, float]],
