@@ -447,3 +447,13 @@ def test_new_files_use_lf_and_no_em_dashes_or_model_names():
         assert b"\r" not in raw and chr(0x2014) not in text, rel
         names = ("cla" + "ude", "op" + "us", "son" + "net", "hai" + "ku")
         assert not any(w in text.lower() for w in names), rel
+
+
+def test_an_allowlist_without_updates_is_not_offered_agent_update():
+    """Round 2 R1 follow-up: the control plugin now refuses agent.update when the host's saved
+    allowlist has update off, so the Updates page does not offer it either."""
+    host = {"host": "mediain-svr", "platform": "linux", "agent_version": "0.2.0"}
+    off = agent_row(host, "linux", True, NOW - 30, NOW, allows_update=False)
+    assert off["eligible"] is False and off["reason"] == updates.NOT_ALLOWED
+    assert agent_row(host, "linux", True, NOW - 30, NOW, allows_update=True)["eligible"] is True
+    assert agent_row(host, "linux", True, NOW - 30, NOW)["eligible"] is True  # not enrolled

@@ -336,10 +336,16 @@ def supports_update(agent_version: str) -> bool:
         return False
 
 
+NOT_ALLOWED = "agent updates are off in this host's allowlist (host settings)"
+
+
 def agent_row(host: dict[str, Any], enrolled: str, has_key: bool, last_pull: float | None,
-              now: float) -> dict[str, Any]:
+              now: float, allows_update: bool | None = None) -> dict[str, Any]:
     """What the Agents card shows for one host, from the hosts row, the enrolment platform
-    and the host's control key. `eligible` means the Update agent button is offered."""
+    and the host's control key. `eligible` means the Update agent button is offered.
+    `allows_update` is the saved allowlist's `update` flag of a host enrolled with control (None
+    for any other host); the control plugin refuses agent.update when it is off, so the button
+    is not offered then either."""
     platform = enrolled or str(host.get("platform") or "")
     reason = ""
     if platform in INSTALL_ONLY:
@@ -352,6 +358,8 @@ def agent_row(host: dict[str, Any], enrolled: str, has_key: bool, last_pull: flo
         reason = "the control daemon has never pulled"
     elif not supports_update(str(host.get("agent_version") or "")):
         reason = TOO_OLD
+    elif allows_update is False:
+        reason = NOT_ALLOWED
     return {"host": host["host"], "platform": platform, "agent_version": host.get("agent_version") or "",
             "control": has_key, "control_pulled": last_pull is not None,
             "last_pull": last_pull,
@@ -362,7 +370,16 @@ def agent_row(host: dict[str, Any], enrolled: str, has_key: bool, last_pull: flo
 async def agent_rows(store: Any, now: float) -> list[dict[str, Any]]:
     """One row per host that has pushed, with its enrolment platform and control key state."""
     hosts = await store.host_rows()
-    platforms = {r[0]: r[1] for r in await store.fetch("SELECT host, platform FROM enrolments")}
+    platforms: dict[str, str] = {}
+    allows: dict[str, bool] = {}
+    for host, platform, control, allowlist in await store.fetch(
+            "SELECT host, platform, control, allowlist FROM enrolments"):
+        platforms[host] = platform
+        if control:
+            try:
+                allows[host] = bool(json.loads(allowlist or "{}").get("update"))
+            except (ValueError, AttributeError):
+                allows[host] = False
     keys: dict[str, tuple[bool, float | None]] = {}
     for host, last_used in await store.fetch(
             "SELECT host, MAX(last_used) FROM ingest_keys WHERE scope='wpc' AND revoked_at IS NULL "
@@ -371,7 +388,8 @@ async def agent_rows(store: Any, now: float) -> list[dict[str, Any]]:
     out = []
     for row in hosts:
         has_key, last = keys.get(row["host"], (False, None))
-        out.append(agent_row(row, platforms.get(row["host"], ""), has_key, last, now))
+        out.append(agent_row(row, platforms.get(row["host"], ""), has_key, last, now,
+                             allows.get(row["host"])))
     return out
 
 
