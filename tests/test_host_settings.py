@@ -130,7 +130,7 @@ def test_save_before_the_install_is_run_makes_no_command_and_lands_in_the_instal
     assert env.rows("SELECT COUNT(*) FROM host_tasks") == [(0,)]
     env.clock.now += 10
     script = run_install(env, token).text
-    assert "'headers = [\"fan1\", \"fan9\"]'" in script and "min_duty_floor = 20" in script
+    assert "'headers = [\"pwm1\", \"pwm9\"]'" in script and "min_duty_floor = 20" in script
     assert "fan2" not in script and "docker:scrutiny" not in script
     # The install wrote the saved list, so the status moves on once the host has pulled.
     assert settings(env).json()["allowlist_status"]["state"] == "written"
@@ -225,7 +225,7 @@ def test_fetching_the_update_command_serves_a_guarded_script_once(env, tmp_path)
     assert text.startswith("#!/bin/sh\n# Observe settings update for nas01 (Linux server)")
     check_syntax(text, tmp_path)
     assert "HOST_NAME='nas01'" in text and "OBSERVE_MACHINE_ID='0123456789abcdef0123456789abcdef'" in text
-    assert "OBSERVE_ADDRS='192.0.2.50'" in text and "'headers = [\"fan1\", \"fan9\"]'" in text
+    assert "OBSERVE_ADDRS='192.0.2.50'" in text and "'headers = [\"pwm1\", \"pwm9\"]'" in text
     assert "wpi_" not in text and "wpc_" not in text
     again = env.client.get(f"/t/{token}")
     assert again.status_code == 410 and "wps_" not in again.text
@@ -375,7 +375,7 @@ def test_reissue_revokes_the_old_token_and_keys_and_makes_a_new_command(env):
     assert fresh.status_code == 200
     new_keys = secrets_of(fresh.text)
     assert new_keys["AGENT_KEY"] != keys["AGENT_KEY"]
-    assert "'headers = [\"fan1\", \"fan9\"]'" in fresh.text  # the saved allowlist, not the first
+    assert "'headers = [\"pwm1\", \"pwm9\"]'" in fresh.text  # the saved allowlist, not the first
     assert asyncio.run(verify_key(env.store, new_keys["AGENT_KEY"], "nas01"))
     assert env.client.get("/i/" + token).status_code == 410
     assert "enrol_reissued" in audit_kinds(env)

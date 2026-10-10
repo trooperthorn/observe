@@ -21,8 +21,8 @@ from observe import audit
 from observe.updates import agent_rows
 from observe.plugins import KeyScope, Migration, PluginBase, PluginError, PluginRouter
 
-from .actions import COMPONENTS, capabilities, validate
-from .api import register as register_resources
+from .actions import validate
+from .api import control_caps, register as register_resources
 from .keys import SCOPE
 from .queue import (MAX_HOST, MIGRATIONS, REBOOT, UPDATE, Limits, QueueError, cancel_command,
                     enqueue_command, pull_commands, record_result)
@@ -156,7 +156,11 @@ def build_admin_router(plugin: "ControlPlugin") -> APIRouter:
         if body.action == REBOOT and body.confirm_host != body.host:
             return await refuse(400, "type the host name exactly to confirm a reboot")
         try:
-            params = validate(body.action, body.params, capabilities(data["samples"]))
+            # The same answer the control form is built from, so a request the form would not
+            # make (no daemon, a header or service outside the allowlist, a duty under its
+            # floor, another controller) is refused here too.
+            caps = await control_caps(store, body.host, data)
+            params = validate(body.action, body.params, caps)
             made = await enqueue_command(store, plugin.signing_key, plugin.limits(), body.host,
                                          body.action, params, actor, _now(request))
         except QueueError as err:

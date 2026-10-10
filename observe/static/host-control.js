@@ -8,6 +8,10 @@ import { confirmDialog, typedConfirm } from "/static/js/dialog.js";
 import { toast } from "/static/js/toast.js";
 import { updateResultText } from "/static/js/updates-logic.js";
 import { formatWhen } from "/static/js/format.js";
+import {
+  clampDuty, componentChoices, controlShown, controllerChoices, defaultDuty, floorOf, floorText,
+  formActions, headerChoices, serviceChoices,
+} from "/static/js/control-logic.js";
 
 const ctlBox = document.getElementById("control");
 const ctlHost = (location.pathname.startsWith("/hosts/")
@@ -68,30 +72,53 @@ function selectOf(values) {
   return s;
 }
 
+// The inputs of one action, built from the capabilities answer (js/control-logic.js): the
+// host's own controller, the allowlisted headers and services as drop-downs, and a minimum duty
+// that cannot go under the header's floor.
 function paramInputs(action) {
   const inputs = {};
   const box = cel("div", "ctl-params");
-  const headers = ctlCaps.capabilities.headers;
   if (action === "fan.set_floor" || action === "fan.set_mode") {
-    inputs.controller = selectOf(ctlCaps.controllers);
+    inputs.controller = selectOf(controllerChoices(ctlCaps));
     box.append(field("Controller", inputs.controller));
   }
   if (action === "fan.set_floor") {
-    inputs.header = headers ? selectOf(headers) : cel("input");
-    if (!headers) inputs.header.placeholder = "pwm2";
+    const headers = headerChoices(ctlCaps);
+    if (headers) {
+      inputs.header = selectOf(headers.map((h) => h.value));
+      headers.forEach((h, i) => { inputs.header.options[i].textContent = h.label; });
+    } else {
+      inputs.header = cel("input");
+      inputs.header.placeholder = "header name";
+    }
     inputs.min_duty = cel("input");
-    inputs.min_duty.type = "number"; inputs.min_duty.min = "0"; inputs.min_duty.max = "100";
-    inputs.min_duty.value = "20";
-    box.append(field("Header", inputs.header), field("Minimum duty (%)", inputs.min_duty));
+    inputs.min_duty.type = "number"; inputs.min_duty.max = "100"; inputs.min_duty.step = "1";
+    const floorNote = cel("p", "card-sub");
+    const setFloor = () => {
+      const floor = floorOf(headers, inputs.header.value);
+      inputs.min_duty.min = String(floor);
+      inputs.min_duty.dataset.floor = String(floor);
+      inputs.min_duty.value = String(defaultDuty(floor));
+      floorNote.textContent = floorText(floor);
+    };
+    setFloor();
+    inputs.header.addEventListener("change", setFloor);
+    box.append(field("Header", inputs.header), field("Minimum duty (%)", inputs.min_duty),
+      floorNote);
   } else if (action === "fan.set_mode") {
     inputs.mode = selectOf(ctlCaps.modes);
     box.append(field("Mode", inputs.mode));
   } else if (action === "service.restart") {
-    inputs.name = cel("input");
-    inputs.name.placeholder = "hostwatch-agent";
+    const services = serviceChoices(ctlCaps);
+    if (services) {
+      inputs.name = selectOf(services);
+    } else {
+      inputs.name = cel("input");
+      inputs.name.placeholder = "hostwatch-agent";
+    }
     box.append(field("Service name", inputs.name));
   } else if (action === "agent.update") {
-    inputs.component = selectOf(ctlCaps.components || ["agent"]);
+    inputs.component = selectOf(componentChoices(ctlCaps));
     for (const o of inputs.component.options) o.textContent = COMPONENT_TEXT[o.value] || o.value;
     box.append(field("Component", inputs.component));
     box.append(cel("p", "card-sub", "The host pulls the image it was installed with, replaces the agent container with the previous one kept for rollback, and reports the old and new version. The control daemon updates itself only when its allowlist permits it."));
@@ -104,7 +131,10 @@ function paramInputs(action) {
 function readParams(action, inputs) {
   const params = {};
   for (const [k, input] of Object.entries(inputs)) params[k] = input.value;
-  if (action === "fan.set_floor") params.min_duty = Number(inputs.min_duty.value);
+  if (action === "fan.set_floor") {
+    params.min_duty = clampDuty(inputs.min_duty.value, Number(inputs.min_duty.dataset.floor || 0));
+    inputs.min_duty.value = String(params.min_duty);
+  }
   return params;
 }
 
@@ -136,7 +166,7 @@ async function submit(action, params) {
 
 function requestForm() {
   const form = cel("div", "ctl-form");
-  const actions = ctlCaps.actions.filter((a) => a !== "host.reboot");
+  const actions = formActions(ctlCaps);
   const row = cel("div", "ctl-actions");
   if (actions.length) {
     const actionSel = selectOf(actions);
@@ -222,7 +252,8 @@ async function startControl() {
     if (!me.is_admin) return;
     ctlCsrf = me.csrf;
     const caps = await get("/api/v2/control/capabilities", { host: ctlHost });
-    if (!caps.known) return;
+    // No card for a host without a control daemon that has pulled (caps.reason says why).
+    if (!controlShown(caps)) return;
     ctlCaps = caps;
     const h = cel("h3", null, "Control");
     h.id = "control-h";

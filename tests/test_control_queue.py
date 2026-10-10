@@ -456,5 +456,5 @@ def test_v2_commands_page_newest_first_filter_host_and_show_the_result(env):
 def test_v2_capabilities_lists_actions_for_an_unknown_and_a_known_host(env):
     _admin(env)
     got = env.client.get("/api/v2/control/capabilities?host=nobody").json()
-    assert got["known"] is False and "fan.set_floor" in got["actions"]
+    assert got["known"] is False and got["available"] is False and got["actions"] == []
     assert got["host"] == "nobody"

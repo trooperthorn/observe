@@ -9,6 +9,7 @@ result changes no change domain.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -16,10 +17,9 @@ from pydantic import BaseModel, Field
 from observe.api import ApiContext, ApiRegistry
 from observe.api.cursor import PageParams, encode
 from observe.api.models import Page, Ts
-from observe.updates import supports_update
 
-from .actions import COMPONENTS, CONTROLLERS, MODES, capabilities
-from .queue import ACTIONS, EXPIRABLE_STATES, UPDATE
+from .actions import MODES, capabilities, control_form
+from .queue import EXPIRABLE_STATES
 
 
 class CommandResult(BaseModel):
@@ -54,7 +54,6 @@ class CommandFilters(BaseModel):
 def list_commands(db: Any, ctx: ApiContext, page: PageParams,
                   filters: CommandFilters) -> dict[str, Any]:
     """Signed commands, newest first, with the state and the latest result of each."""
-    import json
     after = page.after(int, str)
     where, args = ["1=1"], []
     if after:
@@ -89,26 +88,74 @@ def list_commands(db: Any, ctx: ApiContext, page: PageParams,
             "next_cursor": encode([rows[-1][5], rows[-1][0]]) if more else None}
 
 
+class ControlFanHeader(BaseModel):
+    header: str = Field(description="The name in the allowlist, such as fan1")
+    controller_id: str = Field(description="The controller's id for it, such as pwm1; a "
+                                           "fan.set_floor names this one")
+    min_duty_limit: int | None = Field(description="The limit saved for this header")
+    floor: int = Field(description="The lowest min_duty the host accepts for this header")
+
+
+class ControlAllowlist(BaseModel):
+    fans: list[ControlFanHeader]
+    services: list[str]
+    reboot: bool
+    update: bool
+    min_duty_floor: int
+
+
 class Capabilities(BaseModel):
     host: str
     known: bool
-    actions: list[str]
+    available: bool = Field(description="Whether the host has a control daemon that has pulled")
+    reason: str = Field(description="Why control is not available, or empty")
+    actions: list[str] = Field(description="The actions this host may be asked to do now")
     capabilities: dict[str, Any]
+    controller: str = Field(description="The fan controller the host's daemon drives")
     controllers: list[str]
     modes: list[str]
     components: list[str]
+    allowlist: ControlAllowlist | None = Field(
+        description="The saved allowlist, for a host enrolled with control; null when the "
+                    "host's own file is not known to Observe")
+    fan_headers: list[ControlFanHeader] | None = Field(
+        description="The headers a fan.set_floor may name, or null when nothing is known")
+
+
+async def control_caps(store: Any, host: str, data: dict[str, Any] | None) -> dict[str, Any]:
+    """`control_form` for one host, from its latest batch, its enrolment and its wpc keys."""
+    enrolled = await store.fetch(
+        "SELECT platform, control, allowlist FROM enrolments WHERE host=?", (host,))
+    keys = await store.fetch(
+        "SELECT COUNT(*), MAX(last_used) FROM ingest_keys WHERE scope='wpc' "
+        "AND revoked_at IS NULL AND host=?", (host,))
+    count, last_used = keys[0] if keys else (0, None)
+    platform = (enrolled[0][0] if enrolled else "") or str((data or {}).get("platform") or "")
+    return control_form(
+        platform=platform, agent_version=str((data or {}).get("agent_version") or ""),
+        has_key=bool(count), pulled=last_used is not None, enrolled=bool(enrolled),
+        control_chosen=bool(enrolled and enrolled[0][1]),
+        allowlist=json.loads(enrolled[0][2]) if enrolled else None,
+        reported=capabilities(data["samples"] if data else []))
 
 
 async def host_capabilities(ctx: ApiContext, host: str = "") -> dict[str, Any]:
-    """The actions and what the host last reported, so a client offers only valid choices."""
+    """Whether the host has a control daemon, and the choices a request to it may make, so a
+    client offers only requests the host's allowlist accepts. agent.update is offered only to
+    a Linux or Raspberry Pi agent whose control daemon runs it (observe/updates.py)."""
     data = await ctx.store.latest_host(host) if host else None
-    # agent.update is offered only to an agent whose control daemon runs it (observe/updates.py).
-    actions = [a for a in ACTIONS if a != UPDATE
-               or (data is not None and supports_update(str(data.get("agent_version") or "")))]
-    return {"host": host, "known": data is not None, "actions": actions,
-            "capabilities": capabilities(data["samples"] if data else []),
-            "controllers": list(CONTROLLERS), "modes": list(MODES),
-            "components": list(COMPONENTS)}
+    form = await control_caps(ctx.store, host, data) if data is not None else control_form(
+        platform="", agent_version="", has_key=False, pulled=False, enrolled=False,
+        control_chosen=False, allowlist=None, reported=capabilities([]))
+    if data is None:
+        form = {**form, "available": False, "reason": "this host has never reported",
+                "actions": []}
+    return {"host": host, "known": data is not None, "available": form["available"],
+            "reason": form["reason"], "actions": form["actions"],
+            "capabilities": {"thermalctl": form["thermalctl"], "headers": form["headers"]},
+            "controller": form["controller"], "controllers": [form["controller"]],
+            "modes": list(MODES), "components": form["components"],
+            "allowlist": form["allowlist"], "fan_headers": form["fan_headers"]}
 
 
 def register(api: ApiRegistry) -> None:

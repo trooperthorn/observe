@@ -29,13 +29,19 @@ def env(tmp_path):
     now = e.clock.now
     def seed(db):
         for host in (HOST, "nas02", HOSTILE):
-            db.execute("INSERT INTO hosts (host, agent_version, first_seen, last_seen) "
-                       "VALUES (?,?,?,?)", (host, "0.2.0", now, now))
+            db.execute("INSERT INTO hosts (host, platform, agent_version, first_seen, last_seen) "
+                       "VALUES (?,?,?,?,?)",
+                       (host, "" if host == HOSTILE else "linux", "0.2.0", now, now))
         for fan in ("pwm1", "pwm2"):
             put_samples(db, [(now, HOST, "thermalctl", "fan_duty", json.dumps({"fan": fan}),
                               40, "%")])
 
     e.store.storage.write_sync(seed)
+    # Each host has a control daemon: a wpc key that has pulled (control_form).
+    for host in (HOST, "nas02", HOSTILE):
+        e.key(host)
+    e.store.storage.write_sync(lambda db: db.execute(
+        "UPDATE ingest_keys SET last_used=? WHERE scope='wpc'", (now,)))
     run(auth.create_user(e.store, e.cfg, "root", PASSWORD, True, now=now))
     run(auth.create_user(e.store, e.cfg, "viewer", PASSWORD, False, now=now))
     yield e
@@ -200,8 +206,7 @@ def test_headers_are_checked_only_when_the_host_reported_them(env):
 
 def test_valid_actions_are_all_queued(env):
     csrf = login(env)
-    for action, params in (("fan.set_mode", {"controller": "thermal-control-suite",
-                                             "mode": "active"}),
+    for action, params in (("fan.set_mode", {"controller": "thermalctl", "mode": "active"}),
                            ("service.restart", {"name": "docker:scrutiny"})):
         assert post(env, csrf, req(action, params)).status_code == 200
 
@@ -211,10 +216,14 @@ def test_capabilities_route_reports_headers(env):
     data = env.client.get("/api/v2/control/capabilities", params={"host": HOST}).json()
     assert data["known"] and data["capabilities"] == {"thermalctl": True,
                                                        "headers": ["pwm1", "pwm2"]}
+    assert data["available"] is True and data["reason"] == ""
     assert "host.reboot" in data["actions"] and "agent.update" in data["actions"]
     assert data["components"] == ["agent", "control", "all"]
+    # No enrolment: the host's own file decides, and the reported headers are offered.
+    assert data["allowlist"] is None and data["controllers"] == ["thermalctl"]
+    assert [h["controller_id"] for h in data["fan_headers"]] == ["pwm1", "pwm2"]
     other = env.client.get("/api/v2/control/capabilities", params={"host": "ghost"}).json()
-    assert other["known"] is False
+    assert other["known"] is False and other["available"] is False and other["actions"] == []
 
 
 def test_capabilities_leave_out_agent_update_for_an_agent_too_old_for_it(env):
@@ -274,6 +283,9 @@ def eligible(env, host, pulled=True, platform="linux"):
     key = env.key(host)
     if pulled:
         env.pull(key, host)
+    else:
+        env.store.storage.write_sync(lambda db: db.execute(
+            "UPDATE ingest_keys SET last_used=NULL WHERE scope='wpc' AND host=?", (host,)))
 
 
 def update_all(env, csrf, body=None):
@@ -354,7 +366,7 @@ def test_update_all_is_admin_only_with_csrf(env):
 def test_the_host_page_offers_the_update_and_reads_its_result():
     js = (ROOT / "observe" / "static" / "host-control.js").read_text(encoding="utf-8")
     assert '"agent.update": "Update the hostwatch agent"' in js
-    assert "ctlCaps.components" in js and "updateResultText" in js
+    assert "componentChoices(ctlCaps)" in js and "updateResultText" in js
     assert 'from "/static/js/updates-logic.js"' in js
     logic = (ROOT / "observe" / "static" / "js" / "updates-logic.js").read_text(encoding="utf-8")
     assert "export function updateResultText" in logic and "JSON.parse" in logic
@@ -567,7 +579,8 @@ def test_host_page_loads_the_control_section_and_writes_only_text(env):
 def test_new_files_use_lf_and_no_em_dashes_or_model_names():
     for rel in ("plugins/control/observe_control/actions.py", "tests/test_control_actions.py",
                 "observe/static/host-control.js", "observe/static/host.html",
-                "observe/static/js/updates-logic.js",
+                "observe/static/js/updates-logic.js", "observe/static/js/control-logic.js",
+                "tests/test_control_form.py", "tests/js/control.test.mjs",
                 "observe/static/host.js", "observe/static/css/host.css",
                 "plugins/control/observe_control/__init__.py", "docs/CONTROL.md"):
         raw = stored_bytes(ROOT / rel)
