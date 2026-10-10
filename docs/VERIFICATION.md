@@ -18,7 +18,7 @@ yet; rows for them are added here as they are built and exercised.
 |---|---|
 | SNMP v2c and v3 authPriv (SHA/AES) | Loopback `snmpd`: uptime, string and numeric OIDs, missing OID, wrong community (with redaction), interface by name with rate on second poll, memory via `hrStorageRam`. |
 | MQTT check and MQTT alert | Loopback Mosquitto: connect, retained numeric payload with thresholds, expect mismatch, silent topic timeout, broker down, retained state publish. |
-| TCP, HTTP, TLS certificate | Local asyncio, http.server, and TLS servers with generated certificates (valid, near expiry, expired-threshold, untrusted chain, verify off). |
+| TCP, HTTP, TLS certificate | Local asyncio, http.server, and TLS servers with generated certificates (valid, near expiry, expired-threshold, untrusted chain, verify off). Over repeated polls: one client TLS context per setting while the server still sees a new connection and a full handshake each poll, a replaced, missing or invalid `ca_bundle`, redirects as the monitor sets them, and no ALPN carried from an HTTP poll into a certificate probe. |
 | ICMP | Loopback with unprivileged ICMP enabled. |
 | State machine, thresholds, config validation, secret references | Unit tests. |
 | Web API, basic auth, CSP header, metrics label escaping | FastAPI test client. |

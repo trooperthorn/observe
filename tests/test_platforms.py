@@ -95,6 +95,14 @@ async def test_proxmox_storage_and_auth(pve):
     assert bad.result is Result.FAIL and "401" in bad.message
 
 
+async def test_proxmox_polls_share_one_context(pve, tls_builds):
+    port, ca = pve
+    c = pcheck(port, ca, mode="node", node="pve1")
+    for _ in range(2):
+        assert (await c.run()).result is Result.OK
+    assert len(tls_builds) == 1
+
+
 async def test_proxmox_unpinned_certificate_fails(pve):
     port, _ = pve
     res = await check(type="proxmox", host="localhost", port=port, credential="pve",
@@ -177,6 +185,14 @@ async def test_truenas_alerts_levels_and_dismissed(truenas):
     assert res.result is Result.WARN and res.value == 1.0   # INFO below floor, CRITICAL dismissed
     res = await tcheck(fake, ca, mode="alerts", min_alert_level="INFO").run()
     assert res.value == 2.0
+
+
+async def test_truenas_polls_share_one_context(truenas, tls_builds):
+    fake, ca = truenas
+    c = tcheck(fake, ca, mode="pool", pool="tank")
+    for _ in range(2):
+        assert (await c.run()).result is Result.OK
+    assert len(tls_builds) == 1
 
 
 async def test_truenas_bad_key(truenas):

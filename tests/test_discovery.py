@@ -120,6 +120,16 @@ async def test_https_valid_by_name_invalid_by_bare_ip(https_server):
     assert ms["tls_cert"]["host"] == "localhost" and "verify" not in ms["tls_cert"]
 
 
+async def test_scans_reuse_the_tls_contexts(https_server, tls_builds):
+    port, ca = https_server
+    d = Discoverer(cfg(tcp_ports=[port], credentials=[], ca_bundle=ca))
+    for _ in range(2):
+        f = await d.scan_host("localhost")
+        assert f.tls[port]["valid"] and f.http[port]["status"] == 204
+    # The handshake without validation, the one with it, and the HTTPS GET: once each.
+    assert len(tls_builds) == 3
+
+
 # ---------------------------------------------------------------- WinRM
 
 

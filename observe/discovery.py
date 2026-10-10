@@ -51,10 +51,11 @@ import asyncssh
 
 from .checks.mqtt import MqttCheck
 from .httpclient import http_client
+from .tlscontext import http_default_context, socket_default_context
 from cryptography.hazmat.primitives import hashes, serialization
 
 from .checks.platforms import (DS_PATHS, HOST_PATHS, VM_PATHS, AuthFailed, TrueNASClient,
-                               api_ssl_context, vsphere_collect)
+                               api_ssl_context, socket_api_context, vsphere_collect)
 from .checks.apps import unifi_list_all
 from .checks.platforms import VSPHERE_POOL, proxmox_resources
 from .checks.ssh import docker_argv, ssh_connect, ssh_run
@@ -402,9 +403,7 @@ class Discoverer:
     async def _tls_probe(self, host: str, port: int, sni: str | None) -> dict[str, Any] | None:
         """Handshake without validation to learn whether the port speaks TLS,
         then again with validation to learn whether a client would trust it."""
-        loose = ssl.create_default_context()
-        loose.check_hostname = False
-        loose.verify_mode = ssl.CERT_NONE
+        loose = socket_default_context(False, None)
         try:
             _, w = await asyncio.wait_for(
                 asyncio.open_connection(host, port, ssl=loose, server_hostname=sni,
@@ -428,7 +427,7 @@ class Discoverer:
         }
         if sni is None:
             return info
-        strict = api_ssl_context(True, self.s.ca_bundle)
+        strict = socket_api_context(True, self.s.ca_bundle)
         try:
             _, w = await asyncio.wait_for(
                 asyncio.open_connection(host, port, ssl=strict, server_hostname=sni,
@@ -457,7 +456,7 @@ class Discoverer:
             host = sni if tls["valid"] else (sni or f.address)
             verify: bool | ssl.SSLContext = False
             if tls["valid"]:
-                verify = ssl.create_default_context(cafile=self.s.ca_bundle)
+                verify = http_default_context(True, self.s.ca_bundle)
             status = await self._http_status(f"https://{host}:{port}/", verify)
             if status is not None:
                 f.http[port] = {"scheme": "https", "host": host, "status": status}

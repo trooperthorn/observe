@@ -15,6 +15,7 @@ from icmplib.exceptions import ICMPLibError, SocketPermissionError
 
 from ..config import Thresholds
 from ..httpclient import http_client
+from ..tlscontext import http_default_context, socket_default_context
 from .base import Check, CheckResult, Result
 
 
@@ -92,7 +93,7 @@ class HttpCheck(Check):
         m = self.monitor
         verify: bool | ssl.SSLContext = m.verify_tls
         if m.verify_tls and m.ca_bundle:
-            verify = ssl.create_default_context(cafile=m.ca_bundle)
+            verify = http_default_context(True, m.ca_bundle)
         try:
             async with http_client(verify, self.timeout,
                                    follow_redirects=m.follow_redirects) as client:
@@ -145,12 +146,7 @@ class TlsCertCheck(Check):
     async def probe(self) -> CheckResult:
         m = self.monitor
         sni = m.server_name or m.host
-        if m.verify:
-            ctx = ssl.create_default_context(cafile=m.ca_bundle)
-        else:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+        ctx = socket_default_context(m.verify, m.ca_bundle)
         try:
             _, writer = await asyncio.wait_for(
                 asyncio.open_connection(m.host, m.port, ssl=ctx, server_hostname=sni),
