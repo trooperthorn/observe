@@ -696,6 +696,38 @@ def test_devices_poll_reads_uplinks_from_the_device_detail_and_draws_links(tmp_p
     assert len(edges) == 3
 
 
+class WithPortDetails(WithDetails):
+    """A detail whose uplink also names the parent's port index (UNVERIFIED spelling)."""
+
+    def __call__(self, request):
+        p = request.url.path
+        prefix = "/proxy/network/integration/v1/sites/site-1/devices/"
+        did = p[len(prefix):] if p.startswith(prefix) else ""
+        if did and "/" not in did and isinstance(self.uplinks.get(did), dict):
+            self.requests.append(request)
+            return httpx.Response(200, json={"id": did, "uplink": self.uplinks[did]})
+        return super().__call__(request)
+
+
+def test_an_uplink_port_index_names_the_parent_port_instead_of_a_placeholder(tmp_path):
+    """The map showed ports as `to-0cea14f15471`. When the detail gives `uplink.portIdx`, the
+    parent's port is "Port N" (keyed like a classic port); without it the placeholder stays."""
+    devices = [device(1, type="gateway", name="UCG Fiber", features=["GATEWAY"]),
+               device(2, name="Core switch", features=["SWITCHING"]),
+               device(3, name="AP hall", features=["ACCESS_POINT"])]
+    console = WithPortDetails(devices, {"dev-2": {"deviceId": "dev-1", "portIdx": 5},
+                                        "dev-3": "dev-2"})
+    env = env_with(tmp_path, console)
+    run(env.plugin.collect_devices(env.store))
+    links = table(env, "SELECT a_ref, b_ref FROM infra_links WHERE closed_at IS NULL "
+                       "ORDER BY id")
+    keys = sorted(ref.partition("|")[2] for pair in links for ref in pair)
+    assert "port5" in keys  # the gateway's port 5, not to-<mac>
+    assert len([k for k in keys if k.startswith("to-")]) == 1  # the AP's parent port is unknown
+    port = table(env, "SELECT unifi_index FROM infra_ports WHERE port_key = 'port5'")
+    assert port == [(5,)]
+
+
 def test_offline_device_keeps_when_it_was_last_online_not_the_poll_time(tmp_path):
     """Bug plan WP8: an offline device showed 'Last seen' equal to the poll time."""
     console = Full([], devices=[device(1), device(2, state="OFFLINE")])

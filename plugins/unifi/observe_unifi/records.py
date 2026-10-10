@@ -171,6 +171,26 @@ class Device:
     tx_bytes: int | None = None
     rx_rate_bps: float | None = None
     tx_rate_bps: float | None = None
+    # The port of the parent device this one is uplinked through, when the row or detail names
+    # it (UPLINK_PORT_KEYS, UNVERIFIED). The map feed then names that port "Port N" instead of a
+    # placeholder. Not stored in the table.
+    uplink_port_idx: int | None = None
+
+
+# Keys of the `uplink` object that may give the parent's port index (UNVERIFIED: the Network
+# 10.4.57 contract shows only uplink.deviceId; these are the spellings other UniFi APIs use).
+UPLINK_PORT_KEYS = ("portIdx", "portIndex", "port_idx", "uplinkPortIdx")
+
+
+def uplink_port_of(up: Any) -> int | None:
+    """The parent's port index from an `uplink` object, or None."""
+    if not isinstance(up, dict):
+        return None
+    for key in UPLINK_PORT_KEYS:
+        v = up.get(key)
+        if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 1024:
+            return v
+    return None
 
 
 GATEWAY_ROLES = ("gateway", "console", "ugw")
@@ -367,7 +387,8 @@ def parse_device(site_id: str, raw: Any) -> Device | None:
                   _text(raw.get("firmwareVersion")), fu if isinstance(fu, bool) else None, uplink,
                   _text(raw.get("type")) or _text(raw.get("deviceType")), _text(raw.get("role")),
                   tuple(str(f) for f in feats if isinstance(f, str)) if isinstance(feats, list)
-                  else (), c["rx_bytes"], c["tx_bytes"], c["rx_rate_bps"], c["tx_rate_bps"])
+                  else (), c["rx_bytes"], c["tx_bytes"], c["rx_rate_bps"], c["tx_rate_bps"],
+                  uplink_port_of(up))
 
 
 def write_devices(db: Conn, devices: list[Device], now: float) -> int:

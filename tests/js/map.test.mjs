@@ -2,12 +2,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  deviceRows, deviceTypeWord, graphSubLabel, linkRows, stateWord, switchTiers,
+  deviceRows, deviceTypeWord, graphSubLabel, isPlaceholderPort, linkRows, portNames, portShortName, portText,
+  stateWord, switchTiers,
 } from "../../observe/static/js/map-logic.js";
 import { buildGraph } from "../../observe/static/js/graph/infra.js";
 
 // The shape the UniFi feed gives the map (bug plan WP4): each device names the device it is
 // uplinked to, drawn between a port "uplink" on the child and a port "to-<child>" on the parent.
+// A device id as the 12 hex digits of a MAC, the way the feed names the parent's port.
+const macOf = (id) => [...id].map((c) => c.charCodeAt(0).toString(16)).join("").padStart(12, "0").slice(-12);
+
 function unifiMap(devices) {
   const nodes = [], edges = [];
   for (const d of devices) {
@@ -16,8 +20,8 @@ function unifiMap(devices) {
   }
   for (const d of devices.filter((x) => x.up)) {
     nodes.push({ id: `port:${d.id}|uplink`, kind: "port", label: "uplink", parent: `switch:${d.id}`, role: "uplink" });
-    nodes.push({ id: `port:${d.up}|to-${d.id}`, kind: "port", label: `to-${d.id}`, parent: `switch:${d.up}`, role: "unknown" });
-    edges.push({ id: edges.length + 1, a: `port:${d.id}|uplink`, b: `port:${d.up}|to-${d.id}`,
+    nodes.push({ id: `port:${d.up}|to-${macOf(d.id)}`, kind: "port", label: `to-${macOf(d.id)}`, parent: `switch:${d.up}`, role: "unknown" });
+    edges.push({ id: edges.length + 1, a: `port:${d.id}|uplink`, b: `port:${d.up}|to-${macOf(d.id)}`,
       source: "config", state: "active", age_days: 0 });
   }
   return { nodes, edges };
@@ -92,7 +96,8 @@ test("link rows name each port with its device", () => {
   const { nodes, edges } = unifiMap(SEVEN);
   const rows = linkRows(edges, nodes);
   assert.equal(rows.length, 6);
-  assert.deepEqual(rows[0], { from: "uplink on Core switch", to: "to-sw1 on UCG Fiber",
+  // The placeholder ports read as words, never as "to-0cea14f15471".
+  assert.deepEqual(rows[0], { from: "Core switch uplink", to: "UCG Fiber, port not reported",
     source: "config", seen: "0 days ago", state: "active" });
   assert.equal(linkRows([{ a: "x", b: "y", source: "lldp", age_days: 9, state: "stale" }], [])[0].state,
     "stale, not confirmed recently");
@@ -108,4 +113,29 @@ test("state words come from the shared vocabulary and graph labels carry them", 
   assert.equal(gw.kind, "Gateway");
   assert.equal(gw.sub, "Up · Gateway");
   assert.equal(g.entities.find((e) => e.id === "switch:ap2").sub, "Down · Access point");
+});
+
+test("placeholder ports are named in words and show no state; UniFi port keys read Port N", () => {
+  // The reported map: ports showed as "to-0cea14f15471" and every Tiers port as "(State unknown)".
+  const { nodes, edges } = unifiMap(SEVEN);
+  nodes.push({ id: "port:sw1|port5", kind: "port", label: "port5", parent: "switch:sw1", role: "unknown", state: "up" });
+  const names = portNames(nodes, edges);
+  assert.equal(names.get("port:sw1|uplink"), "uplink to UCG Fiber");
+  assert.equal(names.get(`port:gw|to-${macOf("sw1")}`), "link to Core switch");
+  assert.equal(names.get("port:sw1|port5"), "Port 5");
+  const up = nodes.find((n) => n.id === "port:sw1|uplink");
+  assert.equal(isPlaceholderPort(up), true);
+  assert.equal(portText(up, names, "State unknown"), "uplink to UCG Fiber");
+  const real = nodes.find((n) => n.id === "port:sw1|port5");
+  assert.equal(isPlaceholderPort(real), false);
+  assert.equal(portText(real, names, "Up"), "Port 5 (Up)");
+  // A port with no link and a name of its own keeps it.
+  const lone = (label) => portNames([{ id: `port:x|${label}`, kind: "port", label, parent: "switch:x" }], []).get(`port:x|${label}`);
+  assert.equal(lone("ge-0/0/1"), "ge-0/0/1");
+  assert.equal(lone("uplink"), "uplink");
+  assert.equal(lone("to-0cea14f15471"), "link to another device");
+  // The short name for "<port> to <device>" lines in the graph's selection panel.
+  assert.equal(portShortName({ label: "to-0cea14f15471" }), "unreported port");
+  assert.equal(portShortName({ label: "port12" }), "Port 12");
+  assert.equal(portShortName({ label: "uplink" }), "uplink");
 });

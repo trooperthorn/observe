@@ -26,6 +26,63 @@ export function stateWord(node) {
   return node.state === "unreachable" && node.blocked_by ? `${word}, behind ${node.blocked_by}` : word;
 }
 
+// The UniFi feed's placeholder ports (plugins/unifi/observe_unifi/feed.py): "uplink" on a
+// device whose uplink port is not known, and "to-<child mac>" on the device it is uplinked to.
+const TO_CHILD = /^to-[0-9a-f]{12}$/;
+const UNIFI_PORT = /^port(\d+)$/;
+
+export function isPlaceholderPort(port) {
+  const key = String((port && port.label) || "");
+  return key === "uplink" || TO_CHILD.test(key);
+}
+
+/**
+ * Each port's name in words, by port node id: "Port 5" for a UniFi port key (port5), "uplink
+ * to <parent>" and "link to <child>" for the placeholder ports, named by the device at the
+ * other end of their link, and the port's own label otherwise.
+ */
+export function portNames(nodes, edges) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const peer = new Map();
+  for (const e of edges || []) {
+    peer.set(e.a, e.b);
+    peer.set(e.b, e.a);
+  }
+  const deviceAt = (portId) => {
+    const p = byId.get(peer.get(portId));
+    const sw = p && byId.get(p.kind === "port" ? p.parent : p.id);
+    return sw ? sw.label : "";
+  };
+  const out = new Map();
+  for (const n of nodes) {
+    if (n.kind !== "port") continue;
+    const key = String(n.label || "");
+    const num = UNIFI_PORT.exec(key);
+    const other = deviceAt(n.id);
+    if (num) out.set(n.id, `Port ${num[1]}`);
+    else if (key === "uplink") out.set(n.id, other ? `uplink to ${other}` : "uplink");
+    else if (TO_CHILD.test(key)) out.set(n.id, other ? `link to ${other}` : "link to another device");
+    else out.set(n.id, key);
+  }
+  return out;
+}
+
+// A port's own name, short, for "<port> to <device>" lines: "Port 5", "uplink", or "unreported
+// port" for the parent's placeholder.
+export function portShortName(port) {
+  const key = String((port && port.label) || "");
+  const num = UNIFI_PORT.exec(key);
+  if (num) return `Port ${num[1]}`;
+  return TO_CHILD.test(key) ? "unreported port" : key;
+}
+
+// The words beside a port on a Tiers card: its name, and its state in brackets unless it is a
+// placeholder port, which has no state of its own to report.
+export function portText(port, names, stateText) {
+  const name = (names && names.get(port.id)) || port.label;
+  return isPlaceholderPort(port) ? name : `${name} (${stateText})`;
+}
+
 // The second line of a graph label, for example "Up · Gateway".
 export function graphSubLabel(node) {
   return `${stateWord(node)} · ${deviceTypeWord(node)}`;
@@ -91,12 +148,17 @@ export function deviceRows(nodes) {
 // One row per link for the table view. A port is named with the device it is on.
 export function linkRows(edges, nodes) {
   const byId = new Map(nodes.map((n) => [n.id, n]));
+  const names = portNames(nodes, edges);
   const name = (id) => {
     const n = byId.get(id);
     if (!n) return id;
     if (n.kind !== "port") return n.label;
     const sw = byId.get(n.parent);
-    return `${n.label} on ${sw ? sw.label : n.parent}`;
+    const device = sw ? sw.label : n.parent;
+    // A placeholder port is the device's uplink, or a port of the parent that was not reported.
+    if (n.label === "uplink") return `${device} uplink`;
+    if (isPlaceholderPort(n)) return `${device}, port not reported`;
+    return `${names.get(n.id) || n.label} on ${device}`;
   };
   return edges.map((e) => ({
     from: name(e.a), to: name(e.b), source: e.source,

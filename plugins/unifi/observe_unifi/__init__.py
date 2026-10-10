@@ -46,8 +46,9 @@ from .feed import feed_classic, feed_integration
 from .api import register as register_resources
 from .client import AuthRejected, IntegrationClient, UniFiError
 from .pages import PAGE_PATH, page_files
-from .records import (MIGRATIONS, parse_device, parse_uplink_stats, prune_unseen, read_networks,
-                      select_gateway, write_site_status_classic, write_wlans)
+from .records import (MIGRATIONS, UPLINK_PORT_KEYS, parse_device, parse_uplink_stats,
+                      prune_unseen, read_networks, select_gateway, write_site_status_classic,
+                      write_wlans)
 
 __version__ = "0.1.0"
 
@@ -321,7 +322,9 @@ class UniFiPlugin(PluginBase):
                 continue
             dup = detail.get("uplink") if isinstance(detail, dict) else None
             if isinstance(dup, dict) and isinstance(dup.get("deviceId"), str) and dup["deviceId"]:
-                row["uplink"] = {**(up if isinstance(up, dict) else {}),
+                # The parent's port index too, when the detail gives one (records.UPLINK_PORT_KEYS).
+                ports = {k: dup[k] for k in UPLINK_PORT_KEYS if k in dup}
+                row["uplink"] = {**(up if isinstance(up, dict) else {}), **ports,
                                  "deviceId": dup["deviceId"]}
                 found += 1
         return found
