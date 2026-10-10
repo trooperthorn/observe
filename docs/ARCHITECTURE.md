@@ -219,6 +219,18 @@ between them repeats the problem alert after the restart instead of losing it. S
 scheduler cancels delivery tasks; their alerts are already in the outbox and go out on the next
 start. `outbox_due` limits each target to 100 rows, so one target's backlog never delays another's.
 
+Schema step 24 adds `monitor_state`: the state each monitor is in and the time it entered it,
+written by `Store.record_event` in the same unit as the event of every real state change (and
+seeded from the newest state change in `events` on upgrade). `Scheduler.restore` hands it to the
+state machine as `MonitorState.prior`. The monitor starts PENDING and earns its state with the
+ordinary counts; reaching the prior state is silent (no event, no alert) and keeps the prior
+`since`, and reaching another is a transition from the prior state, logged and alerted as such.
+A kept Up state with a good result no older than three intervals comes back Up at once, again
+with the kept `since`. A missed reply of a monitor whose prior state is Down starts no Degraded
+episode. Built-in YAML `thresholds` have a clear band (`hysteresis`, default 5% of each
+threshold): `Check` keeps the level they gave the last value and `threshold_level` holds it until
+the value is back past the threshold by the band.
+
 A host or field push refused with `StorageBusy` is answered 503 at once and writes no audit row,
 so a refused push adds no unit to the full queue. Writes made by plugin collectors run with
 `SERVER_WORK` set and are critical like the other pollers, so a full queue never drops a cycle.
@@ -702,7 +714,7 @@ retention; `GET /api/v2/hosts` and `GET /api/v2/hosts/{host}` use the same bound
 Warning or Critical, and returns OK, WARN or FAIL for the worst one. Those go
 through `MonitorState.observe` like any other result, so `failures_to_down`
 confirmation applies before a host is DOWN or pages. No batch within
-`stale_after` seconds (default three intervals), or none ever, is FAIL. A component whose newest sample is older than `stale_after` is graded stale and is also FAIL, so an outbox replay or a lagging agent clock can not read as healthy. The dashboard and host page refresh timers skip a tick while the previous refresh is still running.
+`stale_after` seconds (default: the larger of three intervals and 2.5 times the host's effective Availability tier rate), or none ever, is FAIL. A component whose newest sample is older than the window of its polling tier (2.5 times the host's effective rate for that tier, never less than the silence limit; `observe/tiers.py`) is graded stale and is also FAIL, so an outbox replay or a lagging agent clock can not read as healthy. The dashboard and host page refresh timers skip a tick while the previous refresh is still running.
 Because the result is an ordinary check result, `group`, `depends_on`,
 `critical`, rollup, alerts and `/metrics` work unchanged, and `/metrics` adds
 `observe_host_age_seconds` and `observe_host_component_state`. The grouped
@@ -862,10 +874,19 @@ Missing data is shown, not hidden. Each section has a `state`: `ok`, `stale`
 source reported a failure, with its reason), `absent` (the agent says the host
 has no such hardware) or `not_reported` (no source for it ever reported). Stale
 and unavailable make the section at least Warning; absent and not_reported claim
-nothing and stay Good. A reading with no value is a Warning and never zero. A
+nothing and stay Good. A reading with no value is "no data": never zero and never a
+breach. A host has one verdict (`status`, `status_reason`), the worst of its sections, the
+components its pushed_host monitor lists (graded by `checks/host.grade_components`) and its
+alerts; the pushed_host check maps that verdict to its result, so the dashboard card, the Hosts
+list, the host page and its header chip cannot disagree. For a pushed_host monitor a boot
+classification counts through the monitor's crash hold, not the 24 hour alerts window. A
 host with no batch inside its stale window is Critical, matching the monitor.
-The stale window is the monitor's `stale_after`, or three default intervals for
-a host that is not listed. The routes need a login session and ignore basic auth.
+The host's silence limit is the monitor's `stale_after`, else the larger of three
+intervals (the default interval for a host that is not listed) and 2.5 times its
+Availability tier rate. A reading is stale after 2.5 times the effective rate of
+its collector's tier (device metrics, storage health or SMART), never sooner than
+the silence limit; readings Observe polls itself (SNMP, Home Assistant) keep the
+silence limit. Tier rates are re-read when the admin change counter moves. The routes need a login session and ignore basic auth.
 Views are read-only. Device-supplied text is rendered as text only, as in the
 rest of the dashboard. The page has no actions section yet; phase 2 adds one.
 
@@ -933,7 +954,13 @@ write). Admin screen changes are recorded with the signed-in admin as actor, and
 CLI key and user changes with the actor `cli`. Host confirmation has no route
 yet, so it has no rows yet. `GET /api/v2/audit` returns rows newest first and is admin only,
 session only, so basic auth never reaches it. It takes `limit` (1 to 500),
-`kind`, and `before` (a row id, to page backwards).
+`kind`, `actor`, `outcome` and a cursor. Each row carries an `outcome` (ok, refused or failed)
+that `audit.outcome` derives when the log is read, so old rows have one too: a word in the
+detail (`outcome`, `status` or `result`) decides first, then a `_denied`, `_refused` or
+`_rejected` kind, then a real HTTP status (4xx refused, 5xx failed; 0 means none), then a
+`_failed`, `_error` or `_problem` kind. The `outcome` filter scans in batches so a page is short
+only at the end of the log. A row whose actor is a key prefix also carries `actor_host`, the
+host or device the key is bound to.
 
 ## Admin screen
 
@@ -1137,7 +1164,9 @@ back the host settings page (`GET /hosts/{name}/settings`, the static `host-sett
 copy-to-clipboard and the "admin account needed" card) and `css/admin.css` (tokens only). The audit
 log has its own static page, `/audit` (`audit.html`, `audit.js`), listed under Admin in the
 navigation for admins. It uses the same `GET /api/v2/audit` route, loads the newest 500 rows and
-filters them in the browser by actor, kind, status group and time range. The page serves no data,
+filters them in the browser by actor, kind, outcome and time range (`js/audit-logic.js`, tested
+by `tests/js/audit.test.mjs`). The status chip shows the outcome, with the HTTP status beside it
+only when the row has one, and a key actor is shown with its host. The page serves no data,
 and a viewer who opens it sees an "admin account needed" notice while the API answers 403.
 
 ## The v2 read API
@@ -1563,7 +1592,7 @@ goes in through `textContent`. Status is an icon and a word, never colour alone.
 sits in `js/table-core.js`, `js/chip-states.js` and `js/dialog-logic.js` so it can be tested
 without a browser. No page loads them yet.
 
-The Network map page (slice S10) offers Graph, Tiers and Table views side by side. `/api/v2/map` marks top-level switches with `anchor`, and `js/graph/infra.js` turns the payload into graph input (switches as nodes, endpoints as a count badge). The graph engine (slice S9) lives in `js/graph/`: `force.js` (a d3-free force layout, run once
+The Network map page (slice S10) offers Graph, Tiers and Table views side by side. `/api/v2/map` marks top-level switches with `anchor` and carries each switch's `device_type`, and `js/graph/infra.js` turns the payload into graph input (switches as nodes labelled with their state word and type, endpoints as a count badge). `js/map-logic.js` places devices in tiers (a gateway is core, an access point access) and builds the table rows. The graph engine (slice S9) lives in `js/graph/`: `force.js` (a d3-free force layout, run once
 and deterministic, limited to 300 nodes), `render.js` (canvas painter reading colours from the CSS
 tokens, with a status ring and glyph on each node) and `view.js` (camera, input, resize and
 repaint scheduling), with `css/graph.css`. The code is ported from relationship-maps (commit

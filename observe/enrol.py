@@ -484,6 +484,28 @@ async def record_step(store: Store, step_key: str, step: str, status: str, note:
     return host
 
 
+def install_problem(raw: Any) -> dict[str, Any] | None:
+    """The newest failed or refused install step that nothing has cleared since, from the
+    enrolment's step reports (JSON text or a list), or None. A step's later report replaces its
+    earlier one, so a rerun that passes a step clears it; a later `ready: ok` clears them all."""
+    try:
+        reports = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return None
+    if not isinstance(reports, list):
+        return None
+    good = [r for r in reports if isinstance(r, dict)]
+    ready = max((float(r.get("at") or 0) for r in good
+                 if r.get("step") == "ready" and r.get("status") == "ok"), default=0.0)
+    bad = [r for r in good if r.get("status") in ("failed", "refused")
+           and float(r.get("at") or 0) > ready]
+    if not bad:
+        return None
+    r = max(bad, key=lambda x: float(x.get("at") or 0))
+    return {"step": str(r.get("step", "")), "status": str(r.get("status", "")),
+            "note": str(r.get("note", "")), "at": float(r.get("at") or 0)}
+
+
 async def claim_expiry_audit(store: Store, host: str, now: float) -> bool:
     """True exactly once for an enrolment whose token expired unused, so the audit row is single."""
     rows = await store.execute(

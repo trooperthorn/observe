@@ -87,3 +87,15 @@ def test_example_config_validates(monkeypatch):
 def test_retention_below_one_day_is_rejected(field, value):
     with pytest.raises(ValueError):
         make_config([{"name": "p", "type": "ping", "host": "h"}], server={field: value})
+
+
+def test_a_monitor_target_with_an_example_placeholder_is_reported():
+    """Bug plan follow-up: DNS monitors queried observe-svr.yourdomain from an example config."""
+    from observe.config import placeholder_warnings
+    from .conftest import make_config
+    cfg = make_config([
+        {"name": "DNS1 answers", "type": "dns", "nameserver": "192.0.2.53",
+         "query": "observe-svr.yourdomain"},
+        {"name": "Core", "type": "ping", "host": "10.0.0.1"}])
+    lines = placeholder_warnings(cfg)
+    assert len(lines) == 1 and "DNS1 answers" in lines[0] and "yourdomain" in lines[0]

@@ -174,5 +174,5 @@ export function guardText(progress) {
 
 // The host page address for a host name.
 export function hostHref(name) {
-  return `/host?name=${encodeURIComponent(name)}`;
+  return `/hosts/${encodeURIComponent(name)}`;
 }

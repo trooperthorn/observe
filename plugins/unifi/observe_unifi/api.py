@@ -63,7 +63,9 @@ class Device(BaseModel):
                                                        "counts them (unverified unit)")
     tx_rate_bps: float | None = None
     first_seen: Ts
-    last_seen: Ts
+    last_seen: Ts = Field(description="The last poll that listed the device, online or not")
+    online_at: Ts | None = Field(None, description="When the device was last ONLINE; null when "
+                                                   "Observe never saw it online")
 
 
 class DevicePage(Page):
@@ -77,7 +79,7 @@ class DeviceFilters(BaseModel):
 
 DEVICE_COLUMNS = ("site_id, device_id, mac, name, model, state, ip, firmware, "
                   "firmware_updatable, device_type, rx_bytes, tx_bytes, rx_rate_bps, "
-                  "tx_rate_bps, first_seen, last_seen")
+                  "tx_rate_bps, first_seen, last_seen, online_at")
 
 
 def firmware_status(updatable: bool | None) -> str:

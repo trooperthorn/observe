@@ -29,8 +29,8 @@ def env(tmp_path):
     now = e.clock.now
     def seed(db):
         for host in (HOST, "nas02", HOSTILE):
-            db.execute("INSERT INTO hosts (host, first_seen, last_seen) VALUES (?,?,?)",
-                       (host, now, now))
+            db.execute("INSERT INTO hosts (host, agent_version, first_seen, last_seen) "
+                       "VALUES (?,?,?,?)", (host, "0.2.0", now, now))
         for fan in ("pwm1", "pwm2"):
             put_samples(db, [(now, HOST, "thermalctl", "fan_duty", json.dumps({"fan": fan}),
                               40, "%")])
@@ -217,6 +217,14 @@ def test_capabilities_route_reports_headers(env):
     assert other["known"] is False
 
 
+def test_capabilities_leave_out_agent_update_for_an_agent_too_old_for_it(env):
+    env.store.storage.write_sync(lambda db: db.execute(
+        "UPDATE hosts SET agent_version='0.1.0' WHERE host=?", (HOST,)))
+    login(env)
+    data = env.client.get("/api/v2/control/capabilities", params={"host": HOST}).json()
+    assert "agent.update" not in data["actions"] and "host.reboot" in data["actions"]
+
+
 def test_validate_and_capabilities_helpers():
     caps = capabilities([{"source": "thermalctl", "metric": "fan", "labels": {"header": "a"}},
                          {"source": "hwmon", "metric": "fan", "labels": {"fan": "z"}}])
@@ -302,8 +310,8 @@ def test_update_all_honours_the_hourly_limit_per_host(tmp_path):
     now = e.clock.now
 
     def seed(db):
-        db.execute("INSERT INTO hosts (host, platform, first_seen, last_seen) VALUES (?,?,?,?)",
-                   (HOST, "linux", now, now))
+        db.execute("INSERT INTO hosts (host, platform, agent_version, first_seen, last_seen) "
+                   "VALUES (?,?,?,?,?)", (HOST, "linux", "0.2.0", now, now))
     e.store.storage.write_sync(seed)
     run(auth.create_user(e.store, e.cfg, "root", PASSWORD, True, now=now))
     try:
@@ -503,10 +511,42 @@ def test_hostile_strings_come_back_as_json_data(env):
     assert refused.status_code == 422
 
 
+# ---- audit outcome ---------------------------------------------------------------------------
+
+def test_refused_commands_are_found_by_the_refused_audit_filter_and_not_by_ok(env):
+    csrf = login(env)
+    assert post(env, csrf, req()).status_code == 200
+    unconfirmed = req()
+    del unconfirmed["confirmed"]
+    assert post(env, csrf, unconfirmed).status_code == 400
+    (cmd,) = commands(env)
+    key = env.key()
+    r = env.answer(key, {"id": cmd["id"], "state": "refused", "output": "not allowed here"})
+    assert r.status_code == 200
+
+    def audit_page(outcome):
+        got = env.client.get("/api/v2/audit", params={"outcome": outcome}).json()["items"]
+        return {(row["kind"], row["status"]): row for row in got}
+
+    refused, ok = audit_page("refused"), audit_page("ok")
+    # The admin's refused request, and the agent's refused result, which was answered 200.
+    assert refused[("control_request_refused", 400)]["actor"] == "root"
+    agent = refused[("plugin_request", 200)]
+    assert agent["detail"]["outcome"] == "refused" and agent["outcome"] == "refused"
+    # The actor is the key prefix, and the host the key is bound to comes with it.
+    assert agent["actor"] == key.split("_")[1] and agent["actor_host"] == HOST
+    # The queued command has no HTTP status of its own (0), and it worked.
+    assert ok[("control_requested", 0)]["outcome"] == "ok"
+    assert ("control_request_refused", 400) not in ok
+    assert {row["id"] for row in ok.values()}.isdisjoint(row["id"] for row in refused.values())
+    assert all(row["detail"].get("outcome") != "refused" for row in ok.values())
+    assert env.client.get("/api/v2/audit", params={"outcome": "maybe"}).status_code == 400
+
+
 # ---- the page --------------------------------------------------------------------------------
 
 def test_host_page_loads_the_control_section_and_writes_only_text(env):
-    page = env.client.get("/host").text
+    page = env.client.get("/hosts/nas01").text
     assert 'id="control"' in page and "host-control.js" in page
     js = env.client.get("/static/host-control.js").text
     assert "textContent" in js and "X-CSRF-Token" in js

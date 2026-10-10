@@ -82,6 +82,12 @@ table.data th { color: var(--o-text-muted); font-size: var(--o-fs-sm); font-weig
                 white-space: nowrap; padding-top: 0; padding-bottom: 0; }
 table.data th.num, table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.data tbody tr:hover { background: var(--o-surface-subtle); }
+/* Actions, ids, chips and links styled as buttons never wrap ("Rev / oke", "Setting / s"); the
+   free-text columns take the squeeze instead. */
+table.data .btn, table.data .row-actions, table.data .tag, table.data .chip,
+table.data td.nowrap { white-space: nowrap; }
+table.data .row-actions { display: inline-flex; gap: var(--o-s2); }
+table.data tbody tr.ignored td { opacity: .55; }
 .th-sort { background: none; border: 0; padding: var(--o-s2) 0; display: inline-flex;
            align-items: center; gap: var(--o-s1); color: inherit; font-weight: inherit; }
 .th-arrow { font-size: 10px; opacity: .6; }
@@ -130,3 +136,5 @@ a.home { color: inherit; text-decoration: none; }
 .note { color: var(--o-text-muted); font-size: .85rem; }
 ul.findings { list-style: none; padding: 0; margin: 0; }
 ul.findings li { padding: .3rem 0; border-top: 1px solid var(--o-border); overflow-wrap: anywhere; }
+.row-note { display: block; color: var(--o-text-muted); font-size: var(--o-fs-sm); margin-top: var(--o-s1); }
+.row-note::before { content: "Note: "; font-weight: 600; }

@@ -3,6 +3,7 @@
 import { el } from "/static/js/dom.js";
 import { statusChip } from "/static/js/chips.js";
 import { seconds } from "/static/js/api.js";
+import { formatWhen } from "/static/js/format.js";
 
 export { el };
 export { api, get, getAll, poller, whoami } from "/static/js/api.js";
@@ -24,8 +25,7 @@ export function stateChip(node) {
 
 // A time from the API: an RFC 3339 string, or unix seconds.
 export function when(ts) {
-  const s = seconds(ts);
-  return s ? new Date(s * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" }) : "never";
+  return formatWhen(seconds(ts));
 }
 
 export function portHref(switchId, portKey) {

@@ -102,6 +102,8 @@ function readFields() {
 
 function draw() {
   countLine.textContent = `${rules.length} of at most ${maxRules} rules.${dirty ? " Changes are not saved yet." : ""}`;
+  // Nothing to save until the list on screen differs from the saved one.
+  document.getElementById("rules-save").disabled = !dirty;
   const columns = [
     { key: "id", label: "Id", get: (r) => r.id },
     { key: "rule", label: "Rule", get: (r) => ruleSummary(r) },

@@ -4,7 +4,10 @@
 // Admin entries are left out for viewers. That is only tidiness: the server still decides.
 import { el } from "/static/js/dom.js";
 import { applyStoredTheme, currentTheme, cycleTheme } from "/static/js/theme.js";
-import { get } from "/static/js/api.js";
+import { api, get, getAll, poller } from "/static/js/api.js";
+import { statusChip } from "/static/js/chips.js";
+import { stateInfo } from "/static/js/chip-states.js";
+import { monitorCounts, summaryLabel } from "/static/js/summary-logic.js";
 
 export const WORKSPACES = [
   ["overview", "Overview"], ["hosts", "Hosts"], ["network", "Network"],
@@ -104,6 +107,18 @@ function themeButton() {
   return b;
 }
 
+// Sign out is on every page for a signed-in visitor, not only on /admin.
+function signOutButton() {
+  const b = el("button", "btn ghost shell-signout", "Sign out");
+  b.type = "button";
+  b.addEventListener("click", async () => {
+    b.disabled = true;
+    try { await api("POST", "/api/logout"); } catch (_) { /* fall through to the login page */ }
+    window.location.assign("/login");
+  });
+  return b;
+}
+
 // One read of the session or the plugin list. A 401 means the session ended (the client has
 // already sent the visitor to sign in), any other failure leaves the nav as the cached role drew it.
 async function read(path) {
@@ -138,6 +153,39 @@ function pluginNav(plugins) {
   return plugins.items.flatMap((p) => p.nav.map((n) => ({ plugin: p.name, ...n })));
 }
 
+// The header summary, the same on every page: how many monitors are in each effective state,
+// linked to the dashboard. Page-specific status (hosts, map devices, one host) is in the page
+// body. A reader who may not list monitors simply sees no summary.
+const WORDS = Object.fromEntries(["down", "unreachable", "warn", "pending", "up"]
+  .map((s) => [s, stateInfo(s).word]));
+
+function drawSummary(mount, monitors) {
+  const counts = monitorCounts(monitors);
+  if (!counts.length) { mount.replaceChildren(); return; }
+  const a = el("a", "shell-summary");
+  a.href = "/";
+  a.setAttribute("aria-label", summaryLabel(counts, WORDS));
+  a.title = "Monitors by state; open the dashboard";
+  a.append(...counts.map(([s, n]) => statusChip(s, `${n} ${WORDS[s]}`)));
+  mount.replaceChildren(a);
+}
+
+function mountSummary() {
+  const mount = document.getElementById("summary");
+  if (!mount) return;
+  poller(async () => {
+    let monitors;
+    try {
+      monitors = await getAll("/api/v2/monitors", 500, { fields: "slug,effective_state" },
+        { redirect: false });
+    } catch (err) {
+      if (err && (err.status === 401 || err.status === 403)) { mount.replaceChildren(); return; }
+      throw err;
+    }
+    drawSummary(mount, monitors);
+  }, { interval: 30000, domains: ["monitors"] });
+}
+
 export async function mountShell() {
   const header = document.getElementById("shell-header");
   const nav = document.getElementById("shell-nav");
@@ -146,12 +194,13 @@ export async function mountShell() {
   header.prepend(brand());
   header.append(themeButton());
   renderNav(nav, visibleItems(cachedAdmin(), null), window.location.pathname);
+  mountSummary();
   const [session, plugins] = await Promise.all([read("/api/v2/session"), read("/api/v2/plugins")]);
   if (session && session.expired) { toLogin(); return; }
   const isAdmin = !!(session && session.is_admin);
   rememberAdmin(isAdmin);
   if (session && typeof session.username === "string") {
-    header.append(el("span", "shell-user", session.username));
+    header.append(el("span", "shell-user", session.username), signOutButton());
   }
   renderNav(nav, visibleItems(isAdmin, pluginNav(plugins)), window.location.pathname);
 }

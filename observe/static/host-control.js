@@ -7,16 +7,19 @@ import { statusChip } from "/static/js/chips.js";
 import { confirmDialog, typedConfirm } from "/static/js/dialog.js";
 import { toast } from "/static/js/toast.js";
 import { updateResultText } from "/static/js/updates-logic.js";
+import { formatWhen } from "/static/js/format.js";
 
 const ctlBox = document.getElementById("control");
-const ctlHost = new URLSearchParams(location.search).get("name") || "";
+const ctlHost = (location.pathname.startsWith("/hosts/")
+  ? decodeURIComponent(location.pathname.slice("/hosts/".length)) : "")
+  || new URLSearchParams(location.search).get("name") || "";
 const BASE = "/api/plugins/control";  // requesting and cancelling; the reads are on /api/v2/control
 const ACTION_TEXT = {
   "fan.set_floor": "Set a fan floor", "fan.set_mode": "Switch fan controller mode",
   "service.restart": "Restart a service", "host.reboot": "Reboot the host",
   "agent.update": "Update the hostwatch agent",
 };
-const COMPONENT_TEXT = { agent: "agent container", control: "control daemon", all: "agent and control daemon" };
+const COMPONENT_TEXT = { agent: "hostwatch agent", control: "control daemon", all: "agent and control daemon" };
 let ctlCsrf = "";
 let ctlCaps = null;
 let ctlHistoryBox = null;
@@ -180,7 +183,7 @@ function historyTable(commands) {
   t.append(head);
   for (const c of commands) {
     const r = cel("tr");
-    r.append(cel("td", null, new Date(seconds(c.issued_at) * 1000).toLocaleString()),
+    r.append(cel("td", null, formatWhen(seconds(c.issued_at))),
       cel("td", null, describe(c.action, c.params)), cel("td", null, c.requested_by));
     const st = cel("td");
     st.append(statusChip(STATE_CHIP[c.state] || "pending", c.state));

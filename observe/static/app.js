@@ -8,7 +8,8 @@ import { stateInfo } from "/static/js/chip-states.js";
 import { applyLayout, initTiles, setDeclared } from "/static/js/tiles.js";
 import { groupTile } from "/static/js/tiles-logic.js";
 import { getAll, get, poller, seconds } from "/static/js/api.js";
-import { formatReading } from "/static/js/format.js";
+import { eventText, formatWhen, monitorReading, refreshedText } from "/static/js/format.js";
+import { downTileLabel } from "/static/js/hosts-logic.js";
 
 const ORDER = { down: 0, unreachable: 1, warn: 2, pending: 3, up: 4 };
 const expanded = new Set();
@@ -46,16 +47,10 @@ function ago(ts) {
 }
 
 function fmtTime(ts) {
-  return new Date(seconds(ts) * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
+  return formatWhen(seconds(ts));
 }
 
-function fmtVal(m) {
-  if (m.result === "fail" && m.value == null) return "";  // a failed probe has no meaningful latency
-  if (m.value === null || m.value === undefined) {
-    return m.latency_ms != null ? `${Math.round(m.latency_ms)} ms` : "";
-  }
-  return formatReading(m.value, m.unit);
-}
+const fmtVal = monitorReading;
 
 function makeRow(m) {
   const node = tpl.content.firstElementChild.cloneNode(true);
@@ -104,7 +99,7 @@ function updateRow(node, m) {
   held.textContent = m.held_by ? `Alert held: ${m.held_by} is being re-checked` : "";
   const link = node.querySelector(".hostlink");
   link.hidden = m.type !== "pushed_host";
-  if (m.type === "pushed_host") link.href = `/host?name=${encodeURIComponent(m.target)}`;
+  if (m.type === "pushed_host") link.href = `/hosts/${encodeURIComponent(m.target)}`;
   node.querySelector(".msg").textContent = m.message;
   const fcEl = node.querySelector(".fc");
   const fc = fcText(m.forecast);
@@ -172,7 +167,7 @@ async function loadHistory(slug, node) {
     list.replaceChildren(...events.items.map((e) => {
       const li = el("li");
       const a = e.attributes;
-      li.append(el("span", "when", fmtTime(e.ts)),
+      li.append(el("span", "when", fmtTime(e.ts)), " ",
         `${a["observe.monitor.state.previous"]} → ${a["observe.monitor.state"]}: ${e.body}`);
       return li;
     }));
@@ -194,18 +189,16 @@ function drawDashboard(data) {
     if (!groups.has(m.group)) groups.set(m.group, []);
     groups.get(m.group).push(m);
   }
-  const summary = document.getElementById("summary");
-  summary.replaceChildren(...Object.entries(counts).filter(([, n]) => n)
-    .map(([s, n]) => statusChip(s, `${n} ${stateInfo(s).word}`)));
+  // The header summary (#summary) is the shell's global monitor summary; the counts of this
+  // page are in the KPI row and the availability tiles below.
   document.title = counts.down ? `(${counts.down} down) Overview - Observe` : "Overview - Observe";
 
   const forecasts = data.monitors.filter((m) => m.forecast && (m.forecast.warn_at || m.forecast.crit_at));
   const week = Date.now() / 1000 + 7 * 86400;
   const soon = forecasts.filter((m) =>
     Math.min(m.forecast.crit_at ?? Infinity, m.forecast.warn_at ?? Infinity) <= week).length;
-  const downHosts = data.monitors.filter((m) => m.effective_state === "down" && m.type === "pushed_host").length;
   setKpi("kpi-monitors", data.monitors.length, `${groups.size} groups`);
-  setKpi("kpi-down", counts.down, downHosts ? `${downHosts} hosts` : "", counts.down > 0);
+  setKpi("kpi-down", counts.down, downTileLabel(data.hosts, data.monitors), counts.down > 0);
   setKpi("kpi-warn", counts.warn, counts.unreachable ? `${counts.unreachable} unreachable` : "");
   setKpi("kpi-capacity", soon, `full within 7 days, ${forecasts.length} forecasts`);
   document.getElementById("tiles").replaceChildren(...[
@@ -240,9 +233,15 @@ function drawDashboard(data) {
     }
     const per = {};
     for (const m of mons) per[m.effective_state] = (per[m.effective_state] || 0) + 1;
+    const said = [];
     for (const s of ["down", "unreachable", "warn", "pending", "up"]) {
-      if (per[s]) sum.append(statusChip(s, `${per[s]} ${stateInfo(s).word.toLowerCase()}`));
+      if (!per[s]) continue;
+      const text = `${per[s]} ${stateInfo(s).word.toLowerCase()}`;
+      sum.append(statusChip(s, text));
+      said.push(text);
     }
+    // The toggle's name: the group and its counts, so a screen reader announces more than chips.
+    sum.setAttribute("aria-label", `Group ${name}${g ? `, ${stateInfo(g.state).word}` : ""}: ${said.join(", ")}`);
     card.append(sum);
     const ul = el("ul", "group");
     for (const m of visible) {
@@ -269,29 +268,24 @@ function drawDashboard(data) {
   document.getElementById("capacity").replaceChildren(...outlook.map(({ m }) => {
     const [text] = fcText(m.forecast);
     const li = el("li");
-    li.append(el("span", "when", m.name), `${text} · now ${fmtVal(m)} · ${m.forecast.reason}`);
+    li.append(el("span", "when", m.name), " ",
+      `${text} · now ${fmtVal(m)} · ${m.forecast.reason}`);
     return li;
   }));
 
   const bad = Object.entries(data.alerts).filter(([, a]) => a.last_error);
   document.getElementById("footer").textContent =
-    `observe ${data.version} · refreshed ${new Date().toLocaleTimeString()}` +
+    `observe ${data.version} · ${refreshedText()}` +
     (bad.length ? ` · alert delivery failing: ${bad.map(([n, a]) => `${n} (${a.last_error})`).join("; ")}` : "");
-}
-
-function eventText(e) {
-  const a = e.attributes;
-  if (e.event_name === "observe.monitor.transition") {
-    return `${e.resource.name}: ${a["observe.monitor.state.previous"]} → ${a["observe.monitor.state"]} (${e.body})`;
-  }
-  return `${e.resource.name}: ${e.event_name} (${e.body})`;
 }
 
 async function renderEvents() {
   const page = await get("/api/v2/events?limit=25");
+  const names = new Map((lastData ? lastData.monitors : []).map((m) => [m.slug, m.name]));
   document.getElementById("events").replaceChildren(...page.items.map((e) => {
     const li = el("li");
-    li.append(el("span", "when", fmtTime(e.ts)), eventText(e));
+    // The space is real text, so a copy, a screen reader or a text view keeps the gap too.
+    li.append(el("span", "when", fmtTime(e.ts)), " ", eventText(e, names));
     return li;
   }));
 }
@@ -333,11 +327,13 @@ async function renderWaiting() {
 // not given a growing queue of overlapping requests. It runs again when a domain it reads moves.
 async function refresh() {
   try {
-    const [monitors, groups, status] = await Promise.all([
+    const [monitors, groups, status, hosts] = await Promise.all([
       getAll("/api/v2/monitors"), getAll("/api/v2/groups"), get("/api/v2/status"),
+      // The Hosts list needs a session; an anonymous viewer gets the monitor count instead.
+      getAll("/api/v2/hosts", 500, {}, { redirect: false }).catch(() => null),
     ]);
     lastData = {
-      version: status.version, monitors,
+      version: status.version, monitors, hosts,
       groups: Object.fromEntries(groups.map((g) => [g.name, g])),
       alerts: Object.fromEntries(status.alerts.map((a) => [a.name, a])),
     };

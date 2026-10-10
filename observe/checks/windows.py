@@ -220,7 +220,7 @@ class WmiCheck(_WsManCheck):
         if not isinstance(rows, list):
             rows = [rows]
         if m.aggregate == "count":
-            return CheckResult.ok(f"{len(rows)} rows", value=float(len(rows)))
+            return CheckResult.ok(f"{len(rows)} rows", value=float(len(rows)), unit="{row}")
         nums = [float(r) for r in rows if isinstance(r, (int, float))]
         if not nums:
             return CheckResult.fail(f"query returned no numeric {m.property!r} values")

@@ -26,10 +26,13 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, RedirectResponse,
+                               Response)
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -37,8 +40,8 @@ from . import __version__
 from . import api as apimod
 from . import audit
 from . import auth as authmod
-from . import (enrol, hosttasks, layout, recheck_settings, retention, rules, scripts, taskscripts,
-               tiers, updates)
+from . import (enrol, hosttasks, ignored, layout, recheck_settings, retention, rules, scripts,
+               taskscripts, tiers, updates)
 from .alerts import Alerter
 from .config import Config
 from .infra import InfraError, InfraService
@@ -105,6 +108,10 @@ def scripts_machine_id() -> str:
     return ""
 
 
+# Paths whose clients are programs, never browsers: a 404 there stays JSON.
+MACHINE_PATHS = ("/api/", "/internal/", "/v1/", "/metrics", "/static/", "/healthz", "/i/", "/t/")
+
+
 def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Alerter,
                ingest_clock: Callable[[], float] = time.monotonic,
                auth_clock: Callable[[], float] = time.time,
@@ -112,6 +119,21 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                map_clock: Callable[[], float] = time.time) -> FastAPI:
     app = FastAPI(title="Observe", version=__version__, docs_url=None, redoc_url=None,
                   openapi_url=None)
+
+    def not_found_page() -> FileResponse:
+        return FileResponse(STATIC / "404.html", status_code=404)
+
+    async def on_http_error(request: Request, exc: Exception) -> Response:
+        """A browser asking for a page that does not exist gets the HTML 404 page; API and agent
+        clients, and every other error, keep the JSON answer."""
+        assert isinstance(exc, StarletteHTTPException)
+        accept = request.headers.get("accept", "")
+        if (exc.status_code == 404 and request.method == "GET" and "text/html" in accept
+                and not request.url.path.startswith(MACHINE_PATHS)):
+            return not_found_page()
+        return await http_exception_handler(request, exc)
+
+    app.add_exception_handler(StarletteHTTPException, on_http_error)
     user, pw = config.server.basic_auth_user, config.server.basic_auth_password
 
     guards = authmod.build_guards(config, store, auth_clock)
@@ -608,7 +630,21 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     def state_of(slug: str) -> tuple[str, str | None] | None:
         return scheduler.rollup.effective(slug) if slug in scheduler.states else None
 
-    mapper = MapService(config, infra, matcher, state_of, map_clock, live_port)
+    def device_state_of(slug: str, mac: str | None, name: str) -> str | None:
+        st = scheduler.states.get(slug)
+        detail = st.last.detail if st is not None and st.last is not None else None
+        devices = detail.get("devices") if isinstance(detail, dict) else None
+        if not isinstance(devices, list):
+            return None
+        for dev in devices:
+            if isinstance(dev, dict) and ((mac and dev.get("mac") == mac)
+                                          or (not mac and name and dev.get("name") == name)):
+                state = dev.get("state")
+                return str(state) if state else None
+        return None
+
+    mapper = MapService(config, infra, matcher, state_of, map_clock, live_port,
+                        device_state_of=device_state_of)
     app.state.mapper = mapper
     scheduler.hooks.append(mapper.tick)
 
@@ -887,6 +923,28 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         glob, saved = await store.storage.read(tiers.load)
         known = await store.storage.read(tiers.known_hosts)
         return JSONResponse(tiers.describe(glob, saved, known))
+
+    @app.put("/api/hosts/{host}/ignored", include_in_schema=False)
+    async def put_ignored(
+            host: str, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Replace the readings ignored on one host, by hw.id (observe/ignored.py). Admin session
+        and CSRF. An ignored reading is still shown, greyed out, but no longer counts toward its
+        section or the host's verdict. A change is audited with the old and new lists."""
+        remote = request.client.host if request.client else ""
+        if not host or len(host) > MAX_NAME:
+            return JSONResponse({"detail": "unknown host"}, status_code=404)
+        try:
+            ids = ignored.validate(await body_of(request))
+        except ignored.IgnoreError as err:
+            await audit.record(store, "host_readings_ignore_failed", actor=sess.username,
+                               method="PUT", path=ignored.PATH, status=422, remote=remote,
+                               detail={"host": host, "reason": str(err)})
+            return JSONResponse({"detail": str(err)}, status_code=422)
+        got = await store.storage.write(lambda db: ignored.save(
+            db, host, ids, now=auth_clock(), actor=sess.username, remote=remote),
+            touches=("admin", "audit"))
+        return JSONResponse({"host": host, "ignored": got["new"]})
 
     @app.put("/api/admin/rules", include_in_schema=False)
     async def put_rules(
@@ -1222,14 +1280,18 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         now = auth_clock()
         row = await enrolment_row(host)
         reporting = {r["host"]: r for r in await store.host_rows()}.get(host)
-        keys = await store.fetch(
-            "SELECT COUNT(*) FROM ingest_keys WHERE host=? AND scope IN ('wpi', 'wpc') "
-            "AND revoked_at IS NULL", (host,))
-        if row is None and reporting is None and host not in pushed and not keys[0][0]:
+        by_scope = {"wpi": 0, "wpc": 0}
+        for scope, n in await store.fetch(
+                "SELECT scope, COUNT(*) FROM ingest_keys WHERE host=? AND scope IN ('wpi', 'wpc') "
+                "AND revoked_at IS NULL GROUP BY scope", (host,)):
+            by_scope[scope] = n
+        active = sum(by_scope.values())
+        if row is None and reporting is None and host not in pushed and not active:
             return None
         out: dict[str, Any] = {
             "host": host, "enrolled": row is not None, "in_config": host in pushed,
-            "reporting": reporting is not None, "active_keys": keys[0][0],
+            "reporting": reporting is not None, "active_keys": active,
+            "active_by_scope": by_scope,
             "agent_version": reporting["agent_version"] if reporting else "",
             "control_ready": bool(control_public_key()), "ttl_s": enrol.TOKEN_TTL_S,
             "platform": "", "platform_label": "", "agent": False, "control": False,
@@ -1485,8 +1547,34 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         return PlainTextResponse(body, media_type=scripts.media_type(task.platform))
 
     @app.get("/host", include_in_schema=False)
-    async def host_page() -> FileResponse:
-        # Like /login, the page holds no data; host.js sends a visitor without a session to /login.
+    async def host_page_old(request: Request) -> Response:
+        """The old address of a host page, /host?name=x, sent on to /hosts/x."""
+        name = request.query_params.get("name", "")
+        if not name:
+            return not_found_page()
+        return RedirectResponse(f"/hosts/{quote(name, safe='')}", status_code=301)
+
+    async def known_host(name: str) -> bool:
+        """Whether a host page has anything to show: a host that reported, or one the YAML
+        lists as a pushed_host, a Home Assistant host or an SNMP host."""
+        if any(r["host"] == name for r in await store.host_rows()):
+            return True
+        for m in scheduler.monitors:
+            if (m.type == "pushed_host" and m.host == name) or (
+                    m.type in ("homeassistant", "snmp")
+                    and getattr(m, "host_name", None) == name):
+                return True
+        return False
+
+    @app.get("/hosts/{name:path}", include_in_schema=False)
+    async def host_page(name: str, request: Request) -> Response:
+        # Like /login, the page holds no data; host.js sends a visitor without a session to
+        # /login. A signed-in visitor asking for a host nobody knows gets a 404 page; an
+        # anonymous one is not told which hosts exist.
+        signed_in = await authmod.load_session(
+            store, config, request.cookies.get(authmod.COOKIE), auth_clock()) is not None
+        if signed_in and not await known_host(name):
+            return not_found_page()
         return FileResponse(STATIC / "host.html")
 
     @app.get("/metrics", dependencies=guarded, response_class=PlainTextResponse)

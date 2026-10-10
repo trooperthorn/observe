@@ -55,6 +55,8 @@ __version__ = "0.1.0"
 MAX_BACKOFF_S = 3600.0
 # A device id from the console goes into a request path only when it is a plain token.
 ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+# Device details read per devices poll to learn uplinks the list rows do not carry.
+MAX_DETAIL_READS = 64
 log = logging.getLogger(__name__)
 
 
@@ -293,10 +295,42 @@ class UniFiPlugin(PluginBase):
             return gid, parse_uplink_stats(None)
         return gid, parse_uplink_stats(stats)
 
+    @staticmethod
+    async def _uplinks(api: IntegrationClient, c: Any, site_id: str, rows: list[Any]) -> int:
+        """Fill in the uplink of each device row that does not name one. The Integration list row
+        carries no uplink; the device detail (`GET /devices/{id}`) has `uplink.deviceId`, which
+        is what the map draws its links from. Without this the map had devices but no links. At
+        most MAX_DETAIL_READS details per poll; a refused or malformed detail leaves that device
+        without a link and never fails the poll. Returns how many uplinks were found."""
+        found = 0
+        for row in [r for r in rows if isinstance(r, dict)][:MAX_DETAIL_READS]:
+            up = row.get("uplink")
+            if (isinstance(up, dict) and up.get("deviceId")) or row.get("uplinkDeviceId"):
+                continue
+            did = row.get("id")
+            if not isinstance(did, str) or not ID_RE.match(did):
+                continue
+            try:
+                detail = await api.get(c, f"/sites/{site_id}/devices/{did}")
+            except (UniFiError, httpx.HTTPError) as err:
+                log.debug("unifi device detail not read: %s", type(err).__name__)
+                continue
+            dup = detail.get("uplink") if isinstance(detail, dict) else None
+            if isinstance(dup, dict) and isinstance(dup.get("deviceId"), str) and dup["deviceId"]:
+                row["uplink"] = {**(up if isinstance(up, dict) else {}),
+                                 "deviceId": dup["deviceId"]}
+                found += 1
+        return found
+
+    async def _devices_extra(self, api: IntegrationClient, c: Any, site_id: str,
+                             rows: list[Any]) -> tuple[str, dict[str, Any]]:
+        await self._uplinks(api, c, site_id, rows)
+        return await self._gateway_stats(api, c, site_id, rows)
+
     async def collect_devices(self, store: Store) -> int:
         """One poll. Raises BackedOff while pausing, AuthRejected on a 401 or 403, UniFiError
         for an answer it refuses. Returns the number of devices stored."""
-        site_id, rows, (gid, wan) = await self._site_and_rows("devices", self._gateway_stats)
+        site_id, rows, (gid, wan) = await self._site_and_rows("devices", self._devices_extra)
         devices = [d for d in (parse_device(site_id, r) for r in rows) if d is not None]
         now = self.wall()
         # The device rows, the site status and the map feed are one cycle in one transaction.

@@ -196,6 +196,18 @@
             "title": "Actor",
             "type": "string"
           },
+          "actor_host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The host or device label a key actor (a key prefix) is bound to",
+            "title": "Actor Host"
+          },
           "detail": {
             "additionalProperties": true,
             "title": "Detail",
@@ -213,6 +225,16 @@
             "title": "Method",
             "type": "string"
           },
+          "outcome": {
+            "description": "Whether the action worked, from the kind, the detail and the status",
+            "enum": [
+              "ok",
+              "refused",
+              "failed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
           "path": {
             "title": "Path",
             "type": "string"
@@ -222,6 +244,7 @@
             "type": "string"
           },
           "status": {
+            "description": "The HTTP status, or 0 when the row has none",
             "title": "Status",
             "type": "integer"
           },
@@ -239,6 +262,7 @@
           "method",
           "path",
           "status",
+          "outcome",
           "remote",
           "detail"
         ],
@@ -941,6 +965,18 @@
             "title": "Host",
             "type": "string"
           },
+          "install_problem": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Install Problem"
+          },
           "last_seen": {
             "anyOf": [
               {
@@ -1042,6 +1078,19 @@
           "host": {
             "title": "Host",
             "type": "string"
+          },
+          "install_problem": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The newest failed console install step not cleared since.",
+            "title": "Install Problem"
           },
           "last_seen": {
             "anyOf": [
@@ -4341,7 +4390,7 @@
     },
     "/audit": {
       "get": {
-        "description": "The audit log, newest first. The detail was redacted when it was written.",
+        "description": "The audit log, newest first. The detail was redacted when it was written.\n\nThe outcome is derived when the log is read (audit.outcome), so old rows have one too, and\nits filter runs here over batches like the attribute filter of /resources: a page is short\nonly when the log ran out, and a scan cut at MAX_SCAN still hands back a cursor.",
         "operationId": "list_audit",
         "parameters": [
           {
@@ -4411,6 +4460,29 @@
               ],
               "description": "One actor",
               "title": "Actor"
+            }
+          },
+          {
+            "description": "One outcome",
+            "in": "query",
+            "name": "outcome",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "ok",
+                    "refused",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "One outcome",
+              "title": "Outcome"
             }
           }
         ],
@@ -5714,7 +5786,8 @@
         "x-change-domains": [
           "hosts",
           "metrics",
-          "events"
+          "events",
+          "admin"
         ],
         "x-rate-cost": 1.0,
         "x-roles": [
@@ -6075,7 +6148,8 @@
         "x-change-domains": [
           "hosts",
           "metrics",
-          "events"
+          "events",
+          "admin"
         ],
         "x-rate-cost": 1.0,
         "x-roles": [

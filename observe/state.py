@@ -19,6 +19,13 @@ apply to every failure.
 PENDING is the state before enough evidence exists. A transition out of
 PENDING into UP is recorded but not alerted, so a restart does not page you
 with "everything recovered".
+
+The state each monitor was in before a restart is kept in the database (monitor_state) and
+handed back as `prior`. The monitor still starts PENDING and earns its state with the ordinary
+counts, but when the state it reaches is the prior one it takes it silently, with the prior
+`since`: no event, no alert, and the duration keeps counting from the real transition. A
+different state is a real change across the restart and is logged and alerted as a transition
+from the prior state (up -> down, not pending -> down).
 """
 
 from __future__ import annotations
@@ -77,11 +84,29 @@ class MonitorState:
     # alert goes out, and only then. Suppressed or never-alerted problems
     # recover silently.
     alert_open: bool = False
+    # The state, and its since, from before a restart; used only while the monitor is PENDING.
+    prior: tuple[State, float] | None = None
 
-    def _enter(self, state: State, now: float, message: str, degraded: bool = False) -> Transition:
-        tr = Transition(self.state, state, now, message, degraded)
+    @property
+    def settled(self) -> State:
+        """The state the monitor is known to be in: its prior state while it is PENDING after a
+        restart, its state otherwise."""
+        if self.state is State.PENDING and self.prior is not None:
+            return self.prior[0]
+        return self.state
+
+    def _enter(self, state: State, now: float, message: str,
+               degraded: bool = False) -> Transition | None:
+        """Move to `state`. Out of PENDING after a restart, reaching the prior state is no
+        transition (None), and reaching another one is a transition from the prior state."""
+        previous = self.state
+        if previous is State.PENDING and self.prior is not None:
+            (previous, since), self.prior = self.prior, None
+            if previous is state:
+                self.state, self.since = state, since
+                return None
         self.state, self.since = state, now
-        return tr
+        return Transition(previous, state, now, message, degraded)
 
     def _recheck(self, res: CheckResult, now: float) -> Transition | None | bool:
         """One result of a monitor in its re-check window. False means the window does not
@@ -125,15 +150,17 @@ class MonitorState:
             if outcome is not False:
                 return outcome
         elif (allow_recheck and self.recheck_window > 0 and res.result is Result.FAIL
-              and res.unreachable and self.state is not State.DOWN
+              and res.unreachable and self.settled is not State.DOWN
               and (self.degraded_ended is None
                    or now - self.degraded_ended >= self.degraded_cooldown)):
             self.degraded, self.degraded_since, self.replies = True, now, 0
             self.bad = self.warnish = 1
             self.good = 0
-            if self.state is State.WARN:
+            if self.settled is State.WARN:
                 # Already warning: the fast re-check starts, but WARN to WARN is no transition,
                 # so the event log and the alerts carry no second Degraded notice.
+                if self.state is State.PENDING:
+                    self._enter(State.WARN, now, "")  # the prior Warning, taken silently
                 return None
             return self._enter(State.WARN, now, f"Degraded: not responding ({res.message})",
                                degraded=True)
@@ -159,6 +186,4 @@ class MonitorState:
 
         if target is None or target is self.state:
             return None
-        tr = Transition(self.state, target, now, res.message)
-        self.state, self.since = target, now
-        return tr
+        return self._enter(target, now, res.message)

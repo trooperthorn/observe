@@ -16,6 +16,7 @@ export const STATES = {
   unavailable: { role: "pending", icon: "hollow", word: "No data" },
   absent: { role: "pending", icon: "hollow", word: "No data" },
   not_reported: { role: "pending", icon: "hollow", word: "No data" },
+  no_data: { role: "pending", icon: "hollow", word: "No data" },
 };
 
 export const FALLBACK = { role: "pending", icon: "hollow", word: "Unknown" };

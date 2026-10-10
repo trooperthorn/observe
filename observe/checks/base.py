@@ -44,27 +44,46 @@ class CheckResult:
         return cls(Result.OK, message, **kw)
 
 
-def apply_thresholds(res: CheckResult, th: Thresholds | None) -> CheckResult:
-    """Downgrade an OK result to WARN or FAIL based on its numeric value.
+def unit_suffix(unit: str) -> str:
+    """A unit as it follows a number in a message. A UCUM annotation such as "{entity}" names
+    what is counted and is left out ("3 entities" is in the message already)."""
+    return "" if unit.strip().startswith("{") else unit
+
+
+def threshold_level(value: float, th: Thresholds, held: Result = Result.OK) -> Result:
+    """OK, WARN or FAIL for one value. `held` is the level the thresholds gave the previous
+    value: a threshold that held then stays until the value is back past it by its band
+    (Thresholds.hysteresis), so a value hovering at the threshold does not flap."""
+    def past(limit: float | None, holding: bool) -> bool:
+        if limit is None:
+            return False
+        band = th.band(limit) if holding else 0.0
+        return value >= limit - band if th.direction == "above" else value <= limit + band
+    if past(th.crit, held is Result.FAIL):
+        return Result.FAIL
+    if past(th.warn, held is not Result.OK):
+        return Result.WARN
+    return Result.OK
+
+
+def apply_thresholds(res: CheckResult, th: Thresholds | None,
+                     held: Result = Result.OK) -> CheckResult:
+    """Downgrade an OK result to WARN or FAIL based on its numeric value. `held` is the level
+    the thresholds gave the previous value (threshold_level).
 
     Thresholds never upgrade a failure: a timed-out SNMP poll stays FAIL even
     if a stale value happened to be under the limit.
     """
     if th is None or res.result is Result.FAIL or res.value is None:
         return res
-    v = res.value
-    if th.direction == "above":
-        crit = th.crit is not None and v >= th.crit
-        warn = th.warn is not None and v >= th.warn
-    else:
-        crit = th.crit is not None and v <= th.crit
-        warn = th.warn is not None and v <= th.warn
-    if crit:
+    level = threshold_level(res.value, th, held)
+    unit = unit_suffix(res.unit)
+    if level is Result.FAIL:
         res.result = Result.FAIL
-        res.message += f" (critical threshold {th.crit:g}{res.unit} crossed)"
-    elif warn:
+        res.message += f" (critical threshold {th.crit:g}{unit} crossed)"
+    elif level is Result.WARN:
         res.result = Result.WARN
-        res.message += f" (warning threshold {th.warn:g}{res.unit} crossed)"
+        res.message += f" (warning threshold {th.warn:g}{unit} crossed)"
     return res
 
 
@@ -77,6 +96,8 @@ class Check:
         self.timeout: float = config.effective(monitor, "timeout")
         # Set by the scheduler before each run: the monitor is in its fast re-check window.
         self.rechecking: bool = False
+        # The level the thresholds gave the last value, for their hysteresis.
+        self.threshold_held: Result = Result.OK
 
     def credential(self) -> Any:
         name = getattr(self.monitor, "credential", None)
@@ -93,4 +114,9 @@ class Check:
         res = await self.probe()
         if res.latency_ms is None:
             res.latency_ms = round((time.perf_counter() - start) * 1000, 1)
-        return apply_thresholds(res, self.thresholds())
+        th = self.thresholds()
+        if th is None or res.result is Result.FAIL or res.value is None:
+            return res
+        held = self.threshold_held
+        self.threshold_held = threshold_level(res.value, th, held)
+        return apply_thresholds(res, th, held)

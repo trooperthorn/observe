@@ -7,8 +7,9 @@ import { get, getAll, poller, whoami } from "/static/js/api.js";
 import { statusChip, neutralChip } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { STATUS_STATE, ageText, filterRows, hostRows, summaryText } from "/static/js/hosts-logic.js";
+import { refreshedText } from "/static/js/format.js";
 
-const summary = document.getElementById("summary");
+const summary = document.getElementById("hosts-summary");
 const footer = document.getElementById("footer");
 const search = document.getElementById("q");
 let isAdmin = false;
@@ -56,6 +57,13 @@ function settingsCell(r) {
   return a;
 }
 
+function detailCell(r) {
+  const box = el("span");
+  box.append(muted(r.detail));
+  for (const note of r.notes || []) box.append(el("span", "row-note", note));
+  return box;
+}
+
 function columns() {
   const cols = [
     { key: "host", label: "Host", get: (r) => r.name, render: nameCell },
@@ -66,7 +74,7 @@ function columns() {
     { key: "agent", label: "Agent", get: (r) => r.agent || null,
       render: (r) => r.agent || muted("unknown") },
     { key: "monitor", label: "Monitor", get: (r) => (r.monitored ? 0 : 1), render: monitorCell },
-    { key: "detail", label: "Detail", render: (r) => muted(r.detail) },
+    { key: "detail", label: "Detail", render: detailCell },
   ];
   if (isAdmin) cols.push({ key: "settings", label: "Settings", render: settingsCell });
   return cols;
@@ -95,7 +103,7 @@ async function refresh() {
       getAll("/api/v2/hosts"), get("/api/v2/waiting-hosts")]);
     rows = hostRows(hosts, waiting.items);
     draw();
-    footer.textContent = `refreshed ${new Date().toLocaleTimeString()}`;
+    footer.textContent = refreshedText();
   } catch (e) {
     if (e.status === 401) return;  // the client is already sending the visitor to sign in
     footer.textContent = "observe unreachable, retrying";
@@ -107,7 +115,7 @@ async function start() {
   try {
     isAdmin = !!(await whoami()).is_admin;
   } catch (_) { /* a viewer view is the safe default */ }
-  table = sortableTable({ columns: columns(), rows: [], pageSizes: [25, 100],
+  table = sortableTable({ columns: columns(), rows: [], defaultSize: 25,
                           empty: emptyNote(), caption: "Hosts" });
   document.getElementById("hosts").append(table.root);
   search.addEventListener("input", draw);

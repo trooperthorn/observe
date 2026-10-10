@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import Query
 
-from .. import enrol, hostview
+from .. import enrol, hostview, ignored, tiers
 from ..checks.host import LATEST_WINDOW_S
 from .cursor import PageParams, encode
 from .models import HostPage, HostView, WaitingPage, rfc3339
@@ -23,7 +23,7 @@ from .problems import ApiProblem
 from .registry import ApiContext, ApiRegistry
 
 # Keys of the host document that hold a unix timestamp. They are written as RFC 3339 strings.
-TIME_KEYS = frozenset({"last_seen", "boot_ts", "ts", "updated"})
+TIME_KEYS = frozenset({"last_seen", "boot_ts", "ts", "updated", "at"})
 
 
 def _times(value: Any) -> Any:
@@ -40,6 +40,7 @@ class HostViews:
 
     def __init__(self, ctx: ApiContext) -> None:
         self.ctx = ctx
+        self._saved_rates: tuple[dict[str, float], dict[str, dict[str, float]]] | None = None
         sched = ctx.scheduler
         self.pushed = {m.host: m for m in sched.monitors if m.type == "pushed_host"}
         # A Home Assistant monitor in host mode ingests its own batches, so its host page uses
@@ -56,19 +57,47 @@ class HostViews:
                                    < ctx.config.effective(cur, "interval")):
                     self.snmp_hosts[m.host_name] = m
 
+    def overrides(self, host: str) -> dict[tuple[str, str], Any]:
+        """Thresholds that replace the built-in ones on this host's page. A pushed_host monitor's
+        components apply to its own readings. A Home Assistant monitor in `unavailable` mode on
+        the same instance sets the limits of the unavailable-entity count, so the host page grades
+        the same crossing with the same severity the dashboard does."""
+        mon = self.pushed.get(host)
+        out: dict[tuple[str, str], Any] = {(c.source, c.metric): c for c in mon.components} \
+            if mon else {}
+        ha = self.ha_hosts.get(host)
+        if ha is not None:
+            for m in self.ctx.scheduler.monitors:
+                if (m.type == "homeassistant" and m.mode == "unavailable" and m.enabled
+                        and m.thresholds is not None and (m.host, m.port) == (ha.host, ha.port)):
+                    out[(hostview.HA_POLL, "observe.ha.entity.unavailable")] = m.thresholds
+                    break
+        return out
+
     def names(self, rows: dict[str, dict[str, Any]]) -> list[str]:
         return sorted({*rows, *self.pushed, *self.ha_hosts, *self.snmp_hosts})
 
-    def stale_after(self, host: str, row: dict[str, Any] | None) -> float:
-        """How long the host may stay silent before it reads as stale."""
+    async def _rates(self) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
+        if self._saved_rates is None:
+            self._saved_rates = await tiers.load_rates(self.ctx.store)
+        return self._saved_rates
+
+    async def windows(self, host: str) -> tiers.Staleness:
+        """How long the host may stay silent before it reads as stale, and how long a reading
+        of each polling tier stays current. A Home Assistant or SNMP host is polled by Observe at
+        its monitor's interval, so its tiers do not apply; an agent host follows its effective
+        tier rates, the same windows as the pushed_host check."""
         config = self.ctx.config
-        mon = self.pushed.get(host)
-        if mon is not None:
-            return mon.stale_after or 3 * config.effective(mon, "interval")
         ha_mon = self.ha_hosts.get(host) or self.snmp_hosts.get(host)
-        if ha_mon is not None:
-            return 3 * config.effective(ha_mon, "interval")
-        return 3 * config.defaults.interval
+        mon = self.pushed.get(host)
+        if mon is None and ha_mon is not None:
+            return tiers.Staleness(3 * config.effective(ha_mon, "interval"))
+        glob, hosts = await self._rates()
+        if mon is not None:
+            return tiers.staleness(host, glob, hosts,
+                                   base=3 * config.effective(mon, "interval"),
+                                   explicit=mon.stale_after)
+        return tiers.staleness(host, glob, hosts, base=3 * config.defaults.interval)
 
     def _monitor_state(self, mon: Any) -> dict[str, Any] | None:
         if mon is None:
@@ -97,16 +126,17 @@ class HostViews:
                 return None
             data = None
         now = ctx.now
-        stale_after = self.stale_after(host, row)
+        stale_after = await self.windows(host)
+        skip = (await ignored.load_ignored(store)).get(host, frozenset())
         if seen:
             data = await store.latest_host(
-                host, window=max(stale_after, LATEST_WINDOW_S), now=now,
+                host, window=max(stale_after.longest, LATEST_WINDOW_S), now=now,
                 series=tuple((c.source, c.metric) for c in mon.components) if mon else ())
-        overrides = {(c.source, c.metric): c for c in mon.components} if mon else {}
+        overrides = self.overrides(host)
         return hostview.build_host_view(
             row, data, await store.host_sources(host),
             await store.host_events(host, limit=50), now, stale_after, mon, overrides,
-            self._monitor_state(mon))
+            self._monitor_state(mon), skip)
 
     async def views(self, names: list[str], rows: dict[str, dict[str, Any]]
                     ) -> list[dict[str, Any]]:
@@ -116,10 +146,12 @@ class HostViews:
         ctx = self.ctx
         now = ctx.now
         wanted: dict[str, tuple[float, tuple[tuple[str, str], ...]]] = {}
+        windows = {name: await self.windows(name) for name in names}
+        skips = await ignored.load_ignored(ctx.store)
         for name in names:
             if name in rows:
                 mon = self.pushed.get(name)
-                window = max(self.stale_after(name, rows[name]), LATEST_WINDOW_S)
+                window = max(windows[name].longest, LATEST_WINDOW_S)
                 wanted[name] = (now - window, tuple((c.source, c.metric) for c in mon.components)
                                 if mon else ())
         found = await ctx.store.host_list_inputs(
@@ -134,10 +166,11 @@ class HostViews:
                     continue
             got = found.get(name)
             data = {"samples": got["samples"]} if got is not None and name in rows else None
-            overrides = {(c.source, c.metric): c for c in mon.components} if mon else {}
+            overrides = self.overrides(name)
             out.append(hostview.build_host_view(
                 row, data, got["sources"] if got else {}, got["events"] if got else [], now,
-                self.stale_after(name, row), mon, overrides, self._monitor_state(mon)))
+                windows[name], mon, overrides, self._monitor_state(mon),
+                skips.get(name, frozenset())))
         return out
 
 
@@ -200,7 +233,7 @@ def register(api: ApiRegistry) -> None:
         the ETag stays put while an agent pushes the same picture."""
         now = runtime.wall()
         seqs = runtime.store.storage.change_seqs()
-        key = (tuple(seqs.get(d, 0) for d in ("hosts", "metrics", "events")),
+        key = (tuple(seqs.get(d, 0) for d in ("hosts", "metrics", "events", "admin")),
                sched.fingerprint(), int(now // FRESH_S))
         if kept.get("key") == key:
             return kept["digest"], key[2]
@@ -218,7 +251,8 @@ def register(api: ApiRegistry) -> None:
         kept["key"], kept["digest"] = key, digest
         return kept["digest"], key[2]
 
-    domains = ("hosts", "metrics", "events")
+    # A tier rate change moves the stale windows, so the admin counter is part of the ETag.
+    domains = ("hosts", "metrics", "events", "admin")
     # Hardware inventory: a session or a read token, never an anonymous reader. The list ETag is
     # the digest of the rows, not the change counters, which every batch moves.
     api.resource("/hosts", list_hosts, HostPage, domains=domains, tags=("hosts",), paginate=True,

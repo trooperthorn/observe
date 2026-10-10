@@ -392,3 +392,43 @@ async def test_map_routes_need_a_session_and_decisions_need_admin_and_csrf(web):
     assert web.client.get("/api/v2/infra/dependencies").json()["applied"][0]["by"] == "admin"
     assert web.client.post(reject, json=pay, headers=csrf).status_code == 200
     assert web.client.get("/api/v2/infra/dependencies").json()["applied"] == []
+
+
+# A node linked to an aggregate monitor shows its own device (bug plan WP2) -----------------
+
+
+async def test_node_linked_to_aggregate_monitor_shows_its_own_device(tmp_path):
+    """Seven UniFi devices are all linked to one `devices` monitor, which is Down because two
+    are offline. The five online devices must read Up, not inherit Down."""
+    store = Store(str(tmp_path / "w.db"))
+    try:
+        cfg = make_config([{"name": "unifi devices", "type": "unifi_network", "host": "u",
+                            "credential": "unifi", "mode": "devices"}],
+                          server={"db_path": str(tmp_path / "w.db")},
+                          credentials={"unifi": {"type": "unifi", "api_key": "k"}})
+        infra = InfraService(store)
+        matcher = Matcher(cfg, infra)
+        macs = [f"aa:bb:cc:00:00:0{i}" for i in range(7)]
+        devices = [{"name": f"dev{i}", "mac": switch_id(m)[4:],
+                    "state": "OFFLINE" if i in (2, 5) else "ONLINE"} for i, m in enumerate(macs)]
+
+        def device_state_of(slug, mac, name):
+            return next((d["state"] for d in devices if d["mac"] == mac), None)
+
+        mapper = MapService(cfg, infra, matcher, lambda slug: ("down", None), Clock(),
+                            device_state_of=device_state_of)
+        for m in macs:
+            await infra.upsert_switch(switch_id(m), now=T0)
+            await matcher.link_switch(switch_id(m), "unifi-devices", "admin")
+        await mapper.rebuild(T0)
+        data = await mapper.map_data(None, None)
+        states = [n["state"] for n in data["nodes"] if n["kind"] == "switch"]
+        assert sorted(states) == ["down"] * 2 + ["up"] * 5
+        # A monitor with no per-device state still decides for its node.
+        mapper = MapService(cfg, infra, matcher, lambda slug: ("down", None), Clock(),
+                            device_state_of=lambda slug, mac, name: None)
+        await mapper.rebuild(T0 + 1)
+        data = await mapper.map_data(None, None)
+        assert {n["state"] for n in data["nodes"] if n["kind"] == "switch"} == {"down"}
+    finally:
+        store.close()

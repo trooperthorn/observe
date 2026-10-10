@@ -1,6 +1,8 @@
 // Turns the /api/v2/map payload into the graph engine's input. Pure functions, no DOM.
 // Switches are the graph nodes. Endpoints are collapsed into a count on the switch they hang off.
+// Each node is labelled with its name and, under it, its state word and device type.
 import { FORCE_NODE_LIMIT } from "./force.js";
+import { deviceTypeWord, graphSubLabel } from "../map-logic.js";
 
 export const GROUPS = [{ id: "switch", label: "Switch" }];
 const STATE_MAP = { unreachable: "unreach", unknown: "pending" };
@@ -50,8 +52,8 @@ export function buildGraph(data) {
   const entities = switches.map((s) => {
     const n = details.get(s.id).endpoints;
     return {
-      id: s.id, name: s.label, group: "switch", kind: "Switch", state: graphState(s.state),
-      stateWord: s.state, badge: n ? `${n} endpoint${n === 1 ? "" : "s"}` : undefined,
+      id: s.id, name: s.label, group: "switch", kind: deviceTypeWord(s), state: graphState(s.state),
+      stateWord: s.state, sub: graphSubLabel(s), badge: n ? `${n} endpoint${n === 1 ? "" : "s"}` : undefined,
       monitor: s.monitor || null,
     };
   });

@@ -3,8 +3,9 @@
 // itself into its own card, so a refresh of this page never touches it.
 import { el } from "/static/js/dom.js";
 import { statusChip } from "/static/js/chips.js";
-import { get, poller, whoami } from "/static/js/api.js";
-import { formatValue } from "/static/js/format.js";
+import { api, get, poller, whoami } from "/static/js/api.js";
+import { toast } from "/static/js/toast.js";
+import { formatValue, formatWhen, readingText, refreshedText } from "/static/js/format.js";
 
 const SECTIONS = [
   ["cpu", "CPU"], ["memory", "Memory"], ["power", "Power"], ["temperatures", "Temperatures"],
@@ -21,7 +22,10 @@ const STATE_TEXT = {
 };
 const STATUS_STATE = { good: "up", warning: "warn", critical: "down" };
 const page = document.getElementById("page");
-const name = new URLSearchParams(location.search).get("name") || "";
+// The host is the path after /hosts/ (the old /host?name= form redirects here).
+const PATH_NAME = location.pathname.startsWith("/hosts/")
+  ? decodeURIComponent(location.pathname.slice("/hosts/".length)) : "";
+const name = PATH_NAME || new URLSearchParams(location.search).get("name") || "";
 let isAdmin = false;
 
 function chip(status, text) {
@@ -37,12 +41,11 @@ function ago(s) {
 }
 
 function fmtTime(ts) {
-  return new Date((typeof ts === "number" ? ts : Date.parse(ts) / 1000) * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
+  return formatWhen(ts);
 }
 
 function fmtValue(i) {
-  if (i.value == null) return "no value";
-  return formatValue(i.value, i.unit);
+  return readingText(i);
 }
 
 function labelText(labels) {
@@ -58,7 +61,7 @@ function dataTable(heads, rows) {
   thead.append(hr);
   const tbody = el("tbody");
   for (const cells of rows) {
-    const r = el("tr");
+    const r = el("tr", cells.cls || null);
     for (const c of cells) {
       const td = el("td");
       if (c instanceof Node) td.append(c); else td.textContent = c;
@@ -72,13 +75,58 @@ function dataTable(heads, rows) {
 }
 
 function itemsTable(items) {
-  return dataTable(["Reading", "Labels", "Value", "State", "Seen"], items.map((i) => {
+  const heads = ["Reading", "Labels", "Value", "State", "Seen"];
+  if (isAdmin) heads.push("");
+  return dataTable(heads, items.map((i) => {
     const st = el("span");
-    st.append(chip(i.status));
+    if (i.ignored) st.append(chip("no_data", "Ignored"));
+    else st.append(chip(i.status));
     if (i.reason) st.append(" ", el("span", "muted", i.reason));
-    return [`${i.source.replace(/^hostwatch\.collector\./, "")}.${i.metric}`, labelText(i.labels), fmtValue(i), st,
+    const row = [`${i.source.replace(/^hostwatch\.collector\./, "")}.${i.metric}`, labelText(i.labels), fmtValue(i), st,
       `${ago(i.age_seconds)}${i.stale ? " (stale)" : ""}`];
+    if (isAdmin) row.push(ignoreButton(i));
+    if (i.ignored) row.cls = "ignored";
+    return row;
   }));
+}
+
+// Every hw.id ignored on this host, read back from the items the server marked.
+let ignoredIds = new Set();
+
+function collectIgnored(h) {
+  const out = new Set();
+  for (const [key] of SECTIONS) {
+    for (const i of (h[key] && h[key].items) || []) {
+      if (i.ignored && i.labels && i.labels["hw.id"]) out.add(i.labels["hw.id"]);
+    }
+  }
+  return out;
+}
+
+// An admin can ignore a reading that has a hw.id (a floating sensor input, an empty fan
+// header). It stays on the page, greyed out, and stops counting toward the host's state. The
+// change is saved on the server and audited.
+function ignoreButton(i) {
+  const id = i.labels && i.labels["hw.id"];
+  if (!id) return "";
+  const b = el("button", "btn", i.ignored ? "Count again" : "Ignore");
+  b.type = "button";
+  b.setAttribute("aria-label", `${i.ignored ? "Count again" : "Ignore"} ${id}`);
+  b.addEventListener("click", async () => {
+    const next = new Set(ignoredIds);
+    if (i.ignored) next.delete(id); else next.add(id);
+    b.disabled = true;
+    try {
+      await api("PUT", `/api/hosts/${encodeURIComponent(name)}/ignored`, null,
+        { ignored: [...next] });
+      toast(i.ignored ? `${id} counts again` : `${id} is ignored on this host`);
+      await refresh();
+    } catch (err) {
+      toast(`Not saved: ${err.message}`, "error");
+      b.disabled = false;
+    }
+  });
+  return b;
 }
 
 function eventsList(events) {
@@ -94,14 +142,22 @@ function eventsList(events) {
 function card(title, ...chips) {
   const d = el("details", "card");
   d.open = true;
+  d.dataset.title = title;
   const s = el("summary");
   s.append(el("span", null, title), ...chips);
   d.append(s);
   return d;
 }
 
+// Sections with nothing on this host (absent hardware, never reported) start collapsed, so the
+// page leads with what the host has. A section the visitor opened or closed keeps that choice.
+const NO_DATA_STATES = new Set(["absent", "not_reported"]);
+const toggled = new Map();
+
 function section(title, sec, isEvents) {
   const box = card(title, chip(sec.status));
+  box.open = toggled.has(title) ? toggled.get(title) : !NO_DATA_STATES.has(sec.state);
+  box.addEventListener("toggle", () => toggled.set(title, box.open));
   if (sec.state !== "ok") box.firstChild.append(chip(sec.state, STATE_TEXT[sec.state] || sec.state));
   if (sec.note) box.append(el("p", "card-sub", sec.note));
   if (sec.items.length) box.append(isEvents ? eventsList(sec.items) : itemsTable(sec.items));
@@ -124,12 +180,15 @@ function sourcesTable(sources) {
 }
 
 function kpis(h) {
+  if (!h.heard) return document.createDocumentFragment();  // nothing to count yet
   const row = el("div", "kpi-row");
   for (const key of KPI_SECTIONS) {
     const sec = h[key];
     const title = SECTIONS.find(([k]) => k === key)[1];
     const tile = el("div", "kpi");
-    tile.append(el("span", "kpi-label", title), el("span", "kpi-value", String(sec.items.length)));
+    const n = sec.items.length;
+    tile.append(el("span", "kpi-label", title), el("span", "kpi-value", String(n)),
+      el("span", "kpi-label", n === 1 ? "reading" : "readings"));
     const foot = el("span", "kpi-label");
     foot.append(chip(sec.status));
     tile.append(foot);
@@ -147,31 +206,66 @@ function notice(h) {
   return n;
 }
 
+// The monitor reads the same verdict as this page (observe/hostview.py), but changes state only
+// after its failures_to_down confirmation, so a fresh change is said to be pending, never shown
+// as a contradiction.
+const VERDICT_STATE = { good: "up", warning: "warn", critical: "down" };
+function monitorLine(h) {
+  const m = h.monitor;
+  const want = VERDICT_STATE[h.status];
+  const shown = m.effective_state;
+  if (!want || shown === want) return `Monitor ${m.name}: ${shown}.`;
+  if (m.blocked_by) return `Monitor ${m.name}: ${shown}, held by ${m.blocked_by}.`;
+  return `Monitor ${m.name}: ${shown}, changing to ${want} once the next polls confirm it.`;
+}
+
+// The components the pushed_host monitor lists in the YAML, graded by the same function as the
+// monitor itself.
+function componentsCard(sec) {
+  if (!sec || !sec.items || !sec.items.length) return null;
+  const box = card("Monitor components", chip(sec.status));
+  box.append(dataTable(["Component", "Status", "Reason"], sec.items.map((i) => {
+    const st = el("span");
+    st.append(chip(i.status), i.stale ? " stale" : "");
+    return [i.name, st, i.reason || ""];
+  })));
+  return box;
+}
+
 function render(h) {
   document.title = `${h.host} - Observe`;
-  document.getElementById("summary").replaceChildren(chip(h.status, `${h.host}: ${h.status}`));
+  ignoredIds = collectIgnored(h);
   const frag = document.createDocumentFragment();
-  const head = el("div", "host-title");
-  const crumb = el("p", "card-sub");
+  // The same title block as the other pages: crumbs, then the title row with its action.
+  const head = el("div", "admin-title host-title");
+  const crumb = el("p", "crumbs muted");
   const back = el("a", null, "Hosts");
   back.href = "/hosts";
   crumb.append(back, " / ", h.host);
+  const titleRow = el("div", "title-row");
   const line = el("h1");
   line.append(h.host, " ", chip(h.status));
-  head.append(crumb, line);
+  titleRow.append(line);
   if (isAdmin) {
     // The settings page needs an admin session; a viewer would only see a refusal there.
     const settings = el("a", "btn", "Settings");
     settings.href = `/hosts/${encodeURIComponent(h.host)}/settings`;
-    head.append(settings);
+    titleRow.append(settings);
   }
+  head.append(crumb, titleRow);
   head.append(el("p", "card-sub",
     `${h.platform || "unknown platform"}, agent ${h.agent_version || "unknown"}. ` +
     (h.heard ? `Last report ${ago(h.age_seconds)}.` : "No batch has ever arrived.")));
   if (!h.monitored) {
     head.append(el("p", "card-sub", "Not listed as a pushed_host monitor, so it never alerts."));
   } else if (h.monitor) {
-    head.append(el("p", "card-sub", `Monitor ${h.monitor.name}: ${h.monitor.effective_state}.`));
+    head.append(el("p", "card-sub", monitorLine(h)));
+  }
+  if (h.install_problem) {
+    const p = h.install_problem;
+    head.append(el("p", "card-sub row-note",
+      `The console install reported step ${p.step} ${p.status}${p.note ? `: ${p.note}` : ""}. ` +
+      "It clears when a rerun of the install passes that step."));
   }
   const b = h.boot;
   if (b.boot_ts) {
@@ -182,6 +276,8 @@ function render(h) {
   frag.append(head, kpis(h));
   const n = notice(h);
   if (n) frag.append(n);
+  const comps = componentsCard(h.components);
+  if (comps) frag.append(comps);
   for (const [key, title] of SECTIONS) frag.append(section(title, h[key], key === "alerts"));
   const crashes = h.events.filter((e) => e.kind.startsWith("boot.") && !e.kind.startsWith("boot.clean"));
   if (crashes.length) {
@@ -193,7 +289,7 @@ function render(h) {
   ev.append(h.events.length ? eventsList(h.events) : el("p", "card-sub", "No events reported."));
   frag.append(ev, sourcesTable(h.sources));
   page.replaceChildren(frag);
-  document.getElementById("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;
+  document.getElementById("footer").textContent = refreshedText();
 }
 
 // The poller waits for a refresh to finish before it plans the next one, and runs again when the

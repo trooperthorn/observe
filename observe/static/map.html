@@ -8,23 +8,31 @@
 <link rel="stylesheet" href="/static/css/base.css">
 <link rel="stylesheet" href="/static/css/shell.css">
 <link rel="stylesheet" href="/static/css/components.css">
+<link rel="stylesheet" href="/static/css/admin.css">
 <link rel="stylesheet" href="/static/css/graph.css">
 </head>
 <body>
 <header id="shell-header" class="shell-head">
   <div id="summary" aria-live="polite"></div>
-  <label class="filter">Site <select id="site"><option value="">All sites</option></select></label>
-  <label class="filter">Building <select id="building"><option value="">All buildings</option></select></label>
 </header>
 <nav id="shell-nav" aria-label="Main"></nav>
-<main class="mappage">
-  <p id="msg" role="alert"></p>
-  <p class="note">Each box shows its state in words as well as colour. Dashed lines are links not confirmed for a while.</p>
-  <div class="graph-toolbar" role="group" aria-label="View">
-    <span>View:</span>
-    <button type="button" class="viewbtn" data-view="graph" aria-pressed="false">Graph</button>
-    <button type="button" class="viewbtn" data-view="tiers" aria-pressed="false">Tiers</button>
-    <button type="button" class="viewbtn" data-view="table" aria-pressed="false">Table</button>
+<main class="admin-main mappage" id="page">
+  <div class="admin-title">
+    <p class="crumbs muted">Network / Map</p>
+    <h1>Map</h1>
+  </div>
+  <p id="msg" class="msg-line" role="alert"></p>
+  <div id="map-summary" class="map-summary" aria-live="polite"></div>
+  <p class="note">Each device shows its type and its state in words as well as colour. Dashed lines are links not confirmed for a while.</p>
+  <div class="filter-bar map-toolbar">
+    <div class="graph-toolbar" role="group" aria-label="View">
+      <span>View:</span>
+      <button type="button" class="viewbtn" data-view="graph" aria-pressed="false">Graph</button>
+      <button type="button" class="viewbtn" data-view="tiers" aria-pressed="false">Tiers</button>
+      <button type="button" class="viewbtn" data-view="table" aria-pressed="false">Table</button>
+    </div>
+    <label>Site <select id="site"><option value="">All sites</option></select></label>
+    <label>Building <select id="building"><option value="">All buildings</option></select></label>
   </div>
   <div id="graphview" class="graphview" hidden>
     <p id="graphnote" class="graph-note" hidden></p>
@@ -34,23 +42,33 @@
           <button type="button" id="zoomin" aria-label="Zoom in">+</button>
           <button type="button" id="zoomout" aria-label="Zoom out">-</button>
           <button type="button" id="zoomfit" aria-label="Fit the graph">Fit</button>
-          <span>Arrow keys move between devices, Enter opens one, plus and minus zoom, 0 fits.</span>
+          <span>Arrow keys move between devices, Enter opens one, Escape clears the selection, plus and minus zoom, 0 fits.</span>
         </div>
         <div class="graph-wrap"><canvas id="graphcanvas"></canvas></div>
         <div class="graph-legend" id="graphlegend">
-          <span>&#10003; up</span><span>&#10005; down</span><span>! warning</span><span>Dashed line: link not confirmed for a while</span>
+          <span>&#10003; up</span><span>&#10005; down</span><span>! warning</span><span>Dashed line: link not confirmed for a while</span><span>Click empty space to clear the selection</span>
         </div>
       </div>
       <aside id="selected" class="selectedcard" aria-live="polite"><h2>Selected</h2><p class="note">Select a device to see its links.</p></aside>
     </div>
   </div>
   <div id="layers" class="layers"></div>
-  <section id="linkstable">
-    <h2>Links</h2>
-    <table id="links" class="items"><thead><tr><th>From</th><th>To</th><th>Source</th><th>Seen</th><th>State</th></tr></thead><tbody></tbody></table>
+  <section id="devicestable" class="table-wrap" hidden>
+    <table id="devices" class="data">
+      <caption>Devices</caption>
+      <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">State</th><th scope="col">Monitor</th><th scope="col">Address</th></tr></thead>
+      <tbody></tbody>
+    </table>
   </section>
+  <section id="linkstable" class="table-wrap">
+    <table id="links" class="data">
+      <caption>Links</caption>
+      <thead><tr><th scope="col">From</th><th scope="col">To</th><th scope="col">Source</th><th scope="col">Seen</th><th scope="col">State</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+  <footer id="footer" class="muted"></footer>
 </main>
-<footer id="footer"></footer>
 <script type="module" src="/static/pages/map.js"></script>
 <script type="module" src="/static/js/shell.js"></script>
 </body>

@@ -37,6 +37,10 @@ STATE_WORDS = ("up", "warn", "down", "unreachable", "pending")
 # Returns (effective state, name of the blocking ancestor or None) for a monitor slug, or None
 # when the monitor is not running.
 StateOf = Callable[[str], tuple[str, str | None] | None]
+# Returns the state one monitor last reported for one device (by chassis MAC digits or name), or
+# None when the monitor reports no per-device state. Used for a node linked to an aggregate
+# monitor (UniFi `devices` mode), so the node shows its own device, not the aggregate.
+DeviceStateOf = Callable[[str, str | None, str], str | None]
 
 
 @dataclass(frozen=True)
@@ -81,11 +85,13 @@ def _port_parts(ref: str) -> tuple[str, str]:
 class MapService:
     def __init__(self, config: Config, infra: InfraService, matcher: Matcher,
                  state_of: StateOf, clock: Callable[[], float] = time.time,
-                 live: LiveReader | None = None) -> None:
+                 live: LiveReader | None = None,
+                 device_state_of: DeviceStateOf | None = None) -> None:
         self._config = config
         self._infra = infra
         self._matcher = matcher
         self._state_of = state_of
+        self._device_state_of = device_state_of
         self._clock = clock
         self._live = live  # the last polled state of a port; without it there are no findings
         infra.set_stale_days(config.map.stale_days)
@@ -255,6 +261,18 @@ class MapService:
             return {"state": "unknown", "blocked_by": None}
         return {"state": got[0], "blocked_by": got[1]}
 
+    def _switch_state(self, slug: str | None, sid: str, name: str) -> dict[str, Any]:
+        """A switch node's state: its own device's state when the linked monitor reports one per
+        device, else the monitor's state. A monitor that is held by a parent keeps that."""
+        state = self._state(slug)
+        if slug is None or self._device_state_of is None or state["blocked_by"]:
+            return state
+        chassis = sid[4:] if sid.startswith("mac:") else None
+        own = self._device_state_of(slug, chassis, name or "")
+        if own is None:
+            return state
+        return {"state": "up" if own.upper() == "ONLINE" else "down", "blocked_by": None}
+
     async def tick(self) -> None:
         """The 60 second hook: recompute the applied dependencies, then the live map."""
         await self.refresh()
@@ -270,7 +288,7 @@ class MapService:
 
         def go(db: Any) -> dict[str, list[Any]]:
             return {
-                "switches": db.execute("SELECT switch_id FROM infra_switches").fetchall(),
+                "switches": db.execute("SELECT switch_id, name FROM infra_switches").fetchall(),
                 "ports": db.execute(
                     "SELECT p.switch_id, p.port_key, s.mgmt_addresses, p.if_index, p.unifi_index "
                     "FROM infra_ports p JOIN infra_switches s USING (switch_id)").fetchall(),
@@ -293,9 +311,9 @@ class MapService:
                     loud.add(ref)
 
         out = Overlay()
-        for (sid,) in d["switches"]:
+        for sid, name in d["switches"]:
             slug = matches.get(sid)
-            out.nodes[f"switch:{sid}"] = {"monitor": slug, **self._state(slug)}
+            out.nodes[f"switch:{sid}"] = {"monitor": slug, **self._switch_state(slug, sid, name)}
         for sid, key, addrs, if_index, unifi_index in d["ports"]:
             ref = f"{sid}|{key}"
             pm = self._matcher.match_port(sid, matches.get(sid), json.loads(addrs), key,

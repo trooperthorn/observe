@@ -21,15 +21,15 @@
     <h1>Threshold rules</h1>
   </div>
   <p id="msg" class="msg-line" role="alert"></p>
-  <section class="card notice" aria-labelledby="note-h">
-    <h3 id="note-h">Rules are evaluated</h3>
+  <section class="card notice accent" aria-labelledby="note-h">
+    <h3 id="note-h">How rules are evaluated</h3>
     <p>Rules are validated and stored, and every change is audited. A saved rule applies at the next poll of a monitor or the next pushed batch. A rule that holds Warning or Critical raises the host to Warn or Down through the usual confirmation counts, so alerts follow the normal path. A window rule is judged only when the last 100 samples reach back over its window.</p>
   </section>
   <section class="card" aria-labelledby="list-h">
     <h3 id="list-h">Saved rules</h3>
     <p class="card-sub" id="rules-count"></p>
     <div id="rules-list"></div>
-    <p><button type="button" class="btn primary" id="rules-save">Save rules</button></p>
+    <p><button type="button" class="btn primary" id="rules-save" disabled>Save rules</button></p>
   </section>
   <form id="rule-form" class="card" aria-labelledby="add-h">
     <h3 id="add-h">Add a rule</h3>

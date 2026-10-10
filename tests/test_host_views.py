@@ -26,7 +26,7 @@ PASSWORD = "correct horse battery"
 NOW = 1_000_000.0
 SECTIONS = ("cpu", "memory", "power", "temperatures", "fans", "raid", "zfs", "disks", "ups")
 ITEM_KEYS = {"source", "metric", "labels", "value", "unit", "ts", "age_seconds", "stale",
-             "status", "reason"}
+             "status", "reason", "ignored"}
 
 
 class Clock:
@@ -213,13 +213,15 @@ def test_status_labels(env):
     assert d["status"] == "critical" and not d["stale"]
 
 
-def test_null_value_is_warning_not_zero(env):
+def test_null_value_is_no_data_not_zero(env):
     env.push(batch(samples=[s("cpu", "system.cpu.utilization", None, "1")],
                    sources=[{"source": "cpu", "available": True}]))
     env.login()
-    item = detail(env)["cpu"]["items"][0]
-    assert item["value"] is None and item["status"] == "warning"
+    d = detail(env)
+    item = d["cpu"]["items"][0]
+    assert item["value"] is None and item["status"] == "no_data"
     assert "no value" in item["reason"]
+    assert d["status"] == "good"  # a missing value claims nothing, the same as the check
 
 
 def test_missing_source_is_reported_honestly(env):
@@ -230,12 +232,12 @@ def test_missing_source_is_reported_honestly(env):
                  {"source": "mdraid", "available": False, "reason": "permission denied"}]))
     env.login()
     d = detail(env)
-    assert d["ups"]["state"] == "absent" and d["ups"]["status"] == "good"
+    assert d["ups"]["state"] == "absent" and d["ups"]["status"] == "no_data"
     assert d["raid"]["state"] == "unavailable" and d["raid"]["status"] == "warning"
     assert "permission denied" in d["raid"]["note"]
     assert d["zfs"]["state"] == "not_reported" and d["zfs"]["items"] == []
     srcs = {x["source"]: x for x in d["sources"]}
-    assert srcs["nut"]["present"] is False and srcs["nut"]["status"] == "good"
+    assert srcs["nut"]["present"] is False and srcs["nut"]["status"] == "no_data"
     assert srcs["mdraid"]["present"] is True and srcs["mdraid"]["available"] is False
     assert srcs["mdraid"]["status"] == "warning"
 
@@ -284,8 +286,12 @@ def test_listing_unknown_host_and_monitor_state(tmp_path):
 
 
 def test_host_page_is_static_and_dashboard_links_to_it(env):
-    r = env.client.get("/host")
+    r = env.client.get("/hosts/nas01")
     assert r.status_code == 200 and "host.js" in r.text
+    # The old address redirects; without a name it is the 404 page.
+    old = env.client.get("/host?name=nas01", follow_redirects=False)
+    assert old.status_code == 301 and old.headers["location"] == "/hosts/nas01"
+    assert env.client.get("/host").status_code == 404
     assert "/api/v2/hosts/" in env.client.get("/static/host.js").text
     assert "hostlink" in env.client.get("/static/app.js").text
 
@@ -298,7 +304,10 @@ def test_host_name_with_slash_opens_in_api_and_page_link(env):
     r = env.client.get(f"/api/v2/hosts/{quote('rack/nas 01?#%', safe='')}")
     assert r.status_code == 200 and r.json()["host"] == "rack/nas 01?#%"
     assert env.client.get("/api/v2/hosts/rack/nas 01?#%".replace("?#%", "%3F%23%25")).status_code == 200
-    assert env.client.get("/host?name=rack%2Fnas%2001").status_code == 200
+    old = env.client.get("/host?name=rack%2Fnas%2001%3F%23%25", follow_redirects=False)
+    assert old.headers["location"] == "/hosts/rack%2Fnas%2001%3F%23%25"
+    page = env.client.get(old.headers["location"])
+    assert page.status_code == 200 and "host.js" in page.text
 
 
 def test_configured_component_silent_for_long_stays_stale_on_the_page(tmp_path):
@@ -315,3 +324,20 @@ def test_configured_component_silent_for_long_stays_stale_on_the_page(tmp_path):
         assert d["cpu"]["state"] == "stale"
     finally:
         e.close()
+
+
+def test_unknown_host_and_unknown_page_answer_404(env):
+    """Bug plan WP8: an unknown host rendered bare text and an unknown URL raw JSON."""
+    env.push(batch(samples=FULL, sources=FULL_SOURCES))
+    env.login()
+    html = {"Accept": "text/html,application/xhtml+xml"}
+    r = env.client.get("/hosts/nope", headers=html)
+    assert r.status_code == 404 and "<h1>Not found</h1>" in r.text
+    r = env.client.get("/no/such/page", headers=html)
+    assert r.status_code == 404 and "<h1>Not found</h1>" in r.text
+    # Programs keep the JSON answer.
+    r = env.client.get("/no/such/page", headers={"Accept": "application/json"})
+    assert r.status_code == 404 and r.json() == {"detail": "Not Found"}
+    assert env.client.get("/api/nope", headers=html).headers["content-type"].startswith(
+        "application/json")
+    assert env.client.get("/hosts/nas01", headers=html).status_code == 200

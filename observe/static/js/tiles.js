@@ -129,6 +129,12 @@ export async function initTiles(rerender) {
     say(editing ? "Use Up, Down and Hide on each section. Hidden sections keep their data." : "", false);
     applyLayout();
   });
+  // Escape leaves Customize mode the same way Done does, unless a dialog is open.
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape" || !editing || document.querySelector("dialog[open]")) return;
+    button.click();
+    button.focus();
+  });
   document.getElementById("customize-reset").addEventListener("click", async () => {
     if (!ready || !window.confirm("Reset the dashboard to the default layout?")) return;
     order = [];

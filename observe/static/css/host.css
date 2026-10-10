@@ -2,10 +2,16 @@
    components.css so these rules come last. */
 .host-main { max-width: 1100px; margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4); }
 .host-body { display: grid; gap: var(--o-s4); }
-.host-title h1 { display: flex; align-items: center; gap: var(--o-s2); }
+.host-title { display: grid; gap: var(--o-s1); }
+.host-title .crumbs { margin: 0; font-size: var(--o-fs-sm); }
+.host-title .title-row { display: flex; flex-wrap: wrap; align-items: center;
+                         justify-content: space-between; gap: var(--o-s2) var(--o-s4); }
+.host-title h1 { display: flex; align-items: center; gap: var(--o-s2); margin: 0;
+                 font-size: var(--o-fs-h); overflow-wrap: anywhere; }
+.host-title .btn { flex: none; }
 .host-events { list-style: none; padding: 0; margin: 0; font-size: var(--o-fs-sm); }
 .host-events li { padding: var(--o-s1) 0; border-bottom: 1px solid var(--o-border); overflow-wrap: anywhere; }
-.hostpage table { overflow-wrap: anywhere; }
+.hostpage table { overflow-wrap: break-word; }
 .ctl { max-width: none; margin: 0; }
 .ctl-form { display: grid; gap: var(--o-s2); justify-items: start; }
 .ctl-params { display: grid; gap: var(--o-s2); }
@@ -15,7 +21,7 @@
 .ctl h4 { margin: var(--o-s4) 0 var(--o-s2); font-size: var(--o-fs-title); }
 .ctl-notice { margin-top: var(--o-s3); }
 
-.hostpage { padding: 0 1rem 2rem; max-width: 70rem; margin: 0 auto; }
+.hostpage { padding: var(--o-s4) var(--o-s4) 2rem; max-width: 70rem; margin: 0 auto; }
 .hostpage .banner { margin: 1rem 0; padding: .6rem .8rem; border-radius: 6px;
                     border: 1px solid var(--o-border); background: var(--o-surface); }
 .hostpage .banner.critical { border-color: var(--o-down); }
@@ -26,3 +32,4 @@ table.items td, table.items th { text-align: left; padding: .2rem .4rem;
 table.items td.num { font-variant-numeric: tabular-nums; }
 .stalemark { color: var(--o-text-muted); font-style: italic; }
 .when { color: var(--o-text-muted); font-variant-numeric: tabular-nums; margin-right: var(--o-s1); }
+.hostpage ~ #footer { max-width: 70rem; }

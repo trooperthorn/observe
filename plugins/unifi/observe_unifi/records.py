@@ -11,6 +11,7 @@ both are current state, replaced on every poll.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -131,6 +132,13 @@ MIGRATIONS = (
   PRIMARY KEY (site_id, wlan_id)
 )""",
     )),
+    # Version 5: when a device was last ONLINE. `last_seen` moves with every poll that lists the
+    # device, offline or not, so it said nothing about an offline device (bug plan WP8). NULL
+    # for a device never seen online; the page then shows no time rather than the poll time.
+    Migration(5, (
+        "ALTER TABLE unifi_devices ADD COLUMN online_at REAL",
+        "UPDATE unifi_devices SET online_at = last_seen WHERE state = 'ONLINE'",
+    )),
 )
 
 
@@ -164,6 +172,44 @@ GATEWAY_ROLES = ("gateway", "console", "ugw")
 # A model or name token that marks a gateway, consulted only when no device declares a role.
 GATEWAY_TOKENS = ("gateway", "udm", "uxg", "usg", "ugw", "ucg", "udr", "uxr", "udw", "dream",
                   "console")
+
+
+# The map device type of a UniFi device (observe.infra.DEVICE_TYPES). The features list is the
+# strongest signal and is read in this order, so a gateway that also switches is a gateway. Then
+# the row's type or role, then the model name. Names are compared without case or underscores,
+# so ACCESS_POINT and accessPoint are the same (UNVERIFIED which spelling a console sends).
+FEATURE_TYPES = (("gateway", "gateway"), ("switching", "switch"), ("accesspoint", "access_point"))
+ROLE_TYPES = {"gateway": "gateway", "console": "gateway", "ugw": "gateway", "udm": "gateway",
+              "uxg": "gateway", "switch": "switch", "usw": "switch", "accesspoint": "access_point",
+              "ap": "access_point", "uap": "access_point", "bridge": "bridge", "ubb": "bridge"}
+MODEL_TYPES = (("gateway", ("UCG", "UDM", "UXG", "UDR")),
+               ("access_point", ("U6", "U7", "UAP", "UAL")),
+               ("switch", ("USW", "US-")))
+
+
+def _squash(value: str) -> str:
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def device_type_of(features: Iterable[str] = (), device_type: str = "", role: str = "",
+                   model: str = "") -> str:
+    """gateway, switch, access_point, bridge or other, or empty when nothing says. Features first
+    (GATEWAY, then SWITCHING, then ACCESS_POINT), then the type and role, then a model prefix
+    (UCG, UDM, UXG and UDR are gateways, U6, U7, UAP and UAL access points, USW and US-
+    switches). A device that names features or a type that none of these match is other."""
+    feats = {_squash(f) for f in features if isinstance(f, str)}
+    for feat, kind in FEATURE_TYPES:
+        if feat in feats:
+            return kind
+    for text in (device_type, role):
+        kind = ROLE_TYPES.get(_squash(text or ""))
+        if kind:
+            return kind
+    name = (model or "").strip().upper()
+    for kind, prefixes in MODEL_TYPES:
+        if name.startswith(prefixes):
+            return kind
+    return "other" if feats or device_type or role else ""
 
 
 def _text(value: Any) -> str:
@@ -272,10 +318,11 @@ def parse_device(site_id: str, raw: Any) -> Device | None:
     Field names (id, macAddress, name, model, state, ipAddress, firmwareVersion,
     firmwareUpdatable) follow ha_Int_soc docs/UNIFI-LOCAL-API-CONTRACT.md and its fakes.
     UNVERIFIED against a live console: that firmwareUpdatable is on the list row; an absent or
-    non-boolean value is stored as NULL (unknown), never as false. Also UNVERIFIED: that a device
-    row names the device it is uplinked to, as `uplink.deviceId` or `uplinkDeviceId` (the contract
-    verifies `uplinkDeviceId` only on client rows); when neither is a string the device has no
-    device-level link.
+    non-boolean value is stored as NULL (unknown), never as false. A live console's list rows
+    carry no uplink (bug plan WP4: the map had devices but no links), so the devices poll reads
+    `uplink.deviceId` from each device's detail and sets it on the row before this runs
+    (`UniFiPlugin._uplinks`); a row that names `uplink.deviceId` or `uplinkDeviceId` itself is used
+    as it is. When neither is a string the device has no device-level link.
     """
     if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not raw["id"]:
         return None
@@ -299,8 +346,8 @@ def write_devices(db: Conn, devices: list[Device], now: float) -> int:
         db.execute(
             """INSERT INTO unifi_devices (site_id, device_id, mac, name, model, state, ip,
                firmware, firmware_updatable, device_type, role, features, rx_bytes, tx_bytes,
-               rx_rate_bps, tx_rate_bps, first_seen, last_seen)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               rx_rate_bps, tx_rate_bps, first_seen, last_seen, online_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT (site_id, device_id) DO UPDATE SET
                mac=excluded.mac, name=excluded.name, model=excluded.model,
                state=excluded.state, ip=excluded.ip, firmware=excluded.firmware,
@@ -308,11 +355,13 @@ def write_devices(db: Conn, devices: list[Device], now: float) -> int:
                device_type=excluded.device_type, role=excluded.role, features=excluded.features,
                rx_bytes=excluded.rx_bytes, tx_bytes=excluded.tx_bytes,
                rx_rate_bps=excluded.rx_rate_bps, tx_rate_bps=excluded.tx_rate_bps,
-               last_seen=excluded.last_seen""",
+               last_seen=excluded.last_seen,
+               online_at=COALESCE(excluded.online_at, unifi_devices.online_at)""",
             (d.site_id, d.device_id, d.mac, d.name, d.model, d.state, d.ip, d.firmware,
              None if d.firmware_updatable is None else int(d.firmware_updatable),
              d.device_type, d.role, json.dumps(list(d.features)) if d.features else "",
-             d.rx_bytes, d.tx_bytes, d.rx_rate_bps, d.tx_rate_bps, now, now))
+             d.rx_bytes, d.tx_bytes, d.rx_rate_bps, d.tx_rate_bps, now, now,
+             now if d.state.upper() == "ONLINE" else None))
     return len(devices)
 
 

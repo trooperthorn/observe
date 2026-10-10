@@ -3,7 +3,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  STATUS_STATE, ageText, filterRows, hostRow, hostRows, summaryText, waitingRow,
+  STATUS_STATE, ageText, downTileLabel, filterRows, hostRow, hostRows, plural, summaryText,
+  waitingRow,
 } from "../../observe/static/js/hosts-logic.js";
 
 const nas = { host: "nas01", platform: "linux", agent_version: "0.9.0", heard: true, age_seconds: 12,
@@ -32,14 +33,14 @@ test("ageText says never for a host that has not reported", () => {
 
 test("a host row carries the page link, the settings link and the monitor listing", () => {
   const r = hostRow(nas);
-  assert.equal(r.href, "/host?name=nas01");
+  assert.equal(r.href, "/hosts/nas01");
   assert.equal(r.settings, "/hosts/nas01/settings");
   assert.equal(r.monitored, true);
   assert.equal(r.monitor, "nas");
   assert.equal(r.age, 12);
   assert.equal(r.waiting, false);
   const s = hostRow(silent);
-  assert.equal(s.href, "/host?name=rack%2Fsw%2001");
+  assert.equal(s.href, "/hosts/rack%2Fsw%2001");
   assert.equal(s.age, null);  // never heard, so the age column sinks in both sort directions
   assert.equal(s.detail, "no batch received yet");
 });
@@ -72,4 +73,38 @@ test("summaryText counts hosts, attention and waiting", () => {
   assert.equal(summaryText(hostRows([nas], [])), "1 host");
   assert.equal(summaryText(hostRows([nas, stray, silent], [waiting])),
     "4 hosts, 2 need attention, 1 waiting for first data");
+});
+
+test("the dashboard Down tile counts what the Hosts list calls Down", () => {
+  const hosts = [nas, silent, stray, { ...silent, host: "b" }, { ...silent, host: "c" }];
+  // Nine Down monitors, one of them a pushed host: the Hosts list still decides.
+  const monitors = [...Array(8)].map(() => ({ effective_state: "down", type: "ping" }))
+    .concat([{ effective_state: "down", type: "pushed_host" }]);
+  assert.equal(downTileLabel(hosts, monitors), "3 hosts down");
+  assert.equal(downTileLabel([silent], monitors), "1 host down");
+  assert.equal(downTileLabel([nas], monitors), "");
+  // A viewer who may not read the Hosts list sees the pushed_host monitors.
+  assert.equal(downTileLabel(null, monitors), "1 host down");
+  assert.equal(plural(1, "host"), "1 host");
+  assert.equal(plural(2, "host"), "2 hosts");
+});
+
+test("a failed install step shows on the row until cleared", () => {
+  const h = { ...nas, install_problem: { step: "agent", status: "failed", note: "", at: 1 } };
+  assert.deepEqual(hostRow(h).notes, ["install step agent failed"]);
+  assert.deepEqual(hostRow(nas).notes, []);
+});
+
+test("a silent listed host and an unlisted reporting host get hints naming each other", () => {
+  const listed = { host: "truenas", platform: "", agent_version: "", heard: false,
+    age_seconds: null, stale: false, monitored: true, monitor: { name: "truenas" },
+    status: "critical", status_reason: "no batch received yet" };
+  const reporting = { host: "truenas-svr", platform: "truenas", agent_version: "0.2.0", heard: true,
+    age_seconds: 20, stale: false, monitored: false, monitor: null, status: "good",
+    status_reason: "" };
+  const rows = hostRows([listed, reporting, nas], []);
+  const by = Object.fromEntries(rows.map((r) => [r.name, r]));
+  assert.match(by.truenas.notes[0], /"truenas-svr" reports but is not listed.*host: truenas-svr/);
+  assert.match(by["truenas-svr"].notes[0], /"truenas" has never reported.*change that host to truenas-svr/);
+  assert.deepEqual(by.nas01.notes, []);
 });

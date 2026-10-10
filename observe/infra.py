@@ -41,6 +41,8 @@ __all__ = ["current_ids_sql", "InfraError", "InfraService", "InfraTx", "PROPERTY
            "UnknownPropertyError", "lldp_port_key", "write_cycle", "port_key", "switch_id", "unifi_port_key"]
 
 ROLES = ("access", "uplink", "unknown")
+# What a switch row is, as its feed classified it. Empty is unknown and is shown as a switch.
+DEVICE_TYPES = ("gateway", "switch", "access_point", "bridge", "other")
 LINK_SOURCES = ("lldp", "cdp", "field_report", "snmp_lldp", "config")
 LINK_KINDS = ("port", "jack", "endpoint")
 ENDPOINT_KINDS = ("monitor", "host", "field")
@@ -123,24 +125,32 @@ class InfraTx:
     # Entities ---------------------------------------------------------------------------
 
     def upsert_switch(self, sid: str, *, name: str = "", mgmt_addresses: list[str] | None = None,
-                      vendor: str = "", platform: str = "", now: float | None = None) -> str:
+                      vendor: str = "", platform: str = "", device_type: str = "",
+                      now: float | None = None) -> str:
+        """Create or refresh a switch. An empty field keeps what is stored, so a feed that does
+        not know the device type (LLDP, SNMP) never clears the one a richer feed set."""
         sid = _norm_switch(sid)
         name, vendor, platform = (_text(name, "name"), _text(vendor, "vendor"),
                                   _text(platform, "platform"))
+        if device_type and device_type not in DEVICE_TYPES:
+            raise InfraError("device_type must be gateway, switch, access_point, bridge or other")
         addrs = sorted({_text(a, "address", 64) for a in (mgmt_addresses or []) if a})
         if len(addrs) > 16:
             raise InfraError("too many management addresses")
         ts = time.time() if now is None else now
         self.conn.execute(
             "INSERT INTO infra_switches AS t (switch_id, name, mgmt_addresses, vendor, platform, "
-            "first_seen, last_seen) VALUES (?,?,?,?,?,?,?) ON CONFLICT(switch_id) DO UPDATE SET "
+            "device_type, first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(switch_id) DO UPDATE SET "
             "name=CASE WHEN excluded.name != '' THEN excluded.name ELSE t.name END, "
             "mgmt_addresses=CASE WHEN excluded.mgmt_addresses != '[]' "
             "THEN excluded.mgmt_addresses ELSE t.mgmt_addresses END, "
             "vendor=CASE WHEN excluded.vendor != '' THEN excluded.vendor ELSE t.vendor END, "
             "platform=CASE WHEN excluded.platform != '' THEN excluded.platform ELSE t.platform END, "
+            "device_type=CASE WHEN excluded.device_type != '' THEN excluded.device_type "
+            "ELSE t.device_type END, "
             "last_seen=MAX(t.last_seen, excluded.last_seen)",
-            (sid, name, json.dumps(addrs), vendor, platform, ts, ts))
+            (sid, name, json.dumps(addrs), vendor, platform, device_type, ts, ts))
         return sid
 
     def upsert_port(self, sid: str, port: str, *, raw_port_id: str = "",
@@ -440,10 +450,11 @@ class InfraService:
 
     async def upsert_switch(self, sid: str, *, name: str = "",
                             mgmt_addresses: list[str] | None = None, vendor: str = "",
-                            platform: str = "", now: float | None = None) -> str:
+                            platform: str = "", device_type: str = "",
+                            now: float | None = None) -> str:
         return str(await self.write(lambda db: InfraTx(db).upsert_switch(
             sid, name=name, mgmt_addresses=mgmt_addresses, vendor=vendor, platform=platform,
-            now=now)))
+            device_type=device_type, now=now)))
 
     async def upsert_port(self, sid: str, port: str, *, raw_port_id: str = "",
                           if_index: int | None = None, unifi_index: int | None = None,

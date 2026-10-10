@@ -262,7 +262,7 @@ class DockerCheck(_SshCheck):
             return CheckResult.fail(f"docker ps: {self.first_err(err, rc)}")
         ids = out.split()
         if not ids:
-            return CheckResult.ok("no containers", value=0.0)
+            return CheckResult.ok("no containers", value=0.0, unit="{problem}")
         rc, out, err = await self.run_commands(
             docker_argv(m.docker_command, "inspect", "--format", SUMMARY_FORMAT, "--", *ids))
         if rc != 0:
@@ -279,7 +279,8 @@ class DockerCheck(_SshCheck):
         msg = f"{running}/{len(ids)} running"
         if problems:
             msg += "; " + ", ".join(problems)
-        res = CheckResult.ok(msg, value=float(len(problems)), detail={"problems": problems})
+        res = CheckResult.ok(msg, value=float(len(problems)), unit="{problem}",
+                             detail={"problems": problems})
         if problems and self.monitor.thresholds is None:
             res.result = Result.FAIL
         return res

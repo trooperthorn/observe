@@ -178,4 +178,4 @@ def test_ci_runs_the_node_tests_and_app_uses_the_shared_reading_formatter():
     wf = (base / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
     assert "node --test tests/js" in wf
     app = (base / "observe" / "static" / "app.js").read_text(encoding="utf-8")
-    assert "formatReading" in app and 'm.unit === "ms"' not in app
+    assert "monitorReading" in app and 'm.unit === "ms"' not in app

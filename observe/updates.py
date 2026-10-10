@@ -319,6 +319,21 @@ class GitHubCheck:
 
 UPDATABLE_PLATFORMS = ("linux", "raspberry-pi")
 INSTALL_ONLY = ("windows", "truenas")
+# The oldest hostwatch agent whose control daemon runs agent.update. 0.1.0 answers it with
+# "unknown_action: action 'agent.update' is not supported", so an update button for it can only
+# fail. The daemon does not advertise its actions yet; when it does, gate on that instead.
+MIN_UPDATE_AGENT_VERSION = "0.2.0"
+TOO_OLD = "agent too old, reinstall from host settings"
+
+
+def supports_update(agent_version: str) -> bool:
+    """Whether the agent's control daemon can run agent.update. An unknown or unparsable
+    version is not trusted to."""
+    from packaging.version import InvalidVersion, Version
+    try:
+        return Version(agent_version) >= Version(MIN_UPDATE_AGENT_VERSION)
+    except InvalidVersion:
+        return False
 
 
 def agent_row(host: dict[str, Any], enrolled: str, has_key: bool, last_pull: float | None,
@@ -335,6 +350,8 @@ def agent_row(host: dict[str, Any], enrolled: str, has_key: bool, last_pull: flo
         reason = "no control daemon"
     elif last_pull is None:
         reason = "the control daemon has never pulled"
+    elif not supports_update(str(host.get("agent_version") or "")):
+        reason = TOO_OLD
     return {"host": host["host"], "platform": platform, "agent_version": host.get("agent_version") or "",
             "control": has_key, "control_pulled": last_pull is not None,
             "last_pull": last_pull,

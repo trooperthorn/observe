@@ -592,7 +592,8 @@ Each slice is small and lands as one PR. Every slice must pass the existing test
 
 - `/api/v2/map` switch nodes carry `anchor`: true for a switch with a switch link that is not through its own uplink port. `js/graph/infra.js` builds entities, relations and anchors from the payload and holds the default-view rule.
 - `map.html` and `pages/map.js` have a Graph, Tiers and Table toggle kept in the URL hash. Graph sits beside Tiers (Q1). Tiers is the default on screens up to 600px and above 300 switches, with a note when the graph is limited. The Links table is always shown.
-- The side card lists the selected switch, its state in words and its links as real links to port pages. Keyboard support comes from `view.js`, and Enter opens the first linked port page.
+- The side card lists the selected device, its type, its state in words and its links as real links to port pages, and has a Clear selection button. Keyboard support comes from `view.js`, and Enter opens the first linked port page. A click on empty canvas or Escape clears the selection. A selection dims the other devices to `--g-dim` (0.5) and keeps their labels; each label has a second line with the state word and the device type.
+- Bug plan WP4: the device type comes from `/api/v2/map` (`device_type` on a switch node). `js/map-logic.js` (no DOM, tested in `tests/js/map.test.mjs`) holds the type words, the tier rule (a gateway is Core, an access point Access, the rest by link depth) and the Devices and Links table rows. The Table view shows a Devices table, then the Links table, both `table.data` with a caption.
 - Tests: `tests/test_ui_graph.py`, `tests/test_infra_map.py` (anchor flag) and `tests/js/infra.test.mjs`.
 - Deviations: endpoints and jacks are not graph nodes (endpoints are a count badge). Layout positions are not cached in sessionStorage yet.
 

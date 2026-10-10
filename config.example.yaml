@@ -202,6 +202,9 @@ monitors:
     type: ping
     host: 192.0.2.1
     interval: 30
+    # Once a threshold holds, the value must come back past it by `hysteresis` (in the value's
+    # unit) before it clears, so a value hovering at the line does not flap between Warning and
+    # Up. Leave it out for 5% of each threshold (here 1 ms for warn, 5 ms for crit); 0 turns it off.
     thresholds: {direction: above, warn: 20, crit: 100}   # avg RTT ms
 
   - name: Core switch
@@ -536,7 +539,8 @@ monitors:
     host: dns.lab.example
     credential: technitium-token
     mode: stats
-    thresholds: {direction: above, warn: 2, crit: 10}
+    # A rate near 2% clears only below 1.75%.
+    thresholds: {direction: above, warn: 2, crit: 10, hysteresis: 0.25}
 
   - name: Technitium answers
     group: dns
@@ -569,8 +573,10 @@ monitors:
   # ------------------------------------------------- Pushed hosts (hostwatch)
   # The agent pushes OTLP to POST /v1/metrics and /v1/logs with a key from
   # --ingest-key-create nas01. Listing the host here is what makes it a
-  # monitor. No batch within stale_after seconds (default three intervals)
-  # counts as a failure.
+  # monitor. No batch within stale_after seconds counts as a failure. Left
+  # unset, the limit is the larger of three intervals and 2.5 times the host's
+  # Availability tier rate (/admin/tiers); each reading is stale after 2.5
+  # times the rate of its own tier.
   - name: nas01
     group: storage
     type: pushed_host

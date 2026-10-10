@@ -172,6 +172,87 @@ def test_no_secret_reaches_the_log(env):
         assert secret not in dump and secret not in shown
 
 
+@pytest.mark.parametrize("kind, status, detail, want", [
+    # The rows of the /audit review: no HTTP status is not a failure, and the detail decides.
+    ("control_requested", 0, {"host": "nas01"}, "ok"),
+    ("infra_switch_linked", 0, {"basis": "manual"}, "ok"),
+    ("plugin_request", 200, {"outcome": "refused"}, "refused"),
+    ("plugin_request", 200, {"outcome": "failed"}, "failed"),
+    ("plugin_request", 200, {"outcome": "done"}, "ok"),
+    ("enrol_install_problem", 200, {"status": "failed"}, "failed"),
+    ("enrol_install_problem", 200, {"status": "refused"}, "refused"),
+    ("plugin_request", 200, {"result": "Error"}, "failed"),
+    ("plugin_request", 200, {"result": "rejected"}, "refused"),
+    # Then the kind, the HTTP status, and a failure kind last.
+    ("api_denied", 0, {}, "refused"),
+    ("control_request_refused", 404, {}, "refused"),
+    ("infra_depends_rejected", 0, {}, "refused"),
+    ("login_failed", 401, {}, "refused"),
+    ("key_create_failed", 400, {}, "refused"),
+    ("plugin_failed", 500, {}, "failed"),
+    ("infra_switch_link_failed", 0, {"reason": "unknown switch"}, "failed"),
+    ("user_create_error", 0, {}, "failed"),
+    ("ingest_failed", 200, {}, "failed"),
+    ("plugin_request", 503, {}, "failed"),
+    ("enrol_fetched", 200, {"host": "newbox", "status": 3}, "ok"),
+    ("probe", 0, None, "ok"),
+])
+def test_outcome_is_derived_from_the_detail_the_kind_and_the_status(kind, status, detail, want):
+    assert audit.outcome(kind, status, detail) == want
+
+
+def test_the_audit_api_filters_on_the_outcome_and_names_the_key_host(env):
+    env.user("root", admin=True)
+    env.login("root")
+    plaintext, info = asyncio.run(create_key(env.store, "nas01"))
+    asyncio.run(audit.record(env.store, "enrol_install_problem", actor="nas01", status=200,
+                             detail={"host": "nas01", "status": "failed"}))
+    asyncio.run(audit.record(env.store, "control_pull", actor=info.prefix, status=200))
+    asyncio.run(audit.record(env.store, "enrol_fetched", status=200, remote="10.0.0.7",
+                             detail={"host": "newbox"}))
+    failed = env.client.get("/api/v2/audit", params={"outcome": "failed"}).json()["items"]
+    assert [r["kind"] for r in failed] == ["enrol_install_problem"]
+    ok = {r["kind"]: r for r in env.client.get("/api/v2/audit",
+                                                 params={"outcome": "ok"}).json()["items"]}
+    assert ok["control_pull"]["actor_host"] == "nas01" and plaintext not in json.dumps(ok)
+    assert ok["enrol_fetched"]["actor"] == "" and ok["enrol_fetched"]["actor_host"] is None
+    assert ok["login_ok"]["actor_host"] is None and "enrol_install_problem" not in ok
+
+
+def test_the_outcome_filter_fills_every_page_and_carries_on_past_the_scan_cap(env, monkeypatch):
+    from observe.api import admin
+    env.user("root", admin=True)
+    env.login("root")
+    for n in range(40):
+        status = 403 if n % 5 == 0 else 200
+        asyncio.run(audit.record(env.store, "probe", actor="x", status=status, detail={"n": n}))
+    monkeypatch.setattr(admin, "SCAN_BATCH", 7)
+    seen, cursor, pages = [], None, 0
+    while True:
+        params = {"kind": "probe", "outcome": "refused", "limit": 3}
+        if cursor:
+            params["cursor"] = cursor
+        page = env.client.get("/api/v2/audit", params=params).json()
+        pages += 1
+        seen += [r["detail"]["n"] for r in page["items"]]
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+        assert len(page["items"]) == 3
+    assert seen == [35, 30, 25, 20, 15, 10, 5, 0] and pages == 3
+    # A scan cut short hands back a cursor from the last row it looked at, even with no item.
+    # (Two rows a batch and a cap of three: rows 39 to 36, then 35 to 32. Limit 2 is a new query,
+    # so no cached answer from above is served.)
+    monkeypatch.setattr(admin, "SCAN_BATCH", 2)
+    monkeypatch.setattr(admin, "MAX_SCAN", 3)
+    page = env.client.get("/api/v2/audit", params={"kind": "probe", "outcome": "refused",
+                                                   "limit": 2}).json()
+    assert page["items"] == [] and page["next_cursor"]
+    nxt = env.client.get("/api/v2/audit", params={"kind": "probe", "outcome": "refused",
+                                                  "limit": 2, "cursor": page["next_cursor"]})
+    assert [r["detail"]["n"] for r in nxt.json()["items"]] == [35]
+
+
 def test_record_redacts_secret_named_fields_and_sanitizes_the_path(env):
     asyncio.run(audit.record(env.store, "probe", actor="x", method="GET",
                              path="/a\nforged line\x00/" + "z/" * 200,
@@ -192,8 +273,8 @@ def test_admin_reads_the_log_newest_first_with_filters(env):
         asyncio.run(audit.record(env.store, "probe", actor="x"))
     rows = env.client.get("/api/v2/audit").json()["items"]
     assert rows[0]["id"] > rows[-1]["id"] and rows[-1]["kind"] == "login_ok"
-    assert set(rows[0]) == {"id", "ts", "actor", "kind", "method", "path", "status", "remote",
-                            "detail"}
+    assert set(rows[0]) == {"id", "ts", "actor", "actor_host", "kind", "method", "path",
+                            "status", "outcome", "remote", "detail"}
     assert rows[0]["ts"].endswith("Z")
     first = env.client.get("/api/v2/audit", params={"kind": "probe", "limit": 2}).json()
     assert [r["kind"] for r in first["items"]] == ["probe", "probe"] and first["next_cursor"]

@@ -26,9 +26,21 @@
 .shell-link[aria-current="page"] { background: var(--o-accent-tint); color: var(--o-accent);
                                    font-weight: 600; }
 @media (pointer: coarse) { .shell-link { min-height: 44px; } }
+/* The global monitor summary in the header, the same on every page. */
+#summary { display: flex; gap: .5rem; flex-wrap: wrap; }
+.shell-summary { display: inline-flex; flex-wrap: wrap; gap: var(--o-s2); align-items: center;
+                 color: inherit; text-decoration: none; border-radius: var(--o-radius-sm); }
+.shell-summary:hover .chip { filter: brightness(.97); }
+/* Page-specific counts that used to sit in the header, now in the page body. */
+.map-summary { display: flex; gap: .5rem; flex-wrap: wrap; margin: var(--o-s2) 0; }
+.map-summary:empty { display: none; }
 /* The sticky page header row. */
 header {
   position: sticky; top: 0; z-index: 1; background: var(--o-page);
   display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center;
   padding: .75rem 1rem; border-bottom: 1px solid var(--o-border);
 }
+/* The "refreshed ..." line sits under the page's own column on every page, not against the
+   window edge. */
+#footer { max-width: var(--o-maxw); margin: 0 auto; padding: var(--o-s3) var(--o-s4) var(--o-s5);
+          color: var(--o-text-muted); font-size: var(--o-fs-sm); }

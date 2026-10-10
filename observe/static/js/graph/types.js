@@ -15,6 +15,7 @@
  * @property {string} [kind]   Free-form sub-type shown in the side card.
  * @property {string} [state]  up, warn, serious, down, pending or unreach. Drawn as a ring and a glyph.
  * @property {string} [badge]  Short text beside the label: a state word or a count.
+ * @property {string} [sub]    Second line of the label: the state word and the device type.
  */
 
 /**

@@ -239,10 +239,32 @@ class Store:
         return ("metric_5m", 300) if hours <= FINE_WINDOW_H else ("metric_hourly", 3600)
 
     async def record_event(self, monitor: str, tr: Transition) -> None:
+        """Log a transition and, when the state changed, keep the new state and its time in
+        monitor_state, in the same write, so a restart knows where the monitor stood."""
         row = (monitor, tr.at, tr.previous.value, tr.current.value, tr.message)
-        await self.storage.write(
-            lambda db: db.execute("INSERT INTO events VALUES (?,?,?,?,?)", row),
-            touches=("events",), critical=True)
+
+        def unit(db: Conn) -> None:
+            db.execute("INSERT INTO events VALUES (?,?,?,?,?)", row)
+            if tr.previous is not tr.current:
+                db.execute("DELETE FROM monitor_state WHERE monitor=?", (monitor,))
+                db.execute("INSERT INTO monitor_state (monitor, state, since) VALUES (?,?,?)",
+                           (monitor, tr.current.value, tr.at))
+        await self.storage.write(unit, touches=("events",), critical=True)
+
+    async def monitor_states(self) -> dict[str, tuple[str, float]]:
+        """The state each monitor was last in and since when: monitor -> (state, since)."""
+        rows = await self.fetch("SELECT monitor, state, since FROM monitor_state")
+        return {m: (st, float(since)) for m, st, since in rows}
+
+    async def prune_monitor_states(self, keep: set[str]) -> int:
+        """Forget the kept state of every monitor not in `keep`. Returns the rows removed."""
+        def unit(db: Conn) -> int:
+            rows = db.execute("SELECT monitor FROM monitor_state").fetchall()
+            gone = [m for (m,) in rows if m not in keep]
+            for m in gone:
+                db.execute("DELETE FROM monitor_state WHERE monitor=?", (m,))
+            return len(gone)
+        return await self.storage.write(unit, critical=True)
 
     async def events(self, limit: int = 200, monitor: str | None = None) -> list[dict[str, Any]]:
         if monitor:
@@ -442,10 +464,13 @@ class Store:
     async def host_rows(self) -> list[dict[str, Any]]:
         """One row per host that has ever pushed, ordered by name."""
         rows = await self.fetch(
-            "SELECT host, platform, agent_version, first_seen, last_seen, boot_id, boot_ts, "
-            "clean_shutdown, confirmed FROM hosts ORDER BY host")
+            "SELECT h.host, h.platform, h.agent_version, h.first_seen, h.last_seen, h.boot_id, "
+            "h.boot_ts, h.clean_shutdown, h.confirmed, e.reports FROM hosts h "
+            "LEFT JOIN enrolments e ON e.host = h.host ORDER BY h.host")
+        # install_reports: the console install's step reports (enrol.record_step), or None for a
+        # host that was not added through the console.
         keys = ("host", "platform", "agent_version", "first_seen", "last_seen", "boot_id",
-                "boot_ts", "clean_shutdown", "confirmed")
+                "boot_ts", "clean_shutdown", "confirmed", "install_reports")
         return [dict(zip(keys, r)) for r in rows]
 
     async def host_sources(self, host: str) -> dict[str, dict[str, Any]]:

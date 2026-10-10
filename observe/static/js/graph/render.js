@@ -1,10 +1,14 @@
 // Ported from trooperthorn/relationship-maps, packages/graph-core (commit 0c4d268), via ha_Int_soc (MIT). No d3.
 // Canvas painter. Colours are read from the CSS tokens at paint time, so light and dark both
-// work. State is shown as a ring and a glyph inside the node, never by colour alone.
+// work. State is shown as a ring and a glyph inside the node and as a word under its label, never
+// by colour alone. A selection dims the rest of the graph but leaves every label readable.
 
 export const MAX_LABELS = 55;
 const LABEL_FONT = "600 11px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif";
 const BADGE_FONT = "600 9px ui-sans-serif, system-ui, sans-serif";
+const SUB_FONT = "500 10px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif";
+// Links outside the selection stay visible: the person still needs to see where they go.
+const DIM_LINK_ALPHA = 0.3;
 const CATEGORY_COUNT = 8;
 const GRID_CELL = 48;
 const STATE_TOKENS = {
@@ -15,7 +19,7 @@ const LINK_WIDTH = { uplink: 2, lldp: 1.4, mac: 1 };
 
 // Fallbacks apply only when a token cannot be read, for example in a test without a stylesheet.
 const FALLBACK = {
-  bg: "#f7f8fa", stroke: "#ffffff", labelBg: "rgba(255,255,255,.92)", labelFg: "#1c2230", dim: 0.2,
+  bg: "#f7f8fa", stroke: "#ffffff", labelBg: "rgba(255,255,255,.92)", labelFg: "#1c2230", dim: 0.5,
   link: "#5d6676", accent: "#1d63b8", other: "#9aa0a6",
 };
 
@@ -77,7 +81,7 @@ export function fitCamera(layout, w, h) {
   let maxY = -Infinity;
   // Pad above each node: labels are drawn in screen space above the dot.
   for (const p of layout.nodes) {
-    const pad = p.r + 34;
+    const pad = p.r + 46;
     minX = Math.min(minX, p.x - pad);
     minY = Math.min(minY, p.y - pad);
     maxX = Math.max(maxX, p.x + pad);
@@ -155,7 +159,7 @@ export function render(ctx, w, h, scene) {
       ctx.moveTo(l.x1, l.y1);
       ctx.lineTo(l.x2, l.y2);
       ctx.strokeStyle = theme.link;
-      ctx.globalAlpha = highlighted ? 0.85 : 0.1;
+      ctx.globalAlpha = highlighted ? 0.85 : DIM_LINK_ALPHA;
       ctx.lineWidth = ((LINK_WIDTH[l.kind] || 1) * (highlighted ? 1 : 0.7)) / camera.k;
       ctx.setLineDash(l.stale ? [5 / camera.k, 4 / camera.k] : []);
       ctx.stroke();
@@ -174,35 +178,59 @@ export function render(ctx, w, h, scene) {
 
   if (!scene.showLabels) return;
 
+  // Every node keeps its label; the ones in the selection are placed first, then the biggest.
   const labelled = [...layout.nodes]
-    .filter((p) => lit(p.entityId))
-    .sort((a, b) => b.r - a.r)
+    .sort((a, b) => Number(lit(b.entityId)) - Number(lit(a.entityId)) || b.r - a.r)
     .slice(0, MAX_LABELS);
   for (const id of [hovered, selected]) {
     if (!id) continue;
     const p = layout.nodes.find((q) => q.entityId === id);
     if (p && !labelled.includes(p)) labelled.push(p);
   }
+  const isForced = (p) => p.entityId === hovered || p.entityId === selected;
+  labelled.sort((a, b) => Number(isForced(b)) - Number(isForced(a)));
 
   toScreen();
   ctx.font = LABEL_FONT;
   ctx.textBaseline = "middle";
-  // Biggest first, dropping any label whose box collides with one already placed.
+  // Hovered and selected first, then biggest first. A label goes above its node, else below, right
+  // or left of it, and is dropped only when all four collide with labels already placed.
   const placed = [];
-  const collides = (x, y, bw, bh) =>
-    placed.some(([px, py, pw, ph]) => x < px + pw && x + bw > px && y < py + ph && y + bh > py);
+  const hit = (boxes, x, y, bw, bh) =>
+    boxes.some(([px, py, pw, ph]) => x < px + pw && x + bw > px && y < py + ph && y + bh > py);
+  const collides = (x, y, bw, bh) => hit(placed, x, y, bw, bh);
+  // The dots too, so a label keeps clear of other devices when it has a free side.
+  const dots = layout.nodes.map((q) => {
+    const [qx, qy] = worldToScreen(camera, q.x, q.y);
+    const qr = (q.r + 3) * camera.k;
+    return [qx - qr, qy - qr, qr * 2, qr * 2];
+  });
   for (const p of labelled) {
     const e = entities.get(p.entityId);
     if (!e) continue;
     const [sx, sy] = worldToScreen(camera, p.x, p.y);
-    const bw = ctx.measureText(e.name).width + 14;
-    const bh = 18;
-    const bx = sx - bw / 2;
-    const by = sy - (p.r + 4) * camera.k - bh - 6;
-    if (bx + bw < 0 || bx > w || by + bh < 0 || by > h) continue;
-    const forced = p.entityId === hovered || p.entityId === selected;
-    if (!forced && collides(bx - 2, by - 2, bw + 4, bh + 16)) continue;
-    placed.push([bx - 2, by - 2, bw + 4, bh + 16]);
+    // The second line is the state word and the device type, for example "Up · Gateway".
+    let subW = 0;
+    if (e.sub) {
+      ctx.font = SUB_FONT;
+      subW = ctx.measureText(e.sub).width;
+      ctx.font = LABEL_FONT;
+    }
+    const bw = Math.max(ctx.measureText(e.name).width, subW) + 14;
+    const bh = e.sub ? 30 : 18;
+    const near = (p.r + 4) * camera.k + 6;
+    const room = bh + (e.badge ? 16 : 4);
+    const forced = isForced(p);
+    const spots = [
+      [sx - bw / 2, sy - near - bh], [sx - bw / 2, sy + near],
+      [sx + near, sy - bh / 2], [sx - near - bw, sy - bh / 2],
+    ].filter(([x, y]) => !(x + bw < 0 || x > w || y + bh < 0 || y > h));
+    const free = ([x, y]) => forced || !collides(x - 2, y - 2, bw + 4, room);
+    const spot = spots.find((xy) => free(xy) && !hit(dots, xy[0], xy[1], bw, bh)) || spots.find(free);
+    if (!spot) continue;
+    const [bx, by] = spot;
+    placed.push([bx - 2, by - 2, bw + 4, room]);
+    ctx.globalAlpha = lit(p.entityId) ? 1 : theme.dim;
     ctx.fillStyle = theme.labelBg;
     ctx.strokeStyle = paletteColor(theme, p.group);
     ctx.lineWidth = 1;
@@ -210,7 +238,14 @@ export function render(ctx, w, h, scene) {
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = theme.labelFg;
-    ctx.fillText(e.name, bx + 7, by + bh / 2 + 0.5);
+    if (e.sub) {
+      ctx.fillText(e.name, bx + 7, by + 9.5);
+      ctx.font = SUB_FONT;
+      ctx.fillText(e.sub, bx + 7, by + 22);
+      ctx.font = LABEL_FONT;
+    } else {
+      ctx.fillText(e.name, bx + 7, by + bh / 2 + 0.5);
+    }
 
     // The badge shows a state word or a count.
     if (e.badge) {
@@ -227,6 +262,7 @@ export function render(ctx, w, h, scene) {
       ctx.font = LABEL_FONT;
     }
   }
+  ctx.globalAlpha = 1;
 }
 
 function drawNode(ctx, p, theme, camera, emphasised) {

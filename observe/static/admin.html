@@ -13,7 +13,6 @@
 <body>
 <header id="shell-header" class="shell-head">
   <div id="summary" aria-live="polite"></div>
-  <button type="button" id="logout" class="btn ghost">Sign out</button>
 </header>
 <nav id="shell-nav" aria-label="Main"></nav>
 <main class="admin-main" id="page">
@@ -36,7 +35,7 @@
   <div class="admin-cols">
     <section class="card" id="keys-card" aria-labelledby="keys-h">
       <h3 id="keys-h">Ingest keys</h3>
-      <p class="card-sub">One key per host agent. The key text is shown once, when it is created.</p>
+      <p class="card-sub">Each host agent reports with one ingest key; a host with control also has one control key, so it shows two active keys. When a host has two keys of the same kind, the one in use is marked and the other is spare and can be revoked. The key text is shown once, when it is created.</p>
       <form id="key-form" class="admin-form">
         <label>Host name <input name="host" required maxlength="128"></label>
         <button type="submit" class="btn primary">Create key</button>

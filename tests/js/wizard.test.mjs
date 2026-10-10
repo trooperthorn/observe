@@ -97,8 +97,8 @@ test("every progress and report status has an icon word, never colour alone", ()
 });
 
 test("the host link encodes the name", () => {
-  assert.equal(hostHref("nas01"), "/host?name=nas01");
-  assert.equal(hostHref("a&b"), "/host?name=a%26b");
+  assert.equal(hostHref("nas01"), "/hosts/nas01");
+  assert.equal(hostHref("a&b"), "/hosts/a%26b");
 });
 
 test("the Observe address must be http or https with a host, never loopback or a path", () => {

@@ -218,28 +218,41 @@ class Scheduler:
         return res
 
     async def restore(self, monitor: Any) -> None:
-        """Take the monitor's state from its newest stored result (the latest table), so a
-        restart does not show everything as pending. A result older than three intervals is not
-        trusted. Only a good result is restored from the results. A WARN or FAIL result leaves the
-        monitor pending, unless its problem alert already went out before the restart (the
-        alert_open mark): then the problem is restored with its alert open and is not alerted
-        again. Marks of monitors that are removed or disabled are deleted."""
+        """Take the monitor's state from before the restart, so a restart neither shows
+        everything as pending nor logs and alerts every monitor again.
+
+        * A problem whose alert already went out (the alert_open mark) comes back as that
+          problem, with its alert open: it is not alerted again, and its recovery is.
+        * A monitor whose kept state (monitor_state) is Up and whose newest result is good and
+          no older than three intervals comes back Up at once.
+        * Every other monitor starts PENDING with its kept state as `prior`: reaching that state
+          again is silent and keeps its since; reaching another is logged and alerted as a change
+          from it (state.py).
+
+        `since` is always the time of the transition into the state, not of the last poll. Marks
+        and kept states of monitors that are removed or disabled are deleted."""
         st = self.states[monitor.slug]
         if st.state is not State.PENDING:
             return
         if not self._open_pruned:
             await self.store.prune_alert_open(set(self.by_slug))
+            await self.store.prune_monitor_states(set(self.by_slug))
             self._open_pruned = True
-        # A problem whose alert went out before the restart comes back as that problem, with its
-        # alert still open: it is not alerted again, and its recovery is.
+        kept = (await self.store.monitor_states()).get(monitor.slug)
+        prior = (State(kept[0]), kept[1]) if kept and kept[0] != State.PENDING.value else None
         opened = (await self.store.open_alerts()).get(monitor.slug)
         if opened is not None:
-            state, since = opened
-            st.state, st.since, st.alert_open = State(state), since, True
+            state, since = State(opened[0]), opened[1]
+            if prior is not None and prior[0] is state:
+                since = min(since, prior[1])  # the transition, not a later "still down" alert
+            st.state, st.since, st.alert_open = state, since, True
             if st.state is State.DOWN:
                 st.bad = st.warnish = st.failures_to_down
             else:
                 st.warnish = st.failures_to_down
+            return
+        st.prior = prior
+        if prior is not None and prior[0] is not State.UP:
             return
         found = await self.store.last_result(monitor.slug)
         if found is None:
@@ -249,8 +262,8 @@ class Scheduler:
             return
         if self.clock() - at > 3 * self.config.effective(monitor, "interval"):
             return
-        st.state = State.UP
-        st.since = at
+        st.state, st.prior = State.UP, None
+        st.since = prior[1] if prior is not None else at
 
     async def _probe(self, monitor: Any) -> CheckResult:
         async with self._sem:

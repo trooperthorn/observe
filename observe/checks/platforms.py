@@ -179,13 +179,13 @@ class TrueNASCheck(Check):
                   and ALERT_LEVELS.index(a["level"]) >= floor]
         if not active:
             return CheckResult.ok(f"no active alerts at {self.monitor.min_alert_level} or above",
-                                  value=0.0)
+                                  value=0.0, unit="{alert}")
         worst = max(ALERT_LEVELS.index(a["level"]) for a in active)
         texts = [f"{a['level']}: {str(a.get('formatted') or a.get('klass'))[:100]}"
                  for a in active[:5]]
         res = CheckResult(Result.FAIL if worst >= ALERT_LEVELS.index("CRITICAL") else Result.WARN,
                           f"{len(active)} active alerts; " + " | ".join(texts),
-                          value=float(len(active)), detail={"alerts": texts})
+                          value=float(len(active)), unit="{alert}", detail={"alerts": texts})
         return res
 
 

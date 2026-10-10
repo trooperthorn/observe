@@ -251,16 +251,29 @@ Credential = Annotated[
 # -------------------------------------------------------------------- monitors
 
 
+# The default clear band of a threshold, as a fraction of the threshold (Thresholds.hysteresis).
+DEFAULT_HYSTERESIS = 0.05
+
+
 class Thresholds(Strict):
     """Numeric thresholds applied to a check's value.
 
     direction "above": value >= crit is DOWN, value >= warn is WARN.
     direction "below": value <= crit is DOWN, value <= warn is WARN.
+
+    Once a threshold holds, the value must move back past it by `hysteresis` (in the value's
+    unit) before it clears, so a value hovering at a threshold does not flap. None means 5% of
+    each threshold; 0 turns it off.
     """
 
     direction: Literal["above", "below"] = "above"
     warn: float | None = None
     crit: float | None = None
+    hysteresis: float | None = Field(default=None, ge=0)
+
+    def band(self, limit: float) -> float:
+        """How far past `limit` the value must return before that threshold clears."""
+        return abs(limit) * DEFAULT_HYSTERESIS if self.hysteresis is None else self.hysteresis
 
 
 MIN_RECHECK_INTERVAL = 5.0
@@ -1174,3 +1187,33 @@ def load_config(path: str | Path) -> Config:
         if isinstance(dsn, str) and dsn:
             message = message.replace(dsn, "[withheld]")
         raise ConfigError(message) from None
+
+
+# Text the example configurations use where a real name belongs. A monitor whose target still
+# holds one checks nothing real (a DNS query for observe-svr.yourdomain is only ever NXDOMAIN).
+PLACEHOLDERS = ("yourdomain", "your-domain", "example.com", "example.org", "example.net",
+                "changeme", "change-me")
+
+
+# Only fields that name what a monitor checks are read, never headers, bodies or credentials,
+# so no secret can reach the log.
+TARGET_FIELDS = ("host", "address", "url", "query", "nameserver", "server_name", "device",
+                 "host_name", "base_path", "path", "topic")
+
+
+def placeholder_warnings(config: Config) -> list[str]:
+    """One line per monitor target field that still holds an example placeholder."""
+    out: list[str] = []
+    for m in config.monitors:
+        for field in TARGET_FIELDS:
+            value = getattr(m, field, None)
+            for text in (value if isinstance(value, list) else [value]):
+                if not isinstance(text, str):
+                    continue
+                hit = next((p for p in PLACEHOLDERS if p in text.lower()), None)
+                if hit:
+                    # A URL can carry a token in its query, so only its field is named.
+                    shown = "" if field == "url" else f" {text!r}"
+                    out.append(f"monitor {m.name!r}: {field}{shown} still holds the example "
+                               f"placeholder {hit!r}")
+    return out

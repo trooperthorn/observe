@@ -1,11 +1,15 @@
 // Infrastructure map: core, distribution, access, jacks and endpoints, drawn from
-// /api/v2/map. Every node shows its state in words, so colour is never the only signal.
+// /api/v2/map. Every node shows its state in words, so colour is never the only signal, and its
+// device type (gateway, switch, access point), which also decides its tier.
 import { el, stateText, portHref, api, poller, STATE_WORDS } from "/static/infra-common.js";
 import { svg as svgEl } from "/static/js/dom.js";
+import { statusChip } from "/static/js/chips.js";
+import { deviceRows, deviceTypeWord, linkRows, switchTiers } from "/static/js/map-logic.js";
 import "/static/js/theme.js";
 import { layoutForce } from "/static/js/graph/force.js";
 import { createGraphView, structureKey, mergeLayout } from "/static/js/graph/view.js";
 import { GROUPS, buildGraph, defaultView, viewFromHash } from "/static/js/graph/infra.js";
+import { refreshedText } from "/static/js/format.js";
 
 const LAYER_TITLES = [
   ["core", "Core"], ["distribution", "Distribution"], ["access", "Access"],
@@ -29,6 +33,16 @@ function currentView(nodeCount) {
   return viewFromHash(location.hash) || view || defaultView(nodeCount, narrow());
 }
 
+function clearButton() {
+  const b = el("button", "btn", "Clear selection");
+  b.type = "button";
+  b.addEventListener("click", () => {
+    if (graphView) graphView.select(null);
+    document.getElementById("graphcanvas").focus();
+  });
+  return b;
+}
+
 function showSelected(id) {
   const h2 = el("h2", null, "Selected");
   if (!graph || !id || !graph.byId.has(id)) {
@@ -49,9 +63,9 @@ function showSelected(id) {
   }
   selectedEl.replaceChildren(h2, el("div", "node-title", sw.label),
     el("div", "node-state", stateText(sw)),
-    el("div", "note", `Switch, ${d.ports.length} mapped port${d.ports.length === 1 ? "" : "s"}, ${d.endpoints} endpoint${d.endpoints === 1 ? "" : "s"}`),
+    el("div", "note", `${deviceTypeWord(sw)}, ${d.ports.length} mapped port${d.ports.length === 1 ? "" : "s"}, ${d.endpoints} endpoint${d.endpoints === 1 ? "" : "s"}`),
     el("div", "note", sw.monitor ? `monitor ${sw.monitor}` : "no monitor linked"),
-    d.links.length ? list : el("p", "note", "No switch links mapped."));
+    d.links.length ? list : el("p", "note", "No device links mapped."), clearButton());
 }
 
 function drawGraph(data) {
@@ -91,6 +105,8 @@ function applyView(data) {
   }
   graphEl.hidden = forced !== "graph";
   layersEl.hidden = forced !== "tiers";
+  // The table view lists the devices, then the links; the links stay under the other views too.
+  document.getElementById("devicestable").hidden = forced !== "table";
   document.getElementById("linkstable").hidden = false;
   if (forced === "graph") drawGraph(data);
   else if (forced === "tiers") draw(data);
@@ -107,43 +123,10 @@ window.addEventListener("hashchange", () => { if (lastData) applyView(lastData);
 document.getElementById("zoomin").addEventListener("click", () => graphView && graphView.zoomBy(1.25));
 document.getElementById("zoomout").addEventListener("click", () => graphView && graphView.zoomBy(0.8));
 document.getElementById("zoomfit").addEventListener("click", () => graphView && graphView.fit());
-
-function switchTiers(nodes, edges) {
-  const switches = nodes.filter((n) => n.kind === "switch");
-  const ports = new Map(nodes.filter((n) => n.kind === "port").map((n) => [n.id, n]));
-  const above = new Map(switches.map((s) => [s.id, new Set()]));
-  const linked = new Set();
-  for (const e of edges) {
-    const a = ports.get(e.a), b = ports.get(e.b);
-    if (!a || !b || a.parent === b.parent) continue;
-    linked.add(a.parent); linked.add(b.parent);
-    // The switch whose port is the uplink sits below the switch at the other end.
-    if (a.role === "uplink" && b.role !== "uplink" && above.has(a.parent)) above.get(a.parent).add(b.parent);
-    else if (b.role === "uplink" && a.role !== "uplink" && above.has(b.parent)) above.get(b.parent).add(a.parent);
-  }
-  const level = new Map();
-  const depth = (id, seen) => {
-    if (level.has(id)) return level.get(id);
-    if (seen.has(id)) return 0;
-    seen.add(id);
-    let d = 0;
-    for (const p of above.get(id) || []) d = Math.max(d, 1 + depth(p, seen));
-    seen.delete(id);
-    level.set(id, d);
-    return d;
-  };
-  for (const s of switches) depth(s.id, new Set());
-  const top = Math.max(0, ...level.values());
-  const tier = new Map();
-  for (const s of switches) {
-    const l = level.get(s.id);
-    if (!linked.has(s.id) || top === 0) tier.set(s.id, "access");
-    else if (l === 0) tier.set(s.id, "core");
-    else if (l === top) tier.set(s.id, "access");
-    else tier.set(s.id, "distribution");
-  }
-  return tier;
-}
+// Escape clears the selection wherever the focus is, not only on the canvas.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && graphView && graphView.state.selected && !graphEl.hidden) graphView.select(null);
+});
 
 function box(node, extra) {
   const b = el("div", `node ${node.state || "unknown"}`);
@@ -165,7 +148,8 @@ function switchBox(node, ports) {
     list.append(li);
   }
   const wrap = el("div");
-  wrap.append(el("div", "note", node.monitor ? `monitor ${node.monitor}` : "no monitor linked"), list);
+  wrap.append(el("div", "note",
+    `${deviceTypeWord(node)}, ${node.monitor ? `monitor ${node.monitor}` : "no monitor linked"}`), list);
   return box(node, wrap);
 }
 
@@ -230,19 +214,31 @@ function drawEdges(svg, edges, boxOf) {
 }
 
 function fillLinks(edges, nodes) {
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const name = (id) => {
-    const n = byId.get(id);
-    if (!n) return id;
-    if (n.kind !== "port") return n.label;
-    const sw = byId.get(n.parent);
-    return `${n.label} on ${sw ? sw.label : n.parent}`;
-  };
-  document.querySelector("#links tbody").replaceChildren(...edges.map((e) => {
+  document.querySelector("#links tbody").replaceChildren(...linkRows(edges, nodes).map((r) => {
     const tr = el("tr");
-    tr.append(el("td", null, name(e.a)), el("td", null, name(e.b)), el("td", null, e.source),
-      el("td", null, `${e.age_days} days ago`),
-      el("td", null, e.state === "stale" ? "stale, not confirmed recently" : "active"));
+    tr.append(el("td", null, r.from), el("td", null, r.to), el("td", null, r.source),
+      el("td", null, r.seen), el("td", null, r.state));
+    return tr;
+  }));
+}
+
+function fillDevices(nodes) {
+  const rows = deviceRows(nodes);
+  const body = document.querySelector("#devices tbody");
+  if (!rows.length) {
+    const td = el("td", "muted", "No devices are mapped yet.");
+    td.colSpan = 5;
+    const tr = el("tr");
+    tr.append(td);
+    body.replaceChildren(tr);
+    return;
+  }
+  body.replaceChildren(...rows.map((r) => {
+    const tr = el("tr");
+    const state = el("td");
+    state.append(statusChip(r.state, r.stateText));
+    tr.append(el("td", null, r.name), el("td", null, r.type), state,
+      el("td", null, r.monitor || "none linked"), el("td", null, r.address || "unknown"));
     return tr;
   }));
 }
@@ -269,7 +265,7 @@ function fillOptions(all) {
 function summarize(nodes) {
   const counts = {};
   for (const n of nodes.filter((x) => x.kind === "switch")) counts[n.state] = (counts[n.state] || 0) + 1;
-  document.getElementById("summary").replaceChildren(
+  document.getElementById("map-summary").replaceChildren(
     ...Object.entries(counts).map(([s, c]) => el("span", `pill ${s}`, `${c} ${STATE_WORDS[s] || s}`)));
 }
 
@@ -288,9 +284,10 @@ async function refresh() {
     lastData = data;
     msg.textContent = "";
     summarize(data.nodes);
+    fillDevices(data.nodes);
     fillLinks(data.edges, data.nodes);
     applyView(data);
-    document.getElementById("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;
+    document.getElementById("footer").textContent = refreshedText();
   } catch (e) {
     if (e.message === "not signed in") return;
     document.getElementById("footer").textContent = "observe unreachable, retrying";
