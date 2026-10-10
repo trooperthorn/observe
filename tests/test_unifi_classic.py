@@ -330,7 +330,8 @@ def test_fixture_parsing_of_wan_health_and_offline_clients():
                                         "uptime_s": 3600.0, "gateways": ["UDM"]}
     assert parse_wan_health([{"subsystem": "lan"}]) is None
     assert parse_offline_clients(KNOWN, ACTIVE) == [
-        {"mac": "aa:aa:aa:00:00:01", "name": "Phone", "last_seen": 1700000000.0, "first_seen": None}]
+        {"mac": "aa:aa:aa:00:00:01", "name": "Phone", "last_seen": 1700000000.0, "first_seen": None,
+         "wired": None}]
 
 
 # ---------------------------------------------------------------- through the plugin

@@ -221,6 +221,7 @@ def offline_clients(site_id: str, rows: Iterable[dict[str, Any]], connected: set
         if not mac or mac in connected or (age_from is not None and age_from < cutoff):
             continue
         out.append(Client(site_id, mac, mac, _text(r.get("name")), connected=False,
+                          kind={True: "wired", False: "wireless"}.get(r.get("wired"), ""),
                           last_seen=seen))
     return out
 
@@ -245,16 +246,18 @@ def _up_sql(keep_classic: bool) -> str:
   {", ".join(col(c) for c in classic)}, last_seen=excluded.last_seen"""
 
 
-# An offline row keeps what is already known and moves only the name and the last seen time. When
+# An offline row keeps what is already known and moves only the name, the kind when it had none,
+# and the last seen time. When
 # the console gave no last seen time, the stored time is not refreshed, so the row ages out by
 # retention instead of looking new on every poll. That choice is made in Python, with two
 # statements, because PostgreSQL cannot infer the type of a bare `? IS NULL` parameter.
 def _off_sql(known: bool) -> str:
     seen = ", last_seen=MAX(unifi_clients.last_seen, excluded.last_seen)" if known else ""
-    return f"""INSERT INTO unifi_clients (site_id, client_id, mac, name, connected, first_seen,
-  last_seen) VALUES (?,?,?,?,0,?,?)
+    return f"""INSERT INTO unifi_clients (site_id, client_id, mac, name, kind, connected, first_seen,
+  last_seen) VALUES (?,?,?,?,?,0,?,?)
   ON CONFLICT (site_id, client_id) DO UPDATE SET connected=0,
-  name=CASE WHEN excluded.name != '' THEN excluded.name ELSE unifi_clients.name END{seen}"""
+  name=CASE WHEN excluded.name != '' THEN excluded.name ELSE unifi_clients.name END,
+  kind=CASE WHEN unifi_clients.kind = '' THEN excluded.kind ELSE unifi_clients.kind END{seen}"""
 
 
 _OFF_KNOWN, _OFF_UNKNOWN = _off_sql(True), _off_sql(False)
@@ -273,7 +276,7 @@ def _write_clients(db: Conn, site_id: str, live: list[Client], off: list[Client]
                "AND last_seen < ?", (site_id, now))
     for known, sql in ((True, _OFF_KNOWN), (False, _OFF_UNKNOWN)):
         db.executemany(sql, [
-            (c.site_id, c.client_id, c.mac, c.name, c.last_seen if known else now,
+            (c.site_id, c.client_id, c.mac, c.name, c.kind, c.last_seen if known else now,
              c.last_seen if known else now)
             for c in off if (c.last_seen is not None) == known])
     return len(live) + len(off)

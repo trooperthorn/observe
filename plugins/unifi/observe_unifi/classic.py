@@ -443,7 +443,8 @@ def parse_wan_health(rows: list[Any]) -> dict[str, Any] | None:
 
 
 def parse_offline_clients(known: list[Any], active: list[Any]) -> list[dict[str, Any]]:
-    """Known clients (rest/user) whose MAC is not in the active list (stat/sta)."""
+    """Known clients (rest/user) whose MAC is not in the active list (stat/sta). `is_wired`
+    (UNVERIFIED on rest/user) is kept as `wired` so the absent list can leave wired ones out."""
     live = {_str(c.get("mac")).lower() for c in active if isinstance(c, dict)}
     out = []
     for u in known:
@@ -451,7 +452,9 @@ def parse_offline_clients(known: list[Any], active: list[Any]) -> list[dict[str,
             continue
         mac = _str(u.get("mac")).lower()
         if mac and mac not in live:
+            wired = u.get("is_wired")
             out.append({"mac": mac, "name": _str(u.get("name")) or _str(u.get("hostname")),
                         "last_seen": _num(u.get("last_seen")),
-                        "first_seen": _num(u.get("first_seen"))})
+                        "first_seen": _num(u.get("first_seen")),
+                        "wired": wired if isinstance(wired, bool) else None})
     return out

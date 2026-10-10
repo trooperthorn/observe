@@ -236,13 +236,14 @@ def test_window_and_filter_rules_in_node():
 # ---- the same data on /api/v2/unifi -------------------------------------------------------
 
 def test_v2_resources_are_mounted_by_the_plugin_and_need_a_credential(env):
-    for path in ("/status", "/devices", "/clients", "/cameras", "/devices/a/b"):
+    for path in ("/status", "/devices", "/clients", "/cameras", "/devices/a/b", "/overview",
+                 "/wlans", "/absent-clients"):
         r = env.client.get("/api/v2/unifi" + path)
         assert r.status_code == 401, path
     env.login()
     ops = {r.operation_id for r in env.client.app.state.v2_runtime.resources if r.owner == "unifi"}
     assert ops == {"unifi_status", "unifi_devices", "unifi_device", "unifi_clients",
-                   "unifi_cameras"}
+                   "unifi_cameras", "unifi_overview", "unifi_wlans", "unifi_absent_clients"}
 
 
 def test_v2_devices_page_by_cursor_and_one_device_by_id(env):

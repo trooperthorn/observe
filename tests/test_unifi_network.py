@@ -391,3 +391,238 @@ def test_a_console_without_wlanconf_still_completes_the_classic_poll(tmp_path):
 @pytest.mark.parametrize("state", sorted(OFFLINE_DEVICE_STATES))
 def test_offline_states_are_the_core_names(state):
     assert state.isupper()
+
+
+# ------------------------------------------------------------------- the API (slice 2)
+
+from .test_unifi_pages import Env as PageEnv  # noqa: E402
+
+API = "/api/v2/unifi"
+HOSTILE_TEXT = '<img src=x onerror="alert(1)">&"\'</script>'
+
+
+def api_env(tmp_path: Any, console: Full, **settings: Any) -> PageEnv:
+    e = PageEnv(tmp_path, console, **{"protect": False, "classic_credential": None, **settings})
+    e.login()
+    return e
+
+
+def network_console() -> Full:
+    console = Full([client_row(1, type="WIRELESS", uplinkDeviceId="dev-2"),
+                    client_row(3, type="WIRELESS", uplinkDeviceId="dev-2"),
+                    client_row(5, type="WIRELESS", uplinkDeviceId=""),
+                    client_row(2, type="WIRED", uplinkDeviceId="dev-1"),
+                    client_row(4, type="", uplinkDeviceId="")],
+                   devices=[device(1, type="gateway", name="UDM", state="ONLINE",
+                                   features=["GATEWAY"], statistics={"rxBytes": 10, "txBytes": 20}),
+                            device(2, name="Attic AP", features=["ACCESS_POINT"],
+                                   firmwareUpdatable=True),
+                            device(3, name="Shed AP", firmwareUpdatable=None)])
+    console.stats["dev-1"] = {"uplink": {"rxRateBps": 1500, "txRateBps": 250, "name": "eth8"}}
+    console.classic_devices = [GATEWAY]
+    console.health = HEALTH
+    console.wlans = WLANS
+    console.active = [
+        {"mac": "02:00:00:00:00:01", "is_wired": False, "essid": "IoT", "network_id": "n30",
+         "uptime": 90, "rx_bytes-r": 100, "tx_bytes-r": 50},
+        {"mac": "02:00:00:00:00:03", "is_wired": False, "essid": "IoT", "vlan": 30},
+        {"mac": "02:00:00:00:00:05", "is_wired": False, "essid": "HomeWiFi"},
+        {"mac": "02:00:00:00:00:02", "is_wired": True, "sw_mac": "AA:BB:CC:00:00:01",
+         "sw_port": 3, "network": "LAN", "wired-rx_bytes": 7, "wired-tx_bytes": 8}]
+    console.known = [
+        {"mac": "02:00:00:00:07:07", "name": "Printer", "last_seen": 900.0, "is_wired": True},
+        {"mac": "02:00:00:00:08:08", "name": "Old phone", "last_seen": 950.0, "is_wired": False},
+        {"mac": "02:00:00:00:09:09", "hostname": "unknown-kind", "last_seen": 920.0}]
+    return console
+
+
+def polled(e: PageEnv, classic: bool = True) -> None:
+    run(e.inner.plugin.collect_devices(e.store))
+    if classic:
+        run(e.inner.plugin.collect_classic(e.store))
+    run(e.inner.plugin.collect_clients(e.store))
+
+
+def test_overview_carries_the_five_tiles_and_clients_per_ssid(tmp_path):
+    e = api_env(tmp_path, network_console(), classic_credential="classic")
+    try:
+        polled(e)
+        got = e.client.get(API + "/overview").json()
+        assert got["site_id"] == "site-1" and got["status"] == "online"
+        assert got["gateway"] == {"device_id": "dev-1", "name": "UDM", "state": "ONLINE"}
+        assert got["internet_up"] is True
+        assert got["wan"] == {"ip": "192.0.2.9", "port": "eth8", "rx_rate_bps": 1500.0,
+                              "tx_rate_bps": 250.0, "latency_ms": 12.0}
+        assert (got["wireless_clients"], got["wired_clients"], got["total_clients"],
+                got["device_count"]) == (3, 2, 5, 3)
+        assert got["clients_per_ssid"] == [{"ssid": "IoT", "count": 2},
+                                           {"ssid": "HomeWiFi", "count": 1}]
+        assert got["devices_stale"] is False and got["classic_stale"] is False
+        assert got["devices_updated"].endswith("Z") and got["classic_updated"].endswith("Z")
+        assert got["clients_updated"].endswith("Z") and got["classic_configured"] is True
+        assert "etag" not in e.client.get(API + "/overview").headers
+        e.inner.now += 2 * e.inner.plugin.settings.interval + 1
+        later = e.client.get(API + "/overview").json()
+        assert later["devices_stale"] is True and later["classic_stale"] is True
+        assert e.client.get(API + "/overview?site=nowhere").json()["total_clients"] == 0
+    finally:
+        e.close()
+
+
+def test_overview_degrades_without_the_classic_account_and_marks_an_offline_gateway(tmp_path):
+    console = network_console()
+    console.devices[0]["state"] = "OFFLINE"
+    e = api_env(tmp_path, console)
+    try:
+        polled(e, classic=False)
+        got = e.client.get(API + "/overview").json()
+        assert got["status"] == "offline" and got["internet_up"] is None
+        assert got["wan"] == {"ip": "", "port": "eth8", "rx_rate_bps": 1500.0,
+                              "tx_rate_bps": 250.0, "latency_ms": None}
+        assert got["classic_configured"] is False and got["classic_updated"] is None
+        assert got["classic_stale"] is False
+        # Without classic detail every wireless client sits on the unknown SSID.
+        assert got["clients_per_ssid"] == [{"ssid": "(unknown SSID)", "count": 3}]
+        assert (got["wireless_clients"], got["wired_clients"]) == (3, 2)
+        assert e.client.get(API + "/wlans").json() == {"items": []}
+        assert e.client.get(API + "/absent-clients").json()["items"] == []
+    finally:
+        e.close()
+
+
+def test_overview_before_any_poll_is_all_unknown(tmp_path):
+    e = api_env(tmp_path, Full([]))
+    try:
+        got = e.client.get(API + "/overview").json()
+        assert got["site_id"] is None and got["status"] == "unknown" and got["gateway"] is None
+        assert got["total_clients"] == 0 and got["clients_per_ssid"] == []
+        assert got["devices_updated"] is None and got["devices_stale"] is False
+    finally:
+        e.close()
+
+
+def test_clients_rows_carry_the_classic_detail_and_filter_by_vlan_and_ssid(tmp_path):
+    e = api_env(tmp_path, network_console(), classic_credential="classic")
+    try:
+        polled(e)
+        rows = {c["client_id"]: c for c in e.client.get(API + "/clients").json()["items"]}
+        one = rows["02:00:00:00:00:01"]
+        assert (one["vlan"], one["network"], one["uptime_s"], one["ssid"]) == (30, "IoT", 90, "IoT")
+        assert (one["rx_rate_bps"], one["tx_rate_bps"], one["rx_bytes"]) == (100.0, 50.0, None)
+        wired = rows["02:00:00:00:00:02"]
+        assert (wired["vlan"], wired["network"], wired["rx_bytes"], wired["tx_bytes"]) == (
+            None, "LAN", 7, 8)
+        assert wired["uptime_s"] is None and wired["connected_at"].endswith("Z")
+        iot = e.client.get(API + "/clients?ssid=IoT").json()["items"]
+        assert sorted(c["client_id"] for c in iot) == ["02:00:00:00:00:01", "02:00:00:00:00:03"]
+        v30 = e.client.get(API + "/clients?vlan=30").json()["items"]
+        assert sorted(c["client_id"] for c in v30) == ["02:00:00:00:00:01", "02:00:00:00:00:03"]
+        both = e.client.get(API + "/clients?vlan=30&ssid=IoT&connected=true&limit=1").json()
+        assert len(both["items"]) == 1 and both["next_cursor"]
+        rest = e.client.get(f"{API}/clients?vlan=30&ssid=IoT&connected=true&limit=1"
+                            f"&cursor={both['next_cursor']}").json()
+        assert len(rest["items"]) == 1 and rest["next_cursor"] is None
+        assert e.client.get(API + "/clients?vlan=99").json()["items"] == []
+        assert e.client.get(API + "/clients?vlan=5000").status_code == 400
+        assert e.client.get(API + "/clients?ssid=HomeWiFi&q=client 5").json()["items"][0][
+            "client_id"] == "02:00:00:00:00:05"
+    finally:
+        e.close()
+
+
+def test_devices_rows_carry_type_firmware_status_and_counters(tmp_path):
+    e = api_env(tmp_path, network_console())
+    try:
+        run(e.inner.plugin.collect_devices(e.store))
+        rows = {d["device_id"]: d for d in e.client.get(API + "/devices").json()["items"]}
+        assert rows["dev-1"]["device_type"] == "gateway"
+        assert (rows["dev-1"]["rx_bytes"], rows["dev-1"]["tx_bytes"]) == (10, 20)
+        assert rows["dev-1"]["firmware_status"] == "Up to date"
+        assert rows["dev-2"]["firmware_status"] == "Update available"
+        assert rows["dev-3"]["firmware_status"] == "unknown"
+        assert rows["dev-3"]["firmware_updatable"] is None and rows["dev-3"]["rx_rate_bps"] is None
+        one = e.client.get(API + "/devices/site-1/dev-2").json()
+        assert one == rows["dev-2"]
+    finally:
+        e.close()
+
+
+def test_wlans_report_readiness_carrying_aps_and_a_plain_summary(tmp_path):
+    e = api_env(tmp_path, network_console(), classic_credential="classic")
+    try:
+        polled(e)
+        items = e.client.get(API + "/wlans").json()["items"]
+        assert [w["name"] for w in items] == ["Guest", "HomeWiFi", "IoT"]
+        guest, home, iot = items
+        assert home["summary"] == "Nothing in this SSID's configuration refuses a client."
+        assert home["findings"] == [] and home["network_name"] == "LAN"
+        assert home["carrying_aps"] == [] and home["client_count"] == 1  # client 5 has no AP
+        assert iot["carrying_aps"] == ["Attic AP"] and iot["client_count"] == 2
+        assert (iot["vlan"], iot["network_name"], iot["band"], iot["hidden"]) == (30, "IoT", "2g", True)
+        codes = [f["code"] for f in iot["findings"]]
+        assert codes == ["mac_allow_list", "ap_restricted_by_group", "hidden_ssid",
+                         "blackout_schedule"]
+        assert iot["summary"] == ("1 condition refuses every client; 1 refuses some devices; "
+                                  "2 cannot be judged from the data.")
+        gcodes = [f["code"] for f in guest["findings"]]
+        assert gcodes == ["ssid_disabled", "no_2ghz", "open_security", "blackout_schedule"]
+        assert guest["summary"].startswith("2 conditions refuse every client")
+        assert {f["severity"] for f in guest["findings"]} == {"blocking", "possible", "unknown"}
+        assert items[1]["updated"].endswith("Z")
+        assert e.client.get(API + "/wlans?site=nowhere").json() == {"items": []}
+        r = e.client.get(API + "/wlans")
+        assert e.client.get(API + "/wlans", headers={"If-None-Match": r.headers["etag"]}
+                            ).status_code == 304
+    finally:
+        e.close()
+
+
+def test_absent_clients_are_the_offline_wireless_or_unknown_rows_newest_first(tmp_path):
+    import httpx
+    e = api_env(tmp_path, network_console(), classic_credential="classic")
+    try:
+        polled(e)
+        got = e.client.get(API + "/absent-clients").json()
+        assert [(c["client_id"], c["name"], c["kind"]) for c in got["items"]] == [
+            ("02:00:00:00:08:08", "Old phone", "wireless"),
+            ("02:00:00:00:09:09", "unknown-kind", "")]  # the wired printer is left out
+        assert got["items"][0]["last_seen"].endswith("Z") and got["items"][0]["ssid"] == ""
+        # A client that was on an SSID and then left keeps it as its last SSID.
+        e.inner.now += 300
+        c = network_console()
+        c.clients = []
+        c.active = []
+        c.known = [{"mac": "02:00:00:00:00:01", "name": "Client 1", "last_seen": e.inner.now}]
+        e.inner.plugin.transport = httpx.MockTransport(c)
+        run(e.inner.plugin.collect_clients(e.store))
+        got = e.client.get(API + "/absent-clients?limit=1").json()
+        assert got["items"][0]["client_id"] == "02:00:00:00:00:01"
+        assert got["items"][0]["ssid"] == "IoT" and got["next_cursor"]
+        rest = e.client.get(f"{API}/absent-clients?limit=1&cursor={got['next_cursor']}").json()
+        assert rest["items"][0]["client_id"] == "02:00:00:00:00:03"
+        every = e.client.get(API + "/absent-clients").json()["items"]
+        assert [c["client_id"] for c in every] == [
+            "02:00:00:00:00:01", "02:00:00:00:00:03", "02:00:00:00:00:04", "02:00:00:00:00:05",
+            "02:00:00:00:08:08", "02:00:00:00:09:09"]
+        assert "02:00:00:00:00:02" not in {c["client_id"] for c in every}  # wired, left out
+        assert "02:00:00:00:07:07" not in {c["client_id"] for c in every}
+    finally:
+        e.close()
+
+
+def test_the_new_routes_are_reads_only_and_hostile_text_stays_data(tmp_path):
+    console = network_console()
+    console.wlans = [{"_id": "w9", "name": HOSTILE_TEXT, "enabled": True}]
+    console.known = [{"mac": "02:00:00:00:08:08", "name": HOSTILE_TEXT, "last_seen": 1.0}]
+    e = api_env(tmp_path, console, classic_credential="classic")
+    try:
+        polled(e)
+        for path in ("/overview", "/wlans", "/absent-clients"):
+            r = e.client.get(API + path)
+            assert r.headers["content-type"].startswith("application/json")
+            assert r.headers["x-content-type-options"] == "nosniff"
+            assert e.client.post(API + path).status_code in (404, 405), path
+        assert e.client.get(API + "/wlans").json()["items"][0]["name"] == HOSTILE_TEXT
+        assert e.client.get(API + "/absent-clients").json()["items"][0]["name"] == HOSTILE_TEXT
+    finally:
+        e.close()
