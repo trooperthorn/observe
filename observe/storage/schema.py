@@ -387,6 +387,17 @@ WHERE e.previous <> e.current AND e.current <> 'pending' AND e.ts = (
 ON CONFLICT (monitor) DO NOTHING""",
 )
 
+# The kind of device a map switch is, as its feed classified it: gateway, switch, access_point,
+# bridge or other. Empty when the feed does not know (LLDP, SNMP and field reports), which the
+# map shows as a switch placed by its links alone.
+def _add_switch_device_type(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(infra_switches)")}
+    if "device_type" not in columns:
+        db.execute("ALTER TABLE infra_switches ADD COLUMN device_type TEXT NOT NULL DEFAULT ''")
+
+
+SWITCH_TYPE_TABLES = (_add_switch_device_type,)
+
 # The step that creates the summary levels. TimescaleDB runs its own version of it.
 ROLLUP_STEP = 17
 
@@ -417,6 +428,7 @@ MIGRATIONS: dict[int, tuple[str | Callable[[sqlite3.Connection], None], ...]] = 
     22: SAMPLE_SEQ_TABLES,
     23: ALERT_TABLES,
     24: MONITOR_STATE_TABLES,
+    25: SWITCH_TYPE_TABLES,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

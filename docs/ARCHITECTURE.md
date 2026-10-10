@@ -1592,7 +1592,7 @@ goes in through `textContent`. Status is an icon and a word, never colour alone.
 sits in `js/table-core.js`, `js/chip-states.js` and `js/dialog-logic.js` so it can be tested
 without a browser. No page loads them yet.
 
-The Network map page (slice S10) offers Graph, Tiers and Table views side by side. `/api/v2/map` marks top-level switches with `anchor`, and `js/graph/infra.js` turns the payload into graph input (switches as nodes, endpoints as a count badge). The graph engine (slice S9) lives in `js/graph/`: `force.js` (a d3-free force layout, run once
+The Network map page (slice S10) offers Graph, Tiers and Table views side by side. `/api/v2/map` marks top-level switches with `anchor` and carries each switch's `device_type`, and `js/graph/infra.js` turns the payload into graph input (switches as nodes labelled with their state word and type, endpoints as a count badge). `js/map-logic.js` places devices in tiers (a gateway is core, an access point access) and builds the table rows. The graph engine (slice S9) lives in `js/graph/`: `force.js` (a d3-free force layout, run once
 and deterministic, limited to 300 nodes), `render.js` (canvas painter reading colours from the CSS
 tokens, with a status ring and glyph on each node) and `view.js` (camera, input, resize and
 repaint scheduling), with `css/graph.css`. The code is ported from relationship-maps (commit

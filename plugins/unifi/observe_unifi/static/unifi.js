@@ -497,7 +497,8 @@ async function show(tab) {
   }
   const panel = el("div");
   panel.setAttribute("role", "tabpanel");
-  frag.append(crumbs, el("h1", null, "UniFi"), top, tabs, panel);
+  // The footer line is kept as the last child of the page, inside its container.
+  frag.append(crumbs, el("h1", null, "UniFi"), top, tabs, panel, footer);
   applySsid = null;
   page.replaceChildren(frag);
   try {

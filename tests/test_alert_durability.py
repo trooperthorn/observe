@@ -257,7 +257,8 @@ def test_a_version_22_database_with_rows_migrates_to_23(tmp_path):
     assert asyncio.run(store.outbox_depth()) == 0
     store.close()
     db = sqlite3.connect(path)
-    assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == SCHEMA_VERSION
+    top = db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+    assert top == SCHEMA_VERSION >= 23
     db.close()
 
 

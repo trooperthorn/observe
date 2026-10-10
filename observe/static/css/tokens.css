@@ -33,7 +33,7 @@
   --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #4a3aa7; --cat-8: #e34948; --cat-other: #9aa0a6;
   /* graph canvas, read at paint time */
   --g-bg: #f7f8fa; --g-node-stroke: #ffffff; --g-label-bg: rgba(255, 255, 255, .92);
-  --g-label-fg: #1c2230; --g-dim: .2;
+  --g-label-fg: #1c2230; --g-dim: .5;
   /* motion */
   --o-dur: 120ms;
 }

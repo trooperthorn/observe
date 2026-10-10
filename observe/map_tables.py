@@ -107,7 +107,8 @@ def _sync(db: Conn, table: str, columns: tuple[str, ...], key: tuple[str, ...],
 def rebuild(db: Conn, now: float, stale_days: int, overlay: Overlay | None = None) -> Changed:
     """Bring the three map tables in line with the infrastructure tables. See the module text."""
     live = overlay if overlay is not None else _carried(db)
-    switches = db.execute("SELECT switch_id, name FROM infra_switches ORDER BY switch_id").fetchall()
+    switches = db.execute("SELECT switch_id, name, device_type, platform, mgmt_addresses "
+                          "FROM infra_switches ORDER BY switch_id").fetchall()
     ports = db.execute("SELECT switch_id, port_key, role FROM infra_ports "
                        "ORDER BY switch_id, port_key").fetchall()
     jacks = db.execute("SELECT jack_key, room, site, switch_id, port_key FROM infra_jacks "
@@ -153,8 +154,13 @@ def rebuild(db: Conn, now: float, stale_days: int, overlay: Overlay | None = Non
         return kind, label, site, {**base, **attrs}, o.get("state", "unknown")
 
     nodes: dict[str, tuple[Any, ...]] = {}
-    for sid, name in switches:
-        nodes[f"switch:{sid}"] = node(f"switch:{sid}", "switch", name or sid, "", {})
+    for sid, name, device_type, platform, addrs in switches:
+        # device_type is what the feed classified the device as, empty when no feed knew; the
+        # map page names and places a switch by it (observe/static/js/map-logic.js).
+        first = json.loads(addrs or "[]")
+        nodes[f"switch:{sid}"] = node(f"switch:{sid}", "switch", name or sid, "", {
+            "device_type": device_type, "platform": platform,
+            "address": first[0] if first else ""})
     for pref in sorted(visible):
         if pref not in role:
             continue

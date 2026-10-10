@@ -5,11 +5,12 @@ write, and each one cycle in one write unit and so one commit (docs/DATA-API-DES
 1.2, slice O-5):
 
 - feed_integration takes the Integration API device list. Each device becomes a switch keyed by
-  its chassis MAC (switch_id), with its name, address and model. A device that names the device
-  it is uplinked to gets a device-level link of source `config`, drawn between a port named
-  `uplink` on the child and a port named `to-<child mac>` on the parent, because a link joins
-  ports. That placeholder link is skipped when a link with real port numbers already joins the
-  two devices. The poll's device rows (`save_devices`) go in the same unit as the feed.
+  its chassis MAC (switch_id), with its name, address, model and device type (gateway, switch,
+  access point; records.device_type_of), which the map uses to name and place it. A device that
+  names the device it is uplinked to gets a device-level link of source `config`, drawn between
+  a port named `uplink` on the child and a port named `to-<child mac>` on the parent, because a
+  link joins ports. That placeholder link is skipped when a link with real port numbers already
+  joins the two devices. The poll's device rows (`save_devices`) go in the same unit as the feed.
 - feed_classic takes the parsed classic views (classic.py) and is used only when the optional
   classic credential is set. It adds the ports, keyed by unifi_port_key(port_idx) with
   `unifi_index` set, the properties link_speed_mbps, poe_class, poe_load_w and vlan with source
@@ -39,7 +40,7 @@ from observe.portkey import mac_digits, port_key, switch_id, unifi_port_key
 from observe.storage import Conn, savepoint
 from observe.store import Store
 
-from .records import Device, write_devices, write_site_status_integration
+from .records import Device, device_type_of, write_devices, write_site_status_integration
 
 log = logging.getLogger(__name__)
 
@@ -106,7 +107,9 @@ def integrate_devices(db: Conn, devices: Iterable[Device], now: float) -> FeedRe
         try:
             with savepoint(db, "device"):
                 tx.upsert_switch(sid, name=d.name, mgmt_addresses=[d.ip] if d.ip else [],
-                                 vendor=VENDOR, platform=d.model, now=now)
+                                 vendor=VENDOR, platform=d.model,
+                                 device_type=device_type_of(d.features, d.device_type, d.role,
+                                                            d.model), now=now)
         except ITEM_ERRORS:
             result.skipped += 1
             continue
@@ -215,7 +218,9 @@ def integrate_classic(db: Conn, devices: list[dict[str, Any]], now: float) -> Fe
                 if sid is None:
                     result.skipped += 1
                     continue
-                tx.upsert_switch(sid, name=dev["name"], vendor=VENDOR, now=now)
+                tx.upsert_switch(sid, name=dev["name"], vendor=VENDOR,
+                                 device_type=device_type_of(
+                                     (), dev.get("type", ""), "", dev.get("model", "")), now=now)
         except ITEM_ERRORS:
             result.skipped += 1
             continue

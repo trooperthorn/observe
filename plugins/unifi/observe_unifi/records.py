@@ -11,6 +11,7 @@ both are current state, replaced on every poll.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -164,6 +165,44 @@ GATEWAY_ROLES = ("gateway", "console", "ugw")
 # A model or name token that marks a gateway, consulted only when no device declares a role.
 GATEWAY_TOKENS = ("gateway", "udm", "uxg", "usg", "ugw", "ucg", "udr", "uxr", "udw", "dream",
                   "console")
+
+
+# The map device type of a UniFi device (observe.infra.DEVICE_TYPES). The features list is the
+# strongest signal and is read in this order, so a gateway that also switches is a gateway. Then
+# the row's type or role, then the model name. Names are compared without case or underscores,
+# so ACCESS_POINT and accessPoint are the same (UNVERIFIED which spelling a console sends).
+FEATURE_TYPES = (("gateway", "gateway"), ("switching", "switch"), ("accesspoint", "access_point"))
+ROLE_TYPES = {"gateway": "gateway", "console": "gateway", "ugw": "gateway", "udm": "gateway",
+              "uxg": "gateway", "switch": "switch", "usw": "switch", "accesspoint": "access_point",
+              "ap": "access_point", "uap": "access_point", "bridge": "bridge", "ubb": "bridge"}
+MODEL_TYPES = (("gateway", ("UCG", "UDM", "UXG", "UDR")),
+               ("access_point", ("U6", "U7", "UAP", "UAL")),
+               ("switch", ("USW", "US-")))
+
+
+def _squash(value: str) -> str:
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def device_type_of(features: Iterable[str] = (), device_type: str = "", role: str = "",
+                   model: str = "") -> str:
+    """gateway, switch, access_point, bridge or other, or empty when nothing says. Features first
+    (GATEWAY, then SWITCHING, then ACCESS_POINT), then the type and role, then a model prefix
+    (UCG, UDM, UXG and UDR are gateways, U6, U7, UAP and UAL access points, USW and US-
+    switches). A device that names features or a type that none of these match is other."""
+    feats = {_squash(f) for f in features if isinstance(f, str)}
+    for feat, kind in FEATURE_TYPES:
+        if feat in feats:
+            return kind
+    for text in (device_type, role):
+        kind = ROLE_TYPES.get(_squash(text or ""))
+        if kind:
+            return kind
+    name = (model or "").strip().upper()
+    for kind, prefixes in MODEL_TYPES:
+        if name.startswith(prefixes):
+            return kind
+    return "other" if feats or device_type or role else ""
 
 
 def _text(value: Any) -> str:
