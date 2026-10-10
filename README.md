@@ -946,7 +946,14 @@ settings, the tables, the devices, clients and Protect collectors and the UniFi 
 `interval` seconds (default 120) it reads the site list and the device list from the UniFi Network
 Integration API with the API key of a `unifi` credential, and keeps the current snapshot in
 `unifi_devices`, `unifi_clients` and `unifi_cameras`, with a first seen and last seen time and no
-per-poll history. A record not seen for `retention_days` (default 30) is deleted.
+per-poll history. A record not seen for `retention_days` (default 30) is deleted. The same poll
+picks the site's gateway (a declared `type`, `deviceType` or `role` of gateway, console or ugw
+first, then a udm, ucg, uxg, udr, udw or dream token in the model or name, the rule of the HA SOC
+network view) and reads its `statistics/latest` in one more GET for the uplink rates and port,
+kept in `unifi_site_status` (one row per site: gateway, Internet state, WAN address, port, rates,
+latency and the gateway's network table). A refused or odd statistics answer leaves the WAN
+unknown and never fails the poll. A device row also keeps its type, role, features and the byte
+totals and rates the list row carries, when it carries them.
 The same poll feeds the infrastructure map: each device becomes a switch keyed by its chassis
 MAC, so a `unifi_network` monitor whose `device` is that MAC matches it automatically, and a
 device that names its uplink device gets a `config` link to it.
@@ -999,18 +1006,35 @@ collector reads the Protect camera list every `protect_interval` seconds (defaul
 connected and, only when the console gives a boolean `isRecording`, recording. NVR storage is not
 read because no route for it is verified.
 
-The **UniFi** page under Network (`/plugins/unifi`, signed in users only) has Devices, Clients and
-Protect tabs. The Clients tab filters by text, kind and state and draws only the rows in view, so
-a few thousand clients stay fast. The page shows what the last poll stored, not live data. The
-Devices tab shows when it was last updated and a stale marker when the devices collector has not
-succeeded within twice its interval.
+The **UniFi** page under Network (`/plugins/unifi`, signed in users only) follows the HA SOC
+network view. It opens with five tiles (network status with the site id, Internet with the WAN
+address, WAN bandwidth down and up with the port, wireless clients with the wired count, total
+clients with the device count) and the clients per SSID as bars; a click on a bar filters the
+clients table to that SSID. Below are the Clients, Devices, Wi-Fi join and Protect tabs. The
+Clients tab filters by text, VLAN, SSID and state and shows client (with a wireless or wired
+line), IPv4, MAC, VLAN, SSID, uptime, bandwidth (the live rates, shown in bits per second) and
+last seen, and draws only the rows in view, so a few thousand clients stay fast. The Devices tab
+has a search and shows device (with its state), IPv4, MAC, VLAN (a dash: the management VLAN is
+not read from either API), model, firmware (Up to date, Update available or Not reported),
+bandwidth (the byte totals) and last seen, 25, 50 or 100 per page. The Wi-Fi join tab shows,
+per SSID, what in its configuration refuses a client (off, MAC allow list, hidden, no 2.4 GHz
+band, WPA3 only, open, a schedule, a restricted access point group), which access points carry
+it now, and the clients the console knows but is not carrying, newest first; no UniFi source
+records a failed join, so nothing there says a client failed. A value only the classic account
+gives (VLAN, uptime, bandwidth, SSID names, Internet state and the WAN address) is a dash without
+it, and a note says so. The page shows what the last poll stored, not live data, with a stale
+marker when the devices or classic collector has not succeeded within twice its interval.
 The collector sends only GET requests, never follows a redirect, refuses a response over 4 MB
 and a list over 50 pages. After a 401 or 403 it stops sending requests, waits one interval, and
 doubles the wait on each further rejection up to one hour, so a revoked key is not hammered.
 The optional classic account is a dedicated local view-only account. With it the plugin can log in
-and read PoE watts, per-port VLAN, LLDP neighbours, uplink port numbers, WAN health and offline
-clients. It sends only the login and logout POSTs and GETs of four read views, keeps the session in
-memory, re-logs in once on a 401 and then backs off, and never follows a redirect. A login answered
+and read PoE watts, per-port VLAN, LLDP neighbours, uplink port numbers, WAN health, offline
+clients, each connected client's VLAN, network, uptime, rates and byte totals, the gateway's
+network table and uplink, and the SSID configuration (`rest/wlanconf`: name, enabled, security,
+network, access point group mode, guest, band, hidden, MAC filter and schedule; the passphrase is
+never read) kept in `unifi_wlans`. It sends only the login and logout POSTs and GETs of five read
+views, keeps the session in memory, re-logs in once on a 401 and then backs off, and never follows
+a redirect. A console that refuses `rest/wlanconf` simply gives no SSIDs. A login answered
 429, a 5xx or any other failure also backs off, doubling up to 30 minutes, and the pause resets only
 when a read succeeds. A 403 on a read after a good login is logged once as a permission problem and
 backs off the same way instead of retrying every poll. If a classic read fails, a client keeps the
@@ -1022,8 +1046,21 @@ each port of each device to the map (`Port N`, with the UniFi port index), write
 class, PoE watts and VLAN as port properties with the source `unifi` only when a value changes,
 and adds `config` links from the uplink port numbers and `lldp` links to neighbours that are
 already known switches. With that data a Pockethernet VLAN, speed or PoE result on the same port
-is compared with what the switch reports, and without it nothing is compared. The classic field
-names are unverified against a live console.
+is compared with what the switch reports, and without it nothing is compared. The same collector
+writes the classic share of `unifi_site_status` (Internet state from the `stat/health` wan row,
+WAN address, latency, and the uplink port and rates when the Integration statistics gave none)
+and replaces `unifi_wlans`. The classic field names are unverified against a live console; see
+docs/FIELD-DATA.md for the list.
+
+The resources under `/api/v2/unifi` are `status`, `devices` (now with `device_type`,
+`firmware_status`, `rx_bytes`, `tx_bytes`, `rx_rate_bps`, `tx_rate_bps`), `devices/{site}/{id}`,
+`clients` (now with `vlan`, `network`, `uptime_s`, `rx_rate_bps`, `tx_rate_bps`, `rx_bytes`,
+`tx_bytes`, and the filters `vlan` and `ssid` beside `q`, `connected` and `site`), `cameras`,
+`overview` (the five tiles, the clients per SSID and the stale flags; no ETag, it depends on the
+clock), `wlans` (one readiness row per SSID with the access points carrying it and the findings)
+and `absent-clients` (known but not connected wireless clients, paged, newest first). All are
+reads under the v2 rules. A rate is bytes per second as the console counts it (the unit is
+unverified) and the page shows it in bits per second.
 
 ## The read API
 

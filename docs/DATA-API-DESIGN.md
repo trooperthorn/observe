@@ -510,9 +510,12 @@ Implementation status (slice oc2-boot-and-severity): boot classification runs on
 | `/api/v2/ports` | GET | ports with current properties, findings, matches | `port_current` |
 | `/api/v2/ports/{switch}/{port}` | GET | one port with property history | `port_current`, `port_properties`, metrics |
 | `/api/v2/findings` | GET, POST (`/{id}/ack`) | infra findings | `port_current.findings`, `infra_finding_acks` |
-| `/api/v2/unifi/devices`, `/api/v2/unifi/devices/{id}` | GET | UniFi devices | plugin tables plus `latest` |
-| `/api/v2/unifi/clients` | GET | clients, paged, filter `site`, `connected`, `q` | `unifi_clients` |
+| `/api/v2/unifi/devices`, `/api/v2/unifi/devices/{id}` | GET | UniFi devices, with type, firmware status, byte totals and rates | plugin tables plus `latest` |
+| `/api/v2/unifi/clients` | GET | clients, paged, filter `site`, `connected`, `q`, `vlan`, `ssid`; rows carry VLAN, network, uptime, rates and totals | `unifi_clients` |
 | `/api/v2/unifi/cameras` | GET | Protect cameras | |
+| `/api/v2/unifi/overview` | GET | the network view tiles: status, Internet, WAN, client counts, clients per SSID, stale flags (no ETag) | `unifi_site_status`, `unifi_devices`, `unifi_clients` |
+| `/api/v2/unifi/wlans` | GET | SSID readiness: configuration, carrying access points, refusal findings | `unifi_wlans`, `unifi_clients` |
+| `/api/v2/unifi/absent-clients` | GET | known but not connected wireless clients, paged, newest first | `unifi_clients` |
 | `/api/v2/ha/instances`, `/api/v2/ha/instances/{id}` | GET | HA instances: supervisor, backups, repairs, integrations | `latest`, `logs` |
 | `/api/v2/field-reports`, `/{id}` | GET | Pockethernet reports (read; upload stays OTLP or legacy) | plugin table |
 | `/api/v2/audit` | GET | audit log (admin) | `audit` |
