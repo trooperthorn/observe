@@ -57,10 +57,20 @@ fi
 
 # ---- state.json --------------------------------------------------------------------------------
 
+# Messages name commits by their short form: the console's redactor hides any run of 40 or
+# more letters and digits, which a full sha would trip. The old_commit and new_commit fields
+# carry the full values.
+short() {
+  local text="$*"
+  [ -n "$OLD_COMMIT" ] && text="${text//$OLD_COMMIT/${OLD_COMMIT:0:7}}"
+  [ -n "$NEW_COMMIT" ] && text="${text//$NEW_COMMIT/${NEW_COMMIT:0:7}}"
+  printf '%s' "$text"
+}
+
 # write_state PHASE MESSAGE [FAILED_IN] [FILE]: rewrite state.json atomically with the phase, the
 # message appended to the log, and the lines of FILE (command output) appended after it.
 write_state() {
-  python3 -I - "$STATE" "$REQUEST_ID" "$1" "$2" "${3:-}" "$OLD_COMMIT" "$NEW_COMMIT" \
+  python3 -I - "$STATE" "$REQUEST_ID" "$1" "$(short "$2")" "${3:-}" "$OLD_COMMIT" "$NEW_COMMIT" \
     "$STARTED_AT" "${4:-}" <<'PY'
 import json, os, sys, time
 path, rid, phase, message, failed_in, old, new, started, extra = sys.argv[1:10]
@@ -104,7 +114,7 @@ run_logged() {
   local phase="$1"; shift
   local out
   out="$(mktemp)"
-  log "$phase: $*"
+  log "$phase: $(short "$*")"
   local rc=0
   "$@" >"$out" 2>&1 || rc=$?
   if [ "$rc" = 0 ]; then
@@ -254,4 +264,4 @@ if ! run_logged restart docker compose up -d "$SERVICE"; then
 fi
 
 write_state done "updated $OLD_COMMIT to $NEW_COMMIT"
-log "done: $OLD_COMMIT to $NEW_COMMIT"
+log "done: $(short "$OLD_COMMIT to $NEW_COMMIT")"

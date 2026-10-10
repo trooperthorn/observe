@@ -145,7 +145,9 @@ def test_a_valid_request_runs_every_phase_in_order_and_is_claimed_once(deploy):
     state = deploy.state()
     assert state["phase"] == "done" and state["id"] == body["id"]
     assert state["old_commit"] == OLD and state["new_commit"] == NEW and state["failed_in"] == ""
-    assert state["message"] == f"updated {OLD} to {NEW}"
+    # Messages use short shas: the console redacts any 40-character run as a possible secret.
+    assert state["message"] == f"updated {OLD[:7]} to {NEW[:7]}"
+    assert OLD not in json.dumps(state["log"]) and f"pulled {OLD[:7]} to {NEW[:7]}" in state["log"]
     assert state["log"][0] == f"received request {body['id']} from sean"
     assert any("ok: 3 monitors" in line for line in state["log"])
     assert deploy.calls() == [
@@ -254,7 +256,7 @@ def test_a_failed_restart_puts_the_old_commit_back_and_rebuilds_it(deploy):
     assert done.returncode == 1, done.stdout + done.stderr
     state = deploy.state()
     assert state["phase"] == "failed" and state["failed_in"] == "restart"
-    assert f"previous version {OLD} is running again" in state["message"]
+    assert f"previous version {OLD[:7]} is running again" in state["message"]
     calls = deploy.calls()
     first_up = calls.index("docker compose up -d observe")
     assert calls[first_up + 1:] == [
