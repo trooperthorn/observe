@@ -42,13 +42,26 @@ test("the gateway is core, access points are access, switches go by depth", () =
   for (const ap of ["ap1", "ap2", "ap3", "ap4"]) assert.equal(tier.get(`switch:${ap}`), "access", ap);
 });
 
-test("an unlinked gateway is still core; unlinked switches stay in access", () => {
+test("an unlinked gateway is still core; devices with no known uplink are unplaced", () => {
   const { nodes, edges } = unifiMap(SEVEN.map((d) => ({ ...d, up: undefined })));
   const tier = switchTiers(nodes, edges);
   assert.equal(edges.length, 0);
   assert.equal(tier.get("switch:gw"), "core");
-  assert.equal(tier.get("switch:sw1"), "access");
-  assert.equal(tier.get("switch:ap1"), "access");
+  assert.equal(tier.get("switch:sw1"), "unplaced");
+  assert.equal(tier.get("switch:ap1"), "unplaced");
+});
+
+test("a switch with no known uplink is unplaced, not core beside the gateway", () => {
+  // The reported map: "Hydro - USW Flex" has no uplink but an access point hangs off it, so it
+  // was the top of its own chain and drawn in Core.
+  const { nodes, edges } = unifiMap([...SEVEN,
+    { id: "hydro", label: "Hydro - USW Flex", type: "switch" },
+    { id: "ap5", label: "AP hydro", type: "access_point", up: "hydro" }]);
+  const tier = switchTiers(nodes, edges);
+  assert.equal(tier.get("switch:hydro"), "unplaced");
+  assert.equal(tier.get("switch:ap5"), "access");
+  assert.equal(tier.get("switch:gw"), "core");
+  assert.equal(tier.get("switch:sw1"), "distribution");
 });
 
 test("switches with no type are placed by their links as before", () => {
@@ -57,8 +70,9 @@ test("switches with no type are placed by their links as before", () => {
     { id: "d", label: "lonely" },
   ]);
   const tier = switchTiers(nodes, edges);
+  // With no gateway the top of the chain is core; a device linked to nothing is unplaced.
   assert.deepEqual(["a", "b", "c", "d"].map((x) => tier.get(`switch:${x}`)),
-    ["core", "distribution", "access", "access"]);
+    ["core", "distribution", "access", "unplaced"]);
   assert.equal(deviceTypeWord(nodes[0]), "Switch");
 });
 

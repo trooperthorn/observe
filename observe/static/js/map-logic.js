@@ -32,20 +32,20 @@ export function graphSubLabel(node) {
 }
 
 /**
- * The tier of each switch node: core, distribution or access. A gateway is always core and an
- * access point always access. Every other device is placed by link depth: a switch whose port is
- * the uplink sits below the switch at the other end, the top of each chain is core, the bottom
- * access and anything between distribution. A device with no switch-to-switch link is access.
+ * The tier of each switch node: core, distribution, access or unplaced. A gateway is always core.
+ * A device with an uplink (its port with role uplink links to another device) is placed by link
+ * depth below it: the bottom of each chain is access, anything between distribution, and an
+ * access point is always access. A device with no known uplink is not a root: it is unplaced,
+ * unless the map has no gateway and other devices uplink to it, when it is the top of its
+ * chain and so core (a map from LLDP alone).
  */
 export function switchTiers(nodes, edges) {
   const switches = nodes.filter((n) => n.kind === "switch");
   const ports = new Map(nodes.filter((n) => n.kind === "port").map((n) => [n.id, n]));
   const above = new Map(switches.map((s) => [s.id, new Set()]));
-  const linked = new Set();
   for (const e of edges) {
     const a = ports.get(e.a), b = ports.get(e.b);
     if (!a || !b || a.parent === b.parent) continue;
-    linked.add(a.parent); linked.add(b.parent);
     if (a.role === "uplink" && b.role !== "uplink" && above.has(a.parent)) above.get(a.parent).add(b.parent);
     else if (b.role === "uplink" && a.role !== "uplink" && above.has(b.parent)) above.get(b.parent).add(a.parent);
   }
@@ -62,14 +62,16 @@ export function switchTiers(nodes, edges) {
   };
   for (const s of switches) depth(s.id, new Set());
   const top = Math.max(0, ...level.values());
+  const hasGateway = switches.some((s) => s.device_type === "gateway");
+  const below = new Set();
+  for (const ups of above.values()) for (const p of ups) below.add(p);
   const tier = new Map();
   for (const s of switches) {
     const l = level.get(s.id);
+    const hasUplink = (above.get(s.id) || new Set()).size > 0;
     if (s.device_type === "gateway") tier.set(s.id, "core");
-    else if (s.device_type === "access_point") tier.set(s.id, "access");
-    else if (!linked.has(s.id) || top === 0) tier.set(s.id, "access");
-    else if (l === 0) tier.set(s.id, "core");
-    else if (l === top) tier.set(s.id, "access");
+    else if (!hasUplink) tier.set(s.id, !hasGateway && below.has(s.id) ? "core" : "unplaced");
+    else if (s.device_type === "access_point" || l === top) tier.set(s.id, "access");
     else tier.set(s.id, "distribution");
   }
   return tier;

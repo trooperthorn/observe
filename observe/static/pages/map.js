@@ -11,9 +11,11 @@ import { createGraphView, structureKey, mergeLayout } from "/static/js/graph/vie
 import { GROUPS, buildGraph, defaultView, viewFromHash } from "/static/js/graph/infra.js";
 import { refreshedText } from "/static/js/format.js";
 
+// "Unplaced" holds devices with no known uplink, so they are not drawn as roots beside the
+// gateway (map-logic.js switchTiers).
 const LAYER_TITLES = [
   ["core", "Core"], ["distribution", "Distribution"], ["access", "Access"],
-  ["jack", "Jacks"], ["endpoint", "Endpoints"],
+  ["jack", "Jacks"], ["endpoint", "Endpoints"], ["unplaced", "Unplaced"],
 ];
 const layersEl = document.getElementById("layers");
 const msg = document.getElementById("msg");
