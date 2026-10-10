@@ -13,6 +13,7 @@ function sortableTh(col, sort, onSort) {
   th.setAttribute("aria-sort", ariaSort(sort, col.key));
   const b = el("button", "th-sort");
   b.type = "button";
+  b.setAttribute("aria-label", `Sort by ${col.label}`);
   const arrow = sort && sort.key === col.key ? (sort.dir === "asc" ? "▲" : "▼") : "↕";
   const a = el("span", "th-arrow", arrow);
   a.setAttribute("aria-hidden", "true");
@@ -32,10 +33,12 @@ function cell(col, row) {
 }
 
 // Returns {root, setRows}. The root holds the scroll wrapper and the footer.
-export function sortableTable({ columns, rows, empty, pageSizes, caption }) {
+// Every table offers the same page sizes (PAGE_SIZES); a long list may start on a larger one
+// with `defaultSize`.
+export function sortableTable({ columns, rows, empty, pageSizes, caption, defaultSize }) {
   const sizes = pageSizes || PAGE_SIZES;
   let data = rows || [];
-  let sort = null, page = 0, size = sizes[0];
+  let sort = null, page = 0, size = sizes.includes(defaultSize) ? defaultSize : sizes[0];
   const root = el("div", "table-block");
   const draw = () => {
     const col = sort && columns.find((c) => c.key === sort.key);

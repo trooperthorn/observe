@@ -30,7 +30,7 @@ const table = sortableTable({
     { key: "status", label: "Status", get: (a) => outcomeOf(a), render: statusCell },
     { key: "detail", label: "Detail", render: (a) => el("span", "detail-mono", JSON.stringify(a.detail)) },
   ],
-  rows: [], pageSizes: [25, 100], empty: "No audit entries match the filters.", caption: "Audit log",
+  rows: [], defaultSize: 25, empty: "No audit entries match the filters.", caption: "Audit log",
 });
 document.getElementById("audit").append(table.root);
 

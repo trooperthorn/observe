@@ -233,9 +233,15 @@ function drawDashboard(data) {
     }
     const per = {};
     for (const m of mons) per[m.effective_state] = (per[m.effective_state] || 0) + 1;
+    const said = [];
     for (const s of ["down", "unreachable", "warn", "pending", "up"]) {
-      if (per[s]) sum.append(statusChip(s, `${per[s]} ${stateInfo(s).word.toLowerCase()}`));
+      if (!per[s]) continue;
+      const text = `${per[s]} ${stateInfo(s).word.toLowerCase()}`;
+      sum.append(statusChip(s, text));
+      said.push(text);
     }
+    // The toggle's name: the group and its counts, so a screen reader announces more than chips.
+    sum.setAttribute("aria-label", `Group ${name}${g ? `, ${stateInfo(g.state).word}` : ""}: ${said.join(", ")}`);
     card.append(sum);
     const ul = el("ul", "group");
     for (const m of visible) {

@@ -150,11 +150,6 @@ document.getElementById("user-form").addEventListener("submit", async (ev) => {
   await refresh();
 });
 
-document.getElementById("logout").addEventListener("click", async () => {
-  try { await api("POST", "/api/logout", csrf); } catch (_) { /* fall through to the login page */ }
-  window.location.assign("/login");
-});
-
 (async () => {
   let me;
   try { me = await whoami(); } catch (_) { return; }

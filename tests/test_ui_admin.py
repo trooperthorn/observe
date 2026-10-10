@@ -123,7 +123,7 @@ def test_admin_pages_use_shared_components():
     for needle in ("sortableTable", "confirmDialog", "toast(", '"Accept"', '"Reject"'):
         assert needle in infra, needle
     audit = _read("audit.js")
-    for needle in ("sortableTable", "statusChip", "aria-pressed", "pageSizes: [25, 100]",
+    for needle in ("sortableTable", "statusChip", "aria-pressed", "defaultSize: 25",
                    "detail-mono"):
         assert needle in audit, needle
     port = _read("port.js")

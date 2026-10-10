@@ -114,7 +114,7 @@ async function start() {
   try {
     isAdmin = !!(await whoami()).is_admin;
   } catch (_) { /* a viewer view is the safe default */ }
-  table = sortableTable({ columns: columns(), rows: [], pageSizes: [25, 100],
+  table = sortableTable({ columns: columns(), rows: [], defaultSize: 25,
                           empty: emptyNote(), caption: "Hosts" });
   document.getElementById("hosts").append(table.root);
   search.addEventListener("input", draw);
