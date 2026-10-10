@@ -99,7 +99,7 @@ function updateRow(node, m) {
   held.textContent = m.held_by ? `Alert held: ${m.held_by} is being re-checked` : "";
   const link = node.querySelector(".hostlink");
   link.hidden = m.type !== "pushed_host";
-  if (m.type === "pushed_host") link.href = `/host?name=${encodeURIComponent(m.target)}`;
+  if (m.type === "pushed_host") link.href = `/hosts/${encodeURIComponent(m.target)}`;
   node.querySelector(".msg").textContent = m.message;
   const fcEl = node.querySelector(".fc");
   const fc = fcText(m.forecast);

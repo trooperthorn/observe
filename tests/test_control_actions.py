@@ -546,7 +546,7 @@ def test_refused_commands_are_found_by_the_refused_audit_filter_and_not_by_ok(en
 # ---- the page --------------------------------------------------------------------------------
 
 def test_host_page_loads_the_control_section_and_writes_only_text(env):
-    page = env.client.get("/host").text
+    page = env.client.get("/hosts/nas01").text
     assert 'id="control"' in page and "host-control.js" in page
     js = env.client.get("/static/host-control.js").text
     assert "textContent" in js and "X-CSRF-Token" in js

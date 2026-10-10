@@ -131,7 +131,7 @@ def test_dashboard_host_link_is_readable():
     # The link is still filled per row from the monitor target, never from markup.
     js = _read("app.js")
     assert 'link.hidden = m.type !== "pushed_host"' in js
-    assert "link.href = `/host?name=${encodeURIComponent(m.target)}`" in js
+    assert "link.href = `/hosts/${encodeURIComponent(m.target)}`" in js
 
 
 # ---- the table -------------------------------------------------------------------------------
