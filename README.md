@@ -565,6 +565,79 @@ command and a danger zone.
 The update and cleanup commands are served by `GET /t/{token}`, with a single-use token that
 lasts 30 minutes, like the install command. See `docs/ARCHITECTURE.md`, "Host settings".
 
+## Updating
+
+Admins see the running version and commit, the newest commit on `origin/main` and the latest
+release tag (when `server.update_check: true`), and every host's agent version on the Updates
+page (`/admin/updates`, Admin, Updates in the navigation). The page can update Observe itself and
+the hostwatch agents on Linux and Raspberry Pi hosts that run the control daemon.
+
+### Updating Observe by hand
+
+The container cannot update itself: it runs read-only as UID 10001 with every capability
+dropped and no Docker socket. On the Docker host, in the deployment directory:
+
+```sh
+cp data/observe.db data/backups/observe.db.$(date -u +%Y%m%dT%H%M%SZ)   # SQLite only
+git pull --ff-only origin main
+OBSERVE_GIT_COMMIT=$(git rev-parse HEAD) docker compose build --pull observe
+docker compose run --rm observe --config /config/observe.yaml --validate
+docker compose up -d observe
+```
+
+`OBSERVE_GIT_COMMIT` is a build argument the Dockerfile bakes into the image so the Updates page
+can show the commit; `docker-compose.yml` reads it from the environment or `.env`, and a plain
+`docker compose build` shows "unknown". If the new container does not start, check out the
+previous commit, build again and `up -d`.
+
+### The Update Observe button
+
+The button does the same steps through a small helper on the Docker host, installed once as
+root with the deployment directory as the argument:
+
+```sh
+sudo scripts/install-updater.sh /opt/observe
+```
+
+The installer copies `scripts/observe-updater.sh` to `/usr/local/sbin/observe-updater`, writes
+`observe-updater.path` and `observe-updater.service` to `/etc/systemd/system` with that
+directory filled in, makes `data/update` writable by the container's user, and starts the path
+unit. Run it again after a pull that changed the helper: the installed copy is what runs, never
+the script inside the checkout, so a pull cannot change the helper that is running it. The
+helper needs `git`, `docker`, `python3` and `systemctl` on the host and reads no `.env` or
+secret (`docker compose` reads `.env` itself, as it does for any `up`).
+
+Pressing Update Observe opens a dialog that needs the word `update` typed. Observe then
+writes `data/update/request.json` (mode 0600, with a random id, your user name, the time and
+the target `origin/main`) and audits `update_requested`; a second request while one is open is
+refused with 409. The path unit sees the file and runs the helper, which validates the request
+(exact fields, an id it has not seen, a time within the last ten minutes, owner UID 10001),
+moves it to `request.<id>.json` so it cannot fire twice, and then, writing
+`data/update/state.json` at each phase: copies `data/observe.db` to `data/backups/` keeping the
+last five, runs `git fetch origin` and `git pull --ff-only origin main` (refusing a tree with
+local changes), builds the image with the commit baked in, runs `--validate` with the new image,
+and runs `docker compose up -d observe`. A failed build or validate leaves the running container
+untouched; a failed restart checks the previous commit out again, rebuilds and starts it. The
+page polls `GET /api/v2/updates/status`, shows the phases (received, backup, fetch, build,
+validate, restart, done or failed) as status chips with the last 50 lines of the helper's log
+(redacted like control output), and once the restarted server answers with a new version it
+shows "Updated to X". Progress is also in `journalctl -u observe-updater.service`. The trust
+boundary is in `THREAT-MODEL.md`, "Updates".
+
+### Updating agents
+
+The Agents card lists every host that has pushed with its platform, the hostwatch version it
+reports, whether a control daemon is present (a control key that has pulled) and the age of its
+last pull. For a Linux or Raspberry Pi host with control, Update agent queues the control action
+`agent.update` (`docs/CONTROL.md`), which the host's daemon runs only when its `control.toml`
+allows it (`[update] agent = true`, the "Allow agent updates from Observe" choice of the wizard
+and the host settings page): it pulls the image the agent was installed with, replaces the
+`hostwatch-agent` container keeping the previous one for rollback, and reports the old and new
+version, which the page and the host page's Control card show. Update all queues one command
+per eligible host under the usual per-host rate limits and reports how many were queued and
+which hosts were refused and why. Windows and TrueNAS hosts take a new install command from
+their settings page instead.
+
 ## Direction: no longer read-only
 
 The owner reversed the earlier decision that Observe is read-only by

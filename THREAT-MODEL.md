@@ -14,6 +14,8 @@ on how you deploy).
    ICMP, and TCP. Devices are treated as untrusted data sources.
 3. **Dashboard to browser.** Inbound HTTP on 8080.
 4. **Process to alert targets.** Outbound to ntfy, webhook, SMTP, MQTT.
+5. **Container to Docker host, through the data volume.** The Updates page writes one
+   request file into `./data/update`; a root helper on the host reads it. See "Updates".
 
 ## Controls
 
@@ -193,3 +195,51 @@ The `ports` mode of `unifi_network` sends only GET requests with the existing AP
 The `unifi` plugin reads the Integration API with the key of a `unifi` credential. It sends only GET requests, never follows a redirect so the key cannot be forwarded to another host, caps each response at 4 MB and a list at 50 pages, and never writes the key to the database, a log line or an error message. After a 401 or 403 it backs off, doubling its pause up to one hour, so a revoked key is not retried every interval. A device row holds names, MAC and IP addresses and firmware versions, so the database is as sensitive as the inventory already in it. Records unseen for 30 days are deleted. The optional `unifi_classic` credential is a dedicated local view-only account used by the classic client (`classic.py`). That client sends only `POST /api/auth/login`, `POST /api/auth/logout` and GETs of `stat/device`, `stat/sta`, `rest/user` and `stat/health` under `/proxy/network/api/s/{site}`, and a test with a transport spy fails if any other method or path is sent. The session cookie and CSRF token stay in memory, never in the database, a log line or an error message, and the password is never logged. A 401 causes one re-login and one retry, then a back-off that doubles up to one hour. Redirects are not followed and a response is capped at 8 MB. The classic site name is limited to letters, digits, underscore and hyphen so it cannot alter the path. The account should be view-only: Observe cannot enforce that, so a stronger account widens what a stolen password could do. The map feed adds no network access: it writes what those reads returned through the infrastructure service, and a test checks that after the login only GETs are sent. It stores device names, MAC and IP addresses, port numbers, VLAN ids and PoE watts in the map tables, so the database holds a wiring and VLAN plan. A device or neighbour MAC can be forged on the network, so `lldp` links and neighbours are limited to devices the console already lists or the map already knows, and nothing the feed writes creates or changes a monitor. The plugin runs in process with the full trust described under Plugin host above.
 
 The clients collector adds no network access beyond the same GETs: it reads the Integration client list and, with the classic account, `stat/sta` and `rest/user` through the same client, and a test fails if anything but the login POST and GETs is sent. The Protect collector sends only GET `/cameras` with the same key, no paging parameters, no redirects, and has its own backoff after a 401 or 403. `unifi_clients` holds the name, MAC and IP address of every device on the network, with its switch port and SSID, so the database is a map of who is on the network and where; rows are deleted after 30 days unseen. A client chooses its own name, so every name, SSID and camera name is untrusted text: the routes return it as JSON with `nosniff` and the UniFi page writes it with `textContent` only, which tests check with hostile strings and the static guard. The page routes need a login session, and the page itself holds no data. The classic note shown on the page is built from error classes and status codes, never from a credential.
+
+## Updates
+
+The Updates page (README "Updating") lets an admin update Observe and the hostwatch agents.
+Neither path gives the container any new privilege: it still runs read-only, as UID 10001, with
+every capability dropped and no Docker socket, host network or mount beyond `./data`.
+
+**The host helper** (`scripts/observe-updater.sh`, installed by `scripts/install-updater.sh`)
+runs as root on the Docker host, started by a systemd path unit when
+`<deploy>/data/update/request.json` appears. It trusts a request only from the data volume
+the container owns: the file must be a regular file owned by UID 10001 with exactly the fields
+`v`, `id`, `requested_by`, `requested_at`, `target` and `nonce`, a uuid it has not seen before
+(ids are kept in `seen.ids` and the claimed file is renamed `request.<id>.json`), a time within
+the last ten minutes and the target `origin/main`. Nothing in the file is executed or
+interpolated: it is parsed as JSON by a Python one-liner run with `-I`, and the only values that
+reach a command line are the commit hashes `git rev-parse` returned. The helper reads no `.env`
+or secret, writes only `state.json` and its own stdout (the journal), and runs the installed
+copy under `/usr/local/sbin`, not the script in the checkout, so a pull cannot change the helper
+that is running it.
+
+**What a compromised Observe can do with it:** write a request, and so trigger an update to
+whatever `origin/main` of the configured remote holds at that moment, and nothing else. It
+cannot choose another remote, branch, commit or command, cannot make the helper read a file,
+and cannot run the update more than once per request. The mitigations are the fast-forward-only
+pull from the remote already configured in the checkout (a rewritten history or a dirty tree
+stops the update), the ten minute window, the single-use id, the owner check, the admin session
+plus CSRF plus typed confirmation in front of the request, and the `update_requested` audit
+entry with the user, the request id, the version and the commit. An attacker who controls
+`origin/main` already controls the code the container runs; the helper does not widen that,
+because the build and validate steps run the new image under the same compose hardening, and
+the helper itself is never taken from the pulled tree. **Accepted risk:** a push to
+`origin/main` by someone with write access to the repository becomes deployable from the
+console; keep branch protection on `main` and the number of admins small.
+
+**The upstream check** (`server.update_check`, off by default) is the one outbound request
+Observe makes that is not to a monitored device or an alert target. It asks
+`api.github.com` for the newest commit on `main` and the latest release of the upstream
+repository at most once an hour, sends nothing but the repository path and a fixed
+`User-Agent`, uses TLS validation, times out in ten seconds, follows no redirect and reads at
+most one megabyte. Any failure is shown as "could not check"; the reason goes to the log only.
+
+**Agent updates** go through the control plugin as the action `agent.update` and change
+nothing in this model: the host's own `control.toml` must allow them (`[update] agent = true`,
+and `control = false` by default because a daemon self-update restarts the daemon running the
+command), the command is signed, single-use and rate limited like every other, and the daemon
+replaces the agent container with the previous one kept for rollback. A compromised Observe can
+ask an allowing host to re-pull the image tag it was installed with, which is the same image
+the host already trusts, and nothing else.
