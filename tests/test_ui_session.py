@@ -26,3 +26,11 @@ def test_sign_in_explains_failures_and_only_follows_local_paths():
     assert "locked for 15 minutes" in login and "Too many attempts" in login
     assert 'startsWith("//")' in login and "fromCharCode(92)" in login
     assert "window.location.assign(safeNext())" in login
+
+
+def test_every_page_offers_sign_out_through_the_shell():
+    """Bug plan WP8: Sign out was only on /admin. The shared header draws it for a signed-in
+    visitor on every page, posting /api/logout with the session's CSRF token."""
+    shell = (STATIC / "js" / "shell.js").read_text(encoding="utf-8")
+    assert '"Sign out"' in shell and '"/api/logout"' in shell
+    assert 'id="logout"' not in (STATIC / "admin.html").read_text(encoding="utf-8")

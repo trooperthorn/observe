@@ -18,7 +18,7 @@ HOSTILE = '<img src=x onerror="alert(1)">'
 PAGES = {
     "/admin": ("admin.html", "admin.js",
                ["page", "msg", "newkey", "newkey-value", "newkey-copy", "key-form", "keys",
-                "user-form", "users", "audit-link", "logout"]),
+                "user-form", "users", "audit-link"]),
     "/audit": ("audit.html", "audit.js",
                ["page", "msg", "f-actor", "f-kind", "f-status", "f-range", "audit"]),
     "/admin/infra": ("infra-admin.html", "infra-admin.js",
