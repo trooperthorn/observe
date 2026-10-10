@@ -511,6 +511,38 @@ def test_hostile_strings_come_back_as_json_data(env):
     assert refused.status_code == 422
 
 
+# ---- audit outcome ---------------------------------------------------------------------------
+
+def test_refused_commands_are_found_by_the_refused_audit_filter_and_not_by_ok(env):
+    csrf = login(env)
+    assert post(env, csrf, req()).status_code == 200
+    unconfirmed = req()
+    del unconfirmed["confirmed"]
+    assert post(env, csrf, unconfirmed).status_code == 400
+    (cmd,) = commands(env)
+    key = env.key()
+    r = env.answer(key, {"id": cmd["id"], "state": "refused", "output": "not allowed here"})
+    assert r.status_code == 200
+
+    def audit_page(outcome):
+        got = env.client.get("/api/v2/audit", params={"outcome": outcome}).json()["items"]
+        return {(row["kind"], row["status"]): row for row in got}
+
+    refused, ok = audit_page("refused"), audit_page("ok")
+    # The admin's refused request, and the agent's refused result, which was answered 200.
+    assert refused[("control_request_refused", 400)]["actor"] == "root"
+    agent = refused[("plugin_request", 200)]
+    assert agent["detail"]["outcome"] == "refused" and agent["outcome"] == "refused"
+    # The actor is the key prefix, and the host the key is bound to comes with it.
+    assert agent["actor"] == key.split("_")[1] and agent["actor_host"] == HOST
+    # The queued command has no HTTP status of its own (0), and it worked.
+    assert ok[("control_requested", 0)]["outcome"] == "ok"
+    assert ("control_request_refused", 400) not in ok
+    assert {row["id"] for row in ok.values()}.isdisjoint(row["id"] for row in refused.values())
+    assert all(row["detail"].get("outcome") != "refused" for row in ok.values())
+    assert env.client.get("/api/v2/audit", params={"outcome": "maybe"}).status_code == 400
+
+
 # ---- the page --------------------------------------------------------------------------------
 
 def test_host_page_loads_the_control_section_and_writes_only_text(env):

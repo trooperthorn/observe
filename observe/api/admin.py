@@ -13,12 +13,13 @@ hosts. The settings change through routes that bump the `admin` domain, so they 
 from __future__ import annotations
 
 import json
-from typing import Any
+import re
+from typing import Any, Literal
 
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from .. import recheck_settings, retention, rules, tiers
+from .. import audit, recheck_settings, retention, rules, tiers
 from ..storage import rollups
 from .cursor import PageParams, encode
 from .models import Page, Ts
@@ -117,10 +118,14 @@ class AuditRow(BaseModel):
     id: int
     ts: Ts
     actor: str
+    actor_host: str | None = Field(
+        None, description="The host or device label a key actor (a key prefix) is bound to")
     kind: str
     method: str
     path: str
-    status: int
+    status: int = Field(description="The HTTP status, or 0 when the row has none")
+    outcome: Literal["ok", "refused", "failed"] = Field(
+        description="Whether the action worked, from the kind, the detail and the status")
     remote: str
     detail: dict[str, Any]
 
@@ -132,34 +137,75 @@ class AuditPage(Page):
 class AuditFilters(BaseModel):
     kind: str | None = Field(None, max_length=64, description="One audit kind")
     actor: str | None = Field(None, max_length=128, description="One actor")
+    outcome: Literal["ok", "refused", "failed"] | None = Field(None, description="One outcome")
+
+
+# A key actor is the key's public prefix, twelve hex characters (observe/ingest/keys.py).
+_KEY_ACTOR = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _audit_item(r: Any) -> dict[str, Any]:
+    try:
+        detail = json.loads(r[8])
+    except ValueError:
+        detail = {}
+    detail = detail if isinstance(detail, dict) else {}
+    return {"id": r[0], "ts": r[1], "actor": r[2], "actor_host": None, "kind": r[3],
+            "method": r[4], "path": r[5], "status": r[6],
+            "outcome": audit.outcome(r[3], r[6], detail), "remote": r[7], "detail": detail}
 
 
 def list_audit(db: Any, page: PageParams, filters: AuditFilters) -> dict[str, Any]:
-    """The audit log, newest first. The detail was redacted when it was written."""
+    """The audit log, newest first. The detail was redacted when it was written.
+
+    The outcome is derived when the log is read (audit.outcome), so old rows have one too, and
+    its filter runs here over batches like the attribute filter of /resources: a page is short
+    only when the log ran out, and a scan cut at MAX_SCAN still hands back a cursor."""
     after = page.after(int)
-    where, args = ["1=1"], []
-    if after:
-        where.append("id < ?")
-        args.append(after[0])
+    last = after[0] if after else None
+    where, args = [], []
     for column, value in (("kind", filters.kind), ("actor", filters.actor)):
         if value:
             where.append(f"{column} = ?")
             args.append(value)
-    rows = db.execute(
-        "SELECT id, ts, actor, kind, method, path, status, remote, detail FROM audit WHERE "
-        + " AND ".join(where) + " ORDER BY id DESC LIMIT ?", (*args, page.limit + 1)).fetchall()
-    more = len(rows) > page.limit
-    rows = rows[:page.limit]
-    items = []
-    for r in rows:
-        try:
-            detail = json.loads(r[8])
-        except ValueError:
-            detail = {}
-        items.append({"id": r[0], "ts": r[1], "actor": r[2], "kind": r[3], "method": r[4],
-                      "path": r[5], "status": r[6], "remote": r[7],
-                      "detail": detail if isinstance(detail, dict) else {}})
-    return {"items": items, "next_cursor": encode([rows[-1][0]]) if more else None}
+    batch = SCAN_BATCH if filters.outcome else page.limit + 1
+    out: list[dict[str, Any]] = []
+    scanned, exhausted, more = 0, False, False
+    while not more and not exhausted and scanned < MAX_SCAN:
+        bound = ([], []) if last is None else (["id < ?"], [last])
+        clause = " AND ".join(where + bound[0]) or "1=1"
+        rows = db.execute(
+            "SELECT id, ts, actor, kind, method, path, status, remote, detail FROM audit WHERE "
+            + clause + " ORDER BY id DESC LIMIT ?", (*args, *bound[1], batch)).fetchall()
+        exhausted = len(rows) < batch
+        scanned += len(rows)
+        for r in rows:
+            item = _audit_item(r)
+            if filters.outcome and item["outcome"] != filters.outcome:
+                last = r[0]
+                continue
+            if len(out) == page.limit:
+                more = True
+                break
+            last = r[0]
+            out.append(item)
+    _key_hosts(db, out)
+    # `last` is the oldest row looked at, so the next page starts just past it.
+    cont = more or (not exhausted and scanned >= MAX_SCAN)
+    return {"items": out, "next_cursor": encode([last]) if cont else None}
+
+
+def _key_hosts(db: Any, items: list[dict[str, Any]]) -> None:
+    """Fill actor_host for each actor that is a key prefix with the host the key is bound to.
+    A key is never deleted, only revoked, so an old row still finds its host."""
+    prefixes = sorted({i["actor"] for i in items if _KEY_ACTOR.match(i["actor"])})
+    if not prefixes:
+        return
+    marks = ",".join("?" * len(prefixes))
+    hosts = dict(db.execute(f"SELECT prefix, host FROM ingest_keys WHERE prefix IN ({marks})",
+                            prefixes).fetchall())
+    for item in items:
+        item["actor_host"] = hosts.get(item["actor"])
 
 
 # ---- keys and users -------------------------------------------------------------------------

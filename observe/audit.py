@@ -24,6 +24,10 @@ host_keys_revoked, host_removed (each with a matching _failed kind where it can 
 update_requested and update_request_failed (the Updates page), api_denied (a refused /api/v2 request), plugin_request, plugin_denied, plugin_failed, and the control plugin's
 control_requested, control_request_refused, control_pull and control_expired. A kind ending in _failed or _error is an action that stopped
 partway or was refused after it started.
+
+The HTTP status is not the outcome: many rows have none (0), and a plugin request answered 200
+can carry "outcome": "refused" in its detail. outcome() derives ok, refused or failed from the
+kind, the detail and the status when the log is read, so it covers every writer and old rows.
 """
 
 from __future__ import annotations
@@ -45,6 +49,39 @@ _SECRET_WORDS = ("password", "passwd", "secret", "token", "csrf", "cookie", "aut
 # enrolment token (wpe_), an install step key (wps_), or any long run of URL-safe characters, which is what a session
 # token or a key secret looks like.
 _SECRET_SHAPES = re.compile(r"wp[icsetfr]_[A-Za-z0-9_-]*|[A-Za-z0-9_-]{40,}")
+
+
+_DETAIL_FIELDS = ("outcome", "status", "result")
+_REFUSED_WORDS = frozenset({"refused", "denied", "rejected"})
+_FAILED_WORDS = frozenset({"failed", "error"})
+_REFUSED_KINDS = ("_denied", "_refused", "_rejected")
+_FAILED_KINDS = ("_failed", "_error", "_problem")
+
+
+def outcome(kind: str, status: Any, detail: Any) -> str:
+    """ok, refused or failed for one row. A word in the detail decides first (a request
+    answered 200 may record that the command it carried was refused), then a refusal kind, then
+    a real HTTP status (4xx refused, 5xx failed; 0 means the row has none), then a failure kind.
+    So login_failed answered 401 is refused, and infra_switch_link_failed with no status failed."""
+    if isinstance(detail, dict):
+        for field in _DETAIL_FIELDS:
+            word = detail.get(field)
+            if isinstance(word, str):
+                if word.lower() in _REFUSED_WORDS:
+                    return "refused"
+                if word.lower() in _FAILED_WORDS:
+                    return "failed"
+    kind = str(kind)
+    if kind.endswith(_REFUSED_KINDS):
+        return "refused"
+    code = status if isinstance(status, int) and not isinstance(status, bool) else 0
+    if 400 <= code < 500:
+        return "refused"
+    if code >= 500:
+        return "failed"
+    if kind.endswith(_FAILED_KINDS):
+        return "failed"
+    return "ok"
 
 
 def redact_secrets(text: str) -> str:
@@ -107,5 +144,6 @@ async def list_rows(store: Store, limit: int = 100, kind: str | None = None,
         except ValueError:
             detail = {}
         out.append({"id": r[0], "ts": r[1], "actor": r[2], "kind": r[3], "method": r[4],
-                    "path": r[5], "status": r[6], "remote": r[7], "detail": detail})
+                    "path": r[5], "status": r[6], "remote": r[7], "detail": detail,
+                    "outcome": outcome(r[3], r[6], detail)})
     return out

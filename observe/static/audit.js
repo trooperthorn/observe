@@ -5,28 +5,29 @@ import { api, seconds, whoami } from "/static/js/api.js";
 import { statusChip, monoTag } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { notAdmin, showError } from "/static/js/admin-ui.js";
+import { CHIP, GROUPS, actorText, filterRows, httpCode, outcomeOf, outcomeWord }
+  from "/static/js/audit-logic.js";
 
 const msg = document.getElementById("msg");
 const when = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : "never");
-const GROUPS = [["ok", "OK"], ["refused", "Refused"], ["failed", "Failed"]];
-const CHIP = { ok: "up", refused: "warn", failed: "down" };
 const active = new Set(GROUPS.map(([id]) => id));
 let rows = [];
 
-// Status code to group: below 400 worked, 401 and 403 were refused, everything else failed.
-function statusGroup(code) {
-  if (code < 400) return "ok";
-  if (code === 401 || code === 403) return "refused";
-  return "failed";
+// The outcome chip, with the HTTP status beside it only when the row has a real one.
+function statusCell(a) {
+  const cell = el("span", null);
+  cell.append(statusChip(CHIP[outcomeOf(a)], outcomeWord(a)));
+  const code = httpCode(a.status);
+  if (code) cell.append(" ", el("span", "muted", code));
+  return cell;
 }
 
 const table = sortableTable({
   columns: [
     { key: "ts", label: "Time", numeric: true, get: (a) => a.ts, render: (a) => when(a.ts) },
-    { key: "actor", label: "Actor", get: (a) => a.actor },
+    { key: "actor", label: "Actor", get: actorText },
     { key: "kind", label: "Kind", get: (a) => a.kind, render: (a) => monoTag(a.kind) },
-    { key: "status", label: "Status", get: (a) => a.status,
-      render: (a) => statusChip(CHIP[statusGroup(a.status)], String(a.status)) },
+    { key: "status", label: "Status", get: (a) => outcomeOf(a), render: statusCell },
     { key: "detail", label: "Detail", render: (a) => el("span", "detail-mono", JSON.stringify(a.detail)) },
   ],
   rows: [], pageSizes: [25, 100], empty: "No audit entries match the filters.", caption: "Audit log",
@@ -34,12 +35,11 @@ const table = sortableTable({
 document.getElementById("audit").append(table.root);
 
 function visible() {
-  const actor = document.getElementById("f-actor").value.trim().toLowerCase();
-  const kind = document.getElementById("f-kind").value;
   const range = Number(document.getElementById("f-range").value);
-  const since = range ? Date.now() / 1000 - range : 0;
-  return rows.filter((a) => (!actor || String(a.actor).toLowerCase().includes(actor))
-    && (!kind || a.kind === kind) && active.has(statusGroup(a.status)) && a.ts >= since);
+  return filterRows(rows, {
+    actor: document.getElementById("f-actor").value, kind: document.getElementById("f-kind").value,
+    outcomes: active, since: range ? Date.now() / 1000 - range : 0,
+  });
 }
 
 function draw() { table.setRows(visible()); }

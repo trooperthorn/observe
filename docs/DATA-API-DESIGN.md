@@ -669,7 +669,7 @@ differs or is left is listed after the table.
 | `GET /findings`, `POST /findings/ack` | viewer to read, admin to acknowledge | Findings are computed from the field properties and the live monitor state, so the ETag includes the scheduler fingerprint. The acknowledgement is audited, needs the CSRF header and rebuilds the map. |
 | `GET /session` | any caller | The user, the kind of caller, the role and, for a session, the CSRF token. |
 | `GET /plugins` | session or token | Each plugin with its resources, navigation entries and pages. An admin-only entry is shown to an admin only. |
-| `GET /audit` | admin | Newest first, filters `kind` and `actor`, cursor paging. |
+| `GET /audit` | admin | Newest first, filters `kind`, `actor` and `outcome`, cursor paging. |
 | `GET /admin/keys`, `/admin/users` | admin | A key is shown by its public prefix. No hash, secret or lockout counter is selected. No ETag. |
 | `GET /admin/config` | admin | The effective configuration. A secret is reported as set or not set. The database connection string is never shown. |
 | `GET /admin/settings/{tiers,retention,recheck,rules,storage}` | admin | The settings documents of sections 10.1 to 10.4, and the backend status of section 12: the backend, whether TimescaleDB runs the rollups, the last run of each compaction and rollup level, and the change counters. |

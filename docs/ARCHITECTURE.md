@@ -942,7 +942,13 @@ write). Admin screen changes are recorded with the signed-in admin as actor, and
 CLI key and user changes with the actor `cli`. Host confirmation has no route
 yet, so it has no rows yet. `GET /api/v2/audit` returns rows newest first and is admin only,
 session only, so basic auth never reaches it. It takes `limit` (1 to 500),
-`kind`, and `before` (a row id, to page backwards).
+`kind`, `actor`, `outcome` and a cursor. Each row carries an `outcome` (ok, refused or failed)
+that `audit.outcome` derives when the log is read, so old rows have one too: a word in the
+detail (`outcome`, `status` or `result`) decides first, then a `_denied`, `_refused` or
+`_rejected` kind, then a real HTTP status (4xx refused, 5xx failed; 0 means none), then a
+`_failed`, `_error` or `_problem` kind. The `outcome` filter scans in batches so a page is short
+only at the end of the log. A row whose actor is a key prefix also carries `actor_host`, the
+host or device the key is bound to.
 
 ## Admin screen
 
@@ -1146,7 +1152,9 @@ back the host settings page (`GET /hosts/{name}/settings`, the static `host-sett
 copy-to-clipboard and the "admin account needed" card) and `css/admin.css` (tokens only). The audit
 log has its own static page, `/audit` (`audit.html`, `audit.js`), listed under Admin in the
 navigation for admins. It uses the same `GET /api/v2/audit` route, loads the newest 500 rows and
-filters them in the browser by actor, kind, status group and time range. The page serves no data,
+filters them in the browser by actor, kind, outcome and time range (`js/audit-logic.js`, tested
+by `tests/js/audit.test.mjs`). The status chip shows the outcome, with the HTTP status beside it
+only when the row has one, and a key actor is shown with its host. The page serves no data,
 and a viewer who opens it sees an "admin account needed" notice while the API answers 403.
 
 ## The v2 read API
