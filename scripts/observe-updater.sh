@@ -215,12 +215,12 @@ cd "$DEPLOY"
 write_state backup "backing up the database"
 mkdir -p "$BACKUPS"
 if [ -f data/observe.db ]; then
-  name="observe.db.$STAMP.${REQUEST_ID%%-*}"
+  name="observe.db.$STAMP.$REQUEST_ID"
   cp -p data/observe.db "$BACKUPS/$name" || fail_phase backup "could not copy data/observe.db"
   [ -f data/observe.db-wal ] && { cp -p data/observe.db-wal "$BACKUPS/$name-wal" || fail_phase backup "could not copy the write-ahead log"; }
   write_state backup "backup data/observe.db to data/backups/$name"
   # Keep the newest KEEP_BACKUPS copies (and their -wal files); names sort by their timestamp.
-  ls -1 "$BACKUPS" | grep -E '^observe\.db\.[0-9]{8}T[0-9]{6}Z\.[0-9a-f]+$' | sort -r | tail -n +"$((KEEP_BACKUPS + 1))" |
+  ls -1 "$BACKUPS" | grep -E '^observe\.db\.[0-9]{8}T[0-9]{6}Z\.[0-9a-f-]+$' | sort -r | tail -n +"$((KEEP_BACKUPS + 1))" |
     while read -r old; do rm -f "$BACKUPS/$old" "$BACKUPS/$old-wal"; done
 else
   write_state backup "no data/observe.db to back up (another storage backend?)"

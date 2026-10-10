@@ -161,7 +161,7 @@ def test_a_valid_request_runs_every_phase_in_order_and_is_claimed_once(deploy):
     assert body["id"] in (deploy.update / "seen.ids").read_text()
     backups = sorted((deploy.data / "backups").iterdir())
     assert len(backups) == 1 and backups[0].name.startswith("observe.db.")
-    assert backups[0].name.endswith("." + body["id"].split("-")[0])
+    assert backups[0].name.endswith("." + body["id"])
     assert "hunter2" not in json.dumps(state) and "hunter2" not in done.stdout
     # The same request cannot fire again: a copy with the same id is refused before any work.
     deploy.log.write_text("")
