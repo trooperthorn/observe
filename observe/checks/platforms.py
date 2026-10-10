@@ -36,6 +36,7 @@ from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import WebSocketException
 
 from ..httpclient import http_client
+from ..tlscontext import shared
 from .base import Check, CheckResult, Result
 
 VSPHERE_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="vsphere")
@@ -50,6 +51,13 @@ def api_ssl_context(verify: bool, ca_bundle: str | None) -> ssl.SSLContext:
     ctx = ssl.create_default_context(cafile=ca_bundle)
     ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
     return ctx
+
+
+# Built once and shared: one copy for httpx, one for raw TLS and WebSocket connections
+# (observe/tlscontext.py says why they are kept apart). vSphere builds its own each poll, because
+# pyVmomi uses it on a worker thread and may change it.
+http_api_context = shared(api_ssl_context)
+socket_api_context = shared(api_ssl_context)
 
 
 class AuthFailed(Exception):
@@ -113,7 +121,7 @@ class TrueNASCheck(Check):
     async def probe(self) -> CheckResult:
         m = self.monitor
         cred = self.credential()
-        ctx = api_ssl_context(m.verify_tls, m.ca_bundle)
+        ctx = socket_api_context(m.verify_tls, m.ca_bundle)
         try:
             async with TrueNASClient(m.host, m.port, cred.username, cred.api_key, ctx,
                                      self.timeout) as tn:
@@ -199,7 +207,7 @@ class ProxmoxCheck(Check):
     async def resources(self) -> list[dict[str, Any]]:
         m = self.monitor
         cred = self.credential()
-        verify: Any = api_ssl_context(m.verify_tls, m.ca_bundle)
+        verify: Any = http_api_context(m.verify_tls, m.ca_bundle)
         async with http_client(verify, self.timeout) as c:
             data = await proxmox_resources(c, m.host, m.port, cred)
         if not data:

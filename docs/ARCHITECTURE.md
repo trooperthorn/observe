@@ -1367,6 +1367,39 @@ minutes, so no 30 day figure is recorded. The 36 pull monitors of the script are
 at the loopback interface (every pull check is a stub in the timed paths), so a stray recheck
 cannot reach another host.
 
+### TLS contexts for pull checks
+
+Every HTTP poll built a new `httpx.AsyncClient`, and with `verify_tls` on (the default) httpx built
+a new `ssl.SSLContext` for it and parsed certifi's bundle, even for an `http://` URL: 6.9 ms of CPU
+on x86 Windows. A `tls_cert` monitor, an HTTP monitor with a `ca_bundle`, and the TrueNAS, Proxmox
+and app checks built theirs with `ssl.create_default_context()`, which reads the operating system's
+store when there is no bundle, even with verification off (13 ms on Windows). `observe/tlscontext.py`
+now builds each kind of context once per (verify, ca_bundle) and hands the same one to every poll.
+The constructions are unchanged, so each check trusts what it trusted before. A context built from
+a bundle file is rebuilt when the file's mtime, size or inode changes, and a failed build is not
+kept. Each poll still opens its own connection with a full handshake, so latency and "unreachable"
+mean what they did; `tests/test_net.py` checks both on the server side. Contexts handed to httpx
+are kept apart from those used on raw TLS sockets, because httpcore writes its ALPN list into the
+context it is given. The vSphere check still builds one per poll, because pyVmomi uses it on a
+worker thread and has code paths that change it; so do the MQTT check, the UniFi plugin and
+discovery's credential gates.
+
+The server was measured against 100 tcp monitors aimed at its own port and 50 http monitors at
+`/healthz`, interval 10 s: the CPU time of its python.exe over 60 s after a 25 s warm-up, four
+interleaved runs of each build, x86 Windows, Python 3.14. Every run made 900 polls (899 in two
+"after" runs, at the edge of the window) and none failed. The container (Linux, Python 3.12) was
+not measured.
+
+| Build | CPU in 60 s, four runs | Mean | Per poll | Of one core |
+| --- | --- | --- | --- | --- |
+| Before | 6.14, 5.83, 6.11, 5.64 s | 5.93 s | 6.6 ms | 9.9% |
+| After | 3.14, 3.00, 3.17, 3.23 s | 3.14 s | 3.5 ms | 5.2% |
+
+That is 2.8 s (47%) less, 9.3 ms per HTTP poll. In the run that recorded user and kernel time
+apart, user time fell by 2.09 s, 7.0 ms per HTTP poll, which is the context build itself; kernel
+time fell by 0.31 s and page faults from 29,490 to 15,242, the cost of allocating and freeing a
+context on every poll. The working set was 118.7 MiB after and 127.5 MiB before (one sample each).
+
 ## Plugin host
 
 `observe/plugins.py` loads plugins (design in `docs/FIELD-DATA.md`). A plugin

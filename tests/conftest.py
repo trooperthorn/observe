@@ -15,11 +15,13 @@ from __future__ import annotations
 import os
 import shutil
 import socket
+import ssl
 import subprocess
 from typing import Any
 
 import pytest
 
+from observe import tlscontext
 from observe.config import Config
 
 SNMP_PORT = int(os.environ.get("OBSERVE_TEST_SNMP_PORT", "1161"))
@@ -69,6 +71,24 @@ if os.environ.get("OBSERVE_REQUIRE_SERVICES") == "1":
 
 needs_snmpd = pytest.mark.skipif(not _snmpd_up(), reason="test snmpd not running")
 needs_mqtt = pytest.mark.skipif(not _mqtt_up(), reason="test mosquitto not running")
+
+
+@pytest.fixture
+def tls_builds(monkeypatch):
+    """The client contexts ssl.create_default_context builds during the test. The shared contexts
+    of observe/tlscontext.py are forgotten first, so the first poll has to build its own."""
+    tlscontext.clear()
+    made: list[ssl.SSLContext] = []
+    real = ssl.create_default_context
+
+    def counting(purpose=ssl.Purpose.SERVER_AUTH, **kw):
+        ctx = real(purpose, **kw)
+        if purpose == ssl.Purpose.SERVER_AUTH:  # a client context; test servers use CLIENT_AUTH
+            made.append(ctx)
+        return ctx
+
+    monkeypatch.setattr(ssl, "create_default_context", counting)
+    return made
 
 
 def enqueue_stub(record):
