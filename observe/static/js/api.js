@@ -297,8 +297,13 @@ export function poller(fn, { interval = 15000, domains = null, maxAge = null, sl
   async function loop() {
     let failures = 0;
     if (delay > 0) await sleep(delay, ctl.signal);
+    // The first run happens whatever the visibility: a page opened in a background tab must
+    // still hold its data when it is looked at (and in a screenshot), never a false "nothing
+    // here". Only later runs wait for the tab to be visible.
+    let first = delay === 0;
     while (!ctl.signal.aborted) {
-      await untilVisible(ctl.signal);
+      if (!first) await untilVisible(ctl.signal);
+      first = false;
       if (ctl.signal.aborted) break;
       dirty = false;
       let pause = interval;

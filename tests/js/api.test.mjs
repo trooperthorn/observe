@@ -222,22 +222,26 @@ test("the poller never overlaps runs: the next waits for the last to finish, the
   assert.equal(peak, 1);
 });
 
-test("the poller pauses while the tab is hidden and resumes when it shows", async () => {
+test("the poller runs once at once even in a hidden tab, then pauses until it shows", async () => {
+  // Round 2 R5: a page opened in a background tab showed "No host has reported" because the
+  // first fetch waited for the tab to be visible.
   const doc = fakeDocument(true);
   const g = gates();
   let runs = 0;
   const p = poller(async () => { runs += 1; }, { interval: 1000, sleep: g.sleep, listen: false });
   await flush();
-  assert.equal(runs, 0);
-  doc.show();
-  await flush();
-  assert.equal(runs, 1);
-  doc.hidden = true;
+  assert.equal(runs, 1, "the first run does not wait for visibility");
   await g.release();
-  assert.equal(runs, 1, "hidden again, so the next run waits");
+  assert.equal(runs, 1, "still hidden, so the next run waits");
   doc.show();
   await flush();
   assert.equal(runs, 2);
+  doc.hidden = true;
+  await g.release();
+  assert.equal(runs, 2, "hidden again, so the next run waits");
+  doc.show();
+  await flush();
+  assert.equal(runs, 3);
   p.stop();
 });
 

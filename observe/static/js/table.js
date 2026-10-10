@@ -89,5 +89,8 @@ export function sortableTable({ columns, rows, empty, pageSizes, caption, defaul
     root.append(foot);
   };
   draw();
-  return { root, setRows(r) { data = r || []; draw(); } };
+  // setEmpty swaps the empty note, so a page can say "Loading" until its first answer and only
+  // then say that there is nothing.
+  return { root, setRows(r) { data = r || []; draw(); },
+    setEmpty(e) { empty = e; draw(); } };
 }
