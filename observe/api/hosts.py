@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import Query
 
-from .. import enrol, hostview, tiers
+from .. import enrol, hostview, ignored, tiers
 from ..checks.host import LATEST_WINDOW_S
 from .cursor import PageParams, encode
 from .models import HostPage, HostView, WaitingPage, rfc3339
@@ -127,6 +127,7 @@ class HostViews:
             data = None
         now = ctx.now
         stale_after = await self.windows(host)
+        skip = (await ignored.load_ignored(store)).get(host, frozenset())
         if seen:
             data = await store.latest_host(
                 host, window=max(stale_after.longest, LATEST_WINDOW_S), now=now,
@@ -135,7 +136,7 @@ class HostViews:
         return hostview.build_host_view(
             row, data, await store.host_sources(host),
             await store.host_events(host, limit=50), now, stale_after, mon, overrides,
-            self._monitor_state(mon))
+            self._monitor_state(mon), skip)
 
     async def views(self, names: list[str], rows: dict[str, dict[str, Any]]
                     ) -> list[dict[str, Any]]:
@@ -146,6 +147,7 @@ class HostViews:
         now = ctx.now
         wanted: dict[str, tuple[float, tuple[tuple[str, str], ...]]] = {}
         windows = {name: await self.windows(name) for name in names}
+        skips = await ignored.load_ignored(ctx.store)
         for name in names:
             if name in rows:
                 mon = self.pushed.get(name)
@@ -167,7 +169,8 @@ class HostViews:
             overrides = self.overrides(name)
             out.append(hostview.build_host_view(
                 row, data, got["sources"] if got else {}, got["events"] if got else [], now,
-                windows[name], mon, overrides, self._monitor_state(mon)))
+                windows[name], mon, overrides, self._monitor_state(mon),
+                skips.get(name, frozenset())))
         return out
 
 

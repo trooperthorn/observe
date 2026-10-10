@@ -82,6 +82,7 @@ table.data th { color: var(--o-text-muted); font-size: var(--o-fs-sm); font-weig
                 white-space: nowrap; padding-top: 0; padding-bottom: 0; }
 table.data th.num, table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.data tbody tr:hover { background: var(--o-surface-subtle); }
+table.data tbody tr.ignored td { opacity: .55; }
 .th-sort { background: none; border: 0; padding: var(--o-s2) 0; display: inline-flex;
            align-items: center; gap: var(--o-s1); color: inherit; font-weight: inherit; }
 .th-arrow { font-size: 10px; opacity: .6; }

@@ -26,7 +26,7 @@ PASSWORD = "correct horse battery"
 NOW = 1_000_000.0
 SECTIONS = ("cpu", "memory", "power", "temperatures", "fans", "raid", "zfs", "disks", "ups")
 ITEM_KEYS = {"source", "metric", "labels", "value", "unit", "ts", "age_seconds", "stale",
-             "status", "reason"}
+             "status", "reason", "ignored"}
 
 
 class Clock:
@@ -232,12 +232,12 @@ def test_missing_source_is_reported_honestly(env):
                  {"source": "mdraid", "available": False, "reason": "permission denied"}]))
     env.login()
     d = detail(env)
-    assert d["ups"]["state"] == "absent" and d["ups"]["status"] == "good"
+    assert d["ups"]["state"] == "absent" and d["ups"]["status"] == "no_data"
     assert d["raid"]["state"] == "unavailable" and d["raid"]["status"] == "warning"
     assert "permission denied" in d["raid"]["note"]
     assert d["zfs"]["state"] == "not_reported" and d["zfs"]["items"] == []
     srcs = {x["source"]: x for x in d["sources"]}
-    assert srcs["nut"]["present"] is False and srcs["nut"]["status"] == "good"
+    assert srcs["nut"]["present"] is False and srcs["nut"]["status"] == "no_data"
     assert srcs["mdraid"]["present"] is True and srcs["mdraid"]["available"] is False
     assert srcs["mdraid"]["status"] == "warning"
 

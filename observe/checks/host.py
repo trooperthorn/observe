@@ -32,7 +32,7 @@ from typing import Any
 from icmplib import async_ping
 from icmplib.exceptions import ICMPLibError
 
-from .. import tiers
+from .. import ignored, tiers
 from ..config import Config, Thresholds
 from ..otelnames import short_source
 from .base import Check, CheckResult, Result
@@ -236,7 +236,8 @@ class PushedHostCheck(Check):
             else {k: {**v, "updated": data["last_seen"]} for k, v in data["sources"].items()}
         events = await self.store.host_events(m.host, since=now - hostview.ALERT_WINDOW_S) \
             if hasattr(self.store, "host_events") else []
+        skip = (await ignored.load_ignored(self.store)).get(m.host, frozenset())
         view = hostview.build_host_view(
             row, data, sources, events, now, windows, m,
-            {(c.source, c.metric): c for c in m.components}, None)
+            {(c.source, c.metric): c for c in m.components}, None, skip)
         return verdict_result(view, age)

@@ -384,14 +384,14 @@ def source_views(sources: dict[str, dict[str, Any]], now: float,
         out.append({"source": name, "available": info["available"], "present": not absent,
                     "reason": info["reason"], "updated": info["updated"], "age_seconds": age,
                     "stale": age > limit,
-                    "status": GOOD if absent or (info["available"] and age <= limit)
+                    "status": NO_DATA if absent else GOOD if info["available"] and age <= limit
                     else WARNING})
     return out
 
 
 def _item(rule: Grader, override: Thresholds | None, s: dict[str, Any], now: float,
           windows: Staleness, src_info: dict[str, Any] | None,
-          host_stale: bool) -> dict[str, Any]:
+          host_stale: bool, ignored: frozenset[str] = frozenset()) -> dict[str, Any]:
     age = max(0.0, now - s["ts"])
     stale = host_stale or age > windows.for_scope(s["source"])
     labels = s["labels"]
@@ -399,6 +399,10 @@ def _item(rule: Grader, override: Thresholds | None, s: dict[str, Any], now: flo
     if s["value"] is None:
         level = NO_DATA
         reasons.append("no value this cycle")
+    elif stale:
+        # An old value is shown but never graded: a sensor that read 99 an hour ago says nothing
+        # about now, so staleness alone decides the state.
+        level = GOOD
     else:
         level, why = rule(s["value"], labels)
         if override is not None:
@@ -412,14 +416,17 @@ def _item(rule: Grader, override: Thresholds | None, s: dict[str, Any], now: flo
     if src_info is not None and not src_info["available"] and src_info["reason"] != ABSENT_REASON:
         level = worst([level, WARNING])
         reasons.append(f"source unavailable: {src_info['reason'] or 'no reason given'}")
+    hw_id = labels.get("hw.id")
     return {"source": s["source"], "metric": s["metric"], "labels": labels, "value": s["value"],
             "unit": s["unit"], "ts": s["ts"], "age_seconds": age, "stale": stale,
-            "status": level, "reason": "; ".join(reasons)}
+            "status": level, "reason": "; ".join(reasons),
+            "ignored": bool(hw_id) and hw_id in ignored}
 
 
 def _section(name: str, samples: list[dict[str, Any]], sources: dict[str, dict[str, Any]],
              overrides: dict[tuple[str, str], Thresholds], now: float, windows: Staleness,
-             host_stale: bool) -> dict[str, Any]:
+             host_stale: bool, heard: bool = True,
+             ignored: frozenset[str] = frozenset()) -> dict[str, Any]:
     rules = RULES[name]
     items = []
     for s in sorted(samples, key=lambda x: (x["source"], x["metric"],
@@ -429,14 +436,17 @@ def _section(name: str, samples: list[dict[str, Any]], sources: dict[str, dict[s
             continue
         info = sources.get(short_source(s["source"]))
         items.append(_item(rule, overrides.get((s["source"], s["metric"])), s, now,
-                           windows, info, host_stale))
+                           windows, info, host_stale, ignored))
+    counted = [i for i in items if not i["ignored"]]
     names = _sources_of(name)
     infos = {n: sources[n] for n in names if n in sources}
     bad = {n: i for n, i in infos.items()
            if not i["available"] and i["reason"] != ABSENT_REASON}
-    if host_stale:
+    if not heard:
+        state, note = "not_reported", "the host has never reported"
+    elif host_stale:
         state, note = "stale", "no current data from the host"
-    elif items and all(i["stale"] for i in items):
+    elif counted and all(i["stale"] for i in counted):
         state, note = "stale", "no reading inside the stale window"
     elif bad:
         state = "unavailable"
@@ -447,9 +457,11 @@ def _section(name: str, samples: list[dict[str, Any]], sources: dict[str, dict[s
         state, note = "absent", "the agent reports this hardware is not present"
     else:
         state, note = "not_reported", "no source for this section has reported"
-    level = worst([i["status"] for i in items])
+    level = worst([i["status"] for i in counted])
     if state in ("stale", "unavailable"):
         level = worst([level, WARNING])
+    elif state in ("absent", "not_reported"):
+        level = NO_DATA  # nothing to grade: neither Up nor Warning
     return {"status": level, "state": state, "note": note, "items": items}
 
 
@@ -484,7 +496,8 @@ def _memory_extra(sec: dict[str, Any], overrides: dict[tuple[str, str], Threshol
     sec["items"].append({"source": scope, "metric": UTILIZATION, "labels": {}, "value": ratio,
                          "unit": "1", "ts": min(p["ts"] for p in parts),
                          "age_seconds": max(p["age_seconds"] for p in parts),
-                         "stale": stale, "status": level, "reason": "; ".join(reasons)})
+                         "stale": stale, "status": level, "reason": "; ".join(reasons),
+                         "ignored": False})
     sec["status"] = worst([sec["status"], level])
 
 
@@ -521,7 +534,8 @@ def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
                     sources: dict[str, dict[str, Any]], events: list[dict[str, Any]],
                     now: float, stale_after: float | Staleness, monitor: Any | None,
                     overrides: dict[tuple[str, str], Thresholds],
-                    monitor_state: dict[str, Any] | None) -> dict[str, Any]:
+                    monitor_state: dict[str, Any] | None,
+                    ignored: frozenset[str] = frozenset()) -> dict[str, Any]:
     """The JSON document for one host. `row` is the hosts table row (or a stub for a
     monitor that has never heard from its host), `data` the output of Store.latest_host
     with since=0. `stale_after` is the host's silence limit, or its per-tier windows."""
@@ -543,7 +557,8 @@ def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
                  else bool(row["clean_shutdown"])},
     }
     for name in SECTIONS:
-        out[name] = _section(name, samples, sources, overrides, now, windows, host_stale)
+        out[name] = _section(name, samples, sources, overrides, now, windows, host_stale, heard,
+                             ignored)
     _memory_extra(out["memory"], overrides)
     out["components"] = _components(monitor, row, samples, sources, windows, now)
     out["alerts"] = _alerts(events, now, monitor)
@@ -575,7 +590,7 @@ def _cause(view: dict[str, Any]) -> str:
             elif name == "components":
                 if item["status"] == top and item["reason"]:
                     return f"{item['name']}: {item['reason']}"[:240]
-            elif item["status"] == top and item["reason"]:
+            elif item["status"] == top and item["reason"] and not item.get("ignored"):
                 label = f"{item['source']} {item['metric']}"
                 return f"{name}: {label}: {item['reason']}"[:240]
         if sec["note"]:

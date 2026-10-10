@@ -129,7 +129,7 @@ def test_container_percent_grades_and_absent_sources():
     assert item(v, "containers", "container.cpu.utilization")["status"] == "warning"
     assert item(v, "containers", "container.memory.utilization")["status"] == "critical"
     v = view(build_batch("homeassistant", CONFIG, [], NOW))
-    assert v["containers"]["state"] == "absent" and v["containers"]["status"] == "good"
+    assert v["containers"]["state"] == "absent" and v["containers"]["status"] == "no_data"
 
 
 def test_an_installed_update_clears_the_pending_state():
@@ -181,7 +181,7 @@ def test_a_sensor_from_another_integration_is_not_a_container():
     foreign = build_batch("homeassistant", CONFIG, states[:2], NOW)
     assert not any(s.source == "observe.check.hassio" for s in foreign.samples)
     v = view(foreign)
-    assert v["containers"]["state"] == "absent" and v["containers"]["status"] == "good"
+    assert v["containers"]["state"] == "absent" and v["containers"]["status"] == "no_data"
 
 
 def test_a_healthy_default_home_assistant_grades_good():
@@ -191,8 +191,9 @@ def test_a_healthy_default_home_assistant_grades_good():
                st("update.esphome", "off", installed_version="1", latest_version="1")]
     v = view(build_batch("homeassistant", CONFIG, default, NOW))
     assert v["status"] == "good"
-    for section in ("ha", "containers", "disks"):
-        assert v[section]["status"] == "good", section
+    assert v["ha"]["status"] == "good"
+    for section in ("containers", "disks"):
+        assert v[section]["status"] == "no_data", section  # absent: neither Up nor Warning
     assert v["containers"]["state"] == "absent" and v["disks"]["state"] == "absent"
 
 

@@ -37,8 +37,8 @@ from . import __version__
 from . import api as apimod
 from . import audit
 from . import auth as authmod
-from . import (enrol, hosttasks, layout, recheck_settings, retention, rules, scripts, taskscripts,
-               tiers, updates)
+from . import (enrol, hosttasks, ignored, layout, recheck_settings, retention, rules, scripts,
+               taskscripts, tiers, updates)
 from .alerts import Alerter
 from .config import Config
 from .infra import InfraError, InfraService
@@ -901,6 +901,28 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         glob, saved = await store.storage.read(tiers.load)
         known = await store.storage.read(tiers.known_hosts)
         return JSONResponse(tiers.describe(glob, saved, known))
+
+    @app.put("/api/hosts/{host}/ignored", include_in_schema=False)
+    async def put_ignored(
+            host: str, request: Request,
+            sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Replace the readings ignored on one host, by hw.id (observe/ignored.py). Admin session
+        and CSRF. An ignored reading is still shown, greyed out, but no longer counts toward its
+        section or the host's verdict. A change is audited with the old and new lists."""
+        remote = request.client.host if request.client else ""
+        if not host or len(host) > MAX_NAME:
+            return JSONResponse({"detail": "unknown host"}, status_code=404)
+        try:
+            ids = ignored.validate(await body_of(request))
+        except ignored.IgnoreError as err:
+            await audit.record(store, "host_readings_ignore_failed", actor=sess.username,
+                               method="PUT", path=ignored.PATH, status=422, remote=remote,
+                               detail={"host": host, "reason": str(err)})
+            return JSONResponse({"detail": str(err)}, status_code=422)
+        got = await store.storage.write(lambda db: ignored.save(
+            db, host, ids, now=auth_clock(), actor=sess.username, remote=remote),
+            touches=("admin", "audit"))
+        return JSONResponse({"host": host, "ignored": got["new"]})
 
     @app.put("/api/admin/rules", include_in_schema=False)
     async def put_rules(

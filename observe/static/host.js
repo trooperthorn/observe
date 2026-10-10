@@ -3,7 +3,8 @@
 // itself into its own card, so a refresh of this page never touches it.
 import { el } from "/static/js/dom.js";
 import { statusChip } from "/static/js/chips.js";
-import { get, poller, whoami } from "/static/js/api.js";
+import { api, get, poller, whoami } from "/static/js/api.js";
+import { toast } from "/static/js/toast.js";
 import { formatValue } from "/static/js/format.js";
 
 const SECTIONS = [
@@ -58,7 +59,7 @@ function dataTable(heads, rows) {
   thead.append(hr);
   const tbody = el("tbody");
   for (const cells of rows) {
-    const r = el("tr");
+    const r = el("tr", cells.cls || null);
     for (const c of cells) {
       const td = el("td");
       if (c instanceof Node) td.append(c); else td.textContent = c;
@@ -72,13 +73,58 @@ function dataTable(heads, rows) {
 }
 
 function itemsTable(items) {
-  return dataTable(["Reading", "Labels", "Value", "State", "Seen"], items.map((i) => {
+  const heads = ["Reading", "Labels", "Value", "State", "Seen"];
+  if (isAdmin) heads.push("");
+  return dataTable(heads, items.map((i) => {
     const st = el("span");
-    st.append(chip(i.status));
+    if (i.ignored) st.append(chip("no_data", "Ignored"));
+    else st.append(chip(i.status));
     if (i.reason) st.append(" ", el("span", "muted", i.reason));
-    return [`${i.source.replace(/^hostwatch\.collector\./, "")}.${i.metric}`, labelText(i.labels), fmtValue(i), st,
+    const row = [`${i.source.replace(/^hostwatch\.collector\./, "")}.${i.metric}`, labelText(i.labels), fmtValue(i), st,
       `${ago(i.age_seconds)}${i.stale ? " (stale)" : ""}`];
+    if (isAdmin) row.push(ignoreButton(i));
+    if (i.ignored) row.cls = "ignored";
+    return row;
   }));
+}
+
+// Every hw.id ignored on this host, read back from the items the server marked.
+let ignoredIds = new Set();
+
+function collectIgnored(h) {
+  const out = new Set();
+  for (const [key] of SECTIONS) {
+    for (const i of (h[key] && h[key].items) || []) {
+      if (i.ignored && i.labels && i.labels["hw.id"]) out.add(i.labels["hw.id"]);
+    }
+  }
+  return out;
+}
+
+// An admin can ignore a reading that has a hw.id (a floating sensor input, an empty fan
+// header). It stays on the page, greyed out, and stops counting toward the host's state. The
+// change is saved on the server and audited.
+function ignoreButton(i) {
+  const id = i.labels && i.labels["hw.id"];
+  if (!id) return "";
+  const b = el("button", "btn", i.ignored ? "Count again" : "Ignore");
+  b.type = "button";
+  b.setAttribute("aria-label", `${i.ignored ? "Count again" : "Ignore"} ${id}`);
+  b.addEventListener("click", async () => {
+    const next = new Set(ignoredIds);
+    if (i.ignored) next.delete(id); else next.add(id);
+    b.disabled = true;
+    try {
+      await api("PUT", `/api/hosts/${encodeURIComponent(name)}/ignored`, null,
+        { ignored: [...next] });
+      toast(i.ignored ? `${id} counts again` : `${id} is ignored on this host`);
+      await refresh();
+    } catch (err) {
+      toast(`Not saved: ${err.message}`, "error");
+      b.disabled = false;
+    }
+  });
+  return b;
 }
 
 function eventsList(events) {
@@ -94,14 +140,22 @@ function eventsList(events) {
 function card(title, ...chips) {
   const d = el("details", "card");
   d.open = true;
+  d.dataset.title = title;
   const s = el("summary");
   s.append(el("span", null, title), ...chips);
   d.append(s);
   return d;
 }
 
+// Sections with nothing on this host (absent hardware, never reported) start collapsed, so the
+// page leads with what the host has. A section the visitor opened or closed keeps that choice.
+const NO_DATA_STATES = new Set(["absent", "not_reported"]);
+const toggled = new Map();
+
 function section(title, sec, isEvents) {
   const box = card(title, chip(sec.status));
+  box.open = toggled.has(title) ? toggled.get(title) : !NO_DATA_STATES.has(sec.state);
+  box.addEventListener("toggle", () => toggled.set(title, box.open));
   if (sec.state !== "ok") box.firstChild.append(chip(sec.state, STATE_TEXT[sec.state] || sec.state));
   if (sec.note) box.append(el("p", "card-sub", sec.note));
   if (sec.items.length) box.append(isEvents ? eventsList(sec.items) : itemsTable(sec.items));
@@ -124,12 +178,15 @@ function sourcesTable(sources) {
 }
 
 function kpis(h) {
+  if (!h.heard) return document.createDocumentFragment();  // nothing to count yet
   const row = el("div", "kpi-row");
   for (const key of KPI_SECTIONS) {
     const sec = h[key];
     const title = SECTIONS.find(([k]) => k === key)[1];
     const tile = el("div", "kpi");
-    tile.append(el("span", "kpi-label", title), el("span", "kpi-value", String(sec.items.length)));
+    const n = sec.items.length;
+    tile.append(el("span", "kpi-label", title), el("span", "kpi-value", String(n)),
+      el("span", "kpi-label", n === 1 ? "reading" : "readings"));
     const foot = el("span", "kpi-label");
     foot.append(chip(sec.status));
     tile.append(foot);
@@ -175,6 +232,7 @@ function componentsCard(sec) {
 
 function render(h) {
   document.title = `${h.host} - Observe`;
+  ignoredIds = collectIgnored(h);
   document.getElementById("summary").replaceChildren(chip(h.status, `${h.host}: ${h.status}`));
   const frag = document.createDocumentFragment();
   const head = el("div", "host-title");

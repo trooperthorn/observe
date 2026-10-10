@@ -98,9 +98,14 @@ def _json(value: Any) -> Any:
 def load(db: Conn) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
     """The saved global rates and per-host overrides; a malformed or out-of-range stored value is
     left out."""
+    return from_rows(db.execute("SELECT key, value FROM app_settings WHERE key LIKE 'tiers.%'"))
+
+
+def from_rows(rows: Any) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
+    """`load` over (key, value) rows already read; rows of other keys are skipped."""
     glob: dict[str, float] = {}
     hosts: dict[str, dict[str, float]] = {}
-    for key, value in db.execute("SELECT key, value FROM app_settings WHERE key LIKE 'tiers.%'"):
+    for key, value in rows:
         data = _json(value)
         if not isinstance(data, dict):
             continue
@@ -187,24 +192,10 @@ def staleness(host: str, glob: dict[str, float], hosts: dict[str, dict[str, floa
 
 
 async def load_rates(store: Any) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
-    """The saved rates. They are kept on the store until the `admin` change counter moves, which
-    every save bumps, so a change in the console applies on the next check without a restart and
-    an unchanged page reads nothing. A store without a storage backend (a test double) has only
-    the defaults."""
-    storage = getattr(store, "storage", None)
-    if storage is None:
-        return {}, {}
-    try:
-        seq = storage.change_seqs().get("admin")
-    except (AttributeError, NotImplementedError):
-        seq = None
-    kept = getattr(store, "_tier_rates", None)
-    if seq is not None and kept is not None and kept[0] == seq:
-        return kept[1]
-    rates = await storage.read(load)
-    if seq is not None:
-        store._tier_rates = (seq, rates)
-    return rates
+    """The saved rates, cached on the store (observe/hostsettings.py)."""
+    from . import hostsettings
+    got = await hostsettings.load(store)
+    return got.glob, got.hosts
 
 
 def describe(glob: dict[str, float], hosts: dict[str, dict[str, float]],
