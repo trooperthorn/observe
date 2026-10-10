@@ -777,6 +777,11 @@ class ServerConfig(Strict):
     # OTLP requests per ingest key per minute. One host sends about 8 a minute (metrics and
     # logs every 15 s). Requests with a missing or wrong key are limited per peer at the same number.
     ingest_rate_per_minute: int = Field(default=120, ge=1)
+    # How many requests one ingest key may send at once above that rate (a token bucket refilled
+    # at ingest_rate_per_minute; never less than one minute's worth). An agent restarted after an
+    # outage replays its outbox, which can hold over 1,600 requests, and must not be refused
+    # while it does. Refilling 2,000 at 120 a minute takes about 17 minutes.
+    ingest_burst: int = Field(default=2000, ge=1)
     basic_auth_user: str | None = None
     basic_auth_password: str | None = None
     max_concurrency: int = 32

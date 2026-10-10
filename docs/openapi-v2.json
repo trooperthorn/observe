@@ -949,6 +949,25 @@
             ],
             "title": "Age Seconds"
           },
+          "agent_drops": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The agent is dropping data from its outbox: dropped (points in the current run), total (the agent's running total), since, at (the newest report) and text. Null when the count has stopped growing.",
+            "title": "Agent Drops"
+          },
+          "agent_label": {
+            "default": "",
+            "description": "For a host Observe polls itself, how (\"polled by Observe (Home Assistant monitor)\"): its agent_version is a producer marker, not a version.",
+            "title": "Agent Label",
+            "type": "string"
+          },
           "agent_version": {
             "title": "Agent Version",
             "type": "string"
@@ -1066,6 +1085,25 @@
               }
             ],
             "title": "Age Seconds"
+          },
+          "agent_drops": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The agent is dropping data from its outbox: dropped (points in the current run), total (the agent's running total), since, at (the newest report) and text. Null when the count has stopped growing.",
+            "title": "Agent Drops"
+          },
+          "agent_label": {
+            "default": "",
+            "description": "For a host Observe polls itself, how (\"polled by Observe (Home Assistant monitor)\"): its agent_version is a producer marker, not a version.",
+            "title": "Agent Label",
+            "type": "string"
           },
           "agent_version": {
             "title": "Agent Version",

@@ -48,11 +48,14 @@ class Clock:
 
 
 class Env:
-    def __init__(self, tmp_path, rate: int = 120) -> None:
+    def __init__(self, tmp_path, rate: int = 120, burst: int | None = None) -> None:
+        """`burst` is the key's bucket size; by default the rate, so a test counts requests per
+        minute exactly."""
         self.path = str(tmp_path / "w.db")
         self.store = Store(self.path)
         self.cfg = make_config([{"name": "p", "type": "ping", "host": "127.0.0.1"}],
-                               server={"db_path": self.path, "ingest_rate_per_minute": rate})
+                               server={"db_path": self.path, "ingest_rate_per_minute": rate,
+                                       "ingest_burst": rate if burst is None else burst})
         self.clock = Clock()
         # The receive time of the pushes. The fixtures carry fixed times near T0, and a point
         # older than the raw retention is ignored, so the clock sits just after them.
@@ -775,7 +778,8 @@ def test_rate_limit_returns_429_and_recovers(tmp_path):
         key = e.key("nas01")
         codes = [e.push(simple(), key).status_code for _ in range(5)]
         assert codes == [200, 200, 200, 429, 429]
-        assert e.push(simple(), key).headers["retry-after"] == "60"
+        # At 3 a minute the bucket holds the next request in 20 s, and Retry-After says so.
+        assert e.push(simple(), key).headers["retry-after"] == "20"
         e.clock.now += 61
         assert e.push(simple(), key).status_code == 200
     finally:
@@ -818,7 +822,7 @@ def test_one_key_above_its_limit_gets_429_with_retry_after_while_another_is_serv
         codes = [e.push(simple(), busy).status_code for _ in range(7)]
         assert codes == [200] * 5 + [429] * 2
         r = e.push(simple(), busy)
-        assert r.status_code == 429 and r.headers["retry-after"] == "60"
+        assert r.status_code == 429 and r.headers["retry-after"] == "12"  # 5 a minute
         assert e.push(simple("nas02"), quiet).status_code == 200
     finally:
         e.close()
@@ -831,6 +835,113 @@ def test_bad_keys_are_limited_per_peer_and_do_not_block_valid_keys_of_that_peer(
         codes = [e.push(simple(), "wpi_wrong").status_code for _ in range(5)]
         assert codes == [401, 401, 401, 429, 429]
         assert e.push(simple(), key).status_code == 200
+    finally:
+        e.close()
+
+
+def test_an_outbox_backlog_of_1600_requests_is_replayed_without_a_429(tmp_path):
+    # truenas-svr restarted with 1,625 requests queued and was refused once a minute while it
+    # drained. With the default burst a whole backlog fits, sent as fast as the client can,
+    # inside the limit's one-minute window (the ingest clock does not move here).
+    from observe.config import ServerConfig
+    e = Env(tmp_path, burst=ServerConfig.model_fields["ingest_burst"].default)
+    try:
+        key = e.key("nas01")
+        codes = [e.push(simple(value=float(i), ts=T0 + i), key).status_code for i in range(1600)]
+        assert codes.count(200) == 1600
+        assert e.rows("SELECT COUNT(*) FROM audit WHERE kind='ingest_denied'") == [(0,)]
+        # Normal traffic afterwards (8 a minute) is served while the bucket refills.
+        e.clock.now += 60
+        assert [e.push(simple(ts=T0 + 2000 + i), key).status_code for i in range(8)] == [200] * 8
+    finally:
+        e.close()
+
+
+def test_a_key_that_keeps_flooding_after_its_burst_is_held_to_the_rate(tmp_path):
+    e = Env(tmp_path, rate=60, burst=100)
+    try:
+        key = e.key("nas01")
+        codes = [e.push(simple(ts=T0 + i), key).status_code for i in range(103)]
+        assert codes == [200] * 100 + [429] * 3
+        r = e.push(simple(), key)
+        assert r.status_code == 429 and r.headers["retry-after"] == "1"  # one a second
+        e.clock.now += 1
+        assert e.push(simple(), key).status_code == 200
+        assert e.push(simple(), key).status_code == 429
+    finally:
+        e.close()
+
+
+@pytest.mark.parametrize("path", ["/v1/metrics", "/v1/logs", "/internal/v1/agent-config"])
+def test_every_429_from_ingest_carries_retry_after(tmp_path, path):
+    e = Env(tmp_path, rate=2)
+    try:
+        key = e.key("nas01")
+        body = logs_request("nas01", [log_record("x.y", T0, "hi", "INFO", 9)]) \
+            if path == "/v1/logs" else simple()
+
+        def send(token):
+            if path.startswith("/internal"):
+                return e.client.get(path, headers={"Authorization": f"Bearer {token}"})
+            return e.push(body, token, path=path)
+
+        # The per-key bucket: at 2 a minute the next request fits in 30 s.
+        got = [send(key) for _ in range(3)]
+        assert [r.status_code for r in got] == [200, 200, 429]
+        assert got[-1].headers["retry-after"] == "30"
+        # The per-peer limit on missing or wrong keys, a fixed one-minute window.
+        got = [send("wpi_wrong") for _ in range(3)]
+        assert [r.status_code for r in got] == [401, 401, 429]
+        assert got[-1].headers["retry-after"] == "60"
+    finally:
+        e.close()
+
+
+# A pushed batch must map to a key an admin can list and revoke. Every key-authenticated ingest
+# route refuses a request without one with 401, and audits the refusal as ingest_denied.
+NO_KEY_CASES = {
+    "no header": None,
+    "empty bearer": {"Authorization": "Bearer "},
+    "not bearer": {"Authorization": "Basic d3BpOnNlY3JldA=="},
+    "malformed": {"Authorization": "Bearer wpi_not-a-key"},
+    "unknown prefix": {"Authorization": "Bearer wpi_0123456789ab_" + "A" * 43},
+    "other scheme prefix": {"Authorization": "Bearer xyz_" + "A" * 43},
+}
+
+
+@pytest.mark.parametrize("path", ["/v1/metrics", "/v1/logs", "/internal/v1/agent-config"])
+@pytest.mark.parametrize("case", [*NO_KEY_CASES, "revoked", "right prefix wrong secret"])
+def test_a_request_without_a_valid_unrevoked_key_is_401_and_audited(tmp_path, path, case):
+    e = Env(tmp_path)
+    try:
+        key = e.key("homeassistant")
+        if case == "revoked":
+            assert e.push(simple("homeassistant"), key).status_code == 200  # works until revoked
+            assert asyncio.run(revoke_key(e.store, key.split("_")[1]))
+            headers = {"Authorization": f"Bearer {key}"}
+        elif case == "right prefix wrong secret":
+            prefix = key.rsplit("_", 1)[0]
+            headers = {"Authorization": f"Bearer {prefix}_{'B' * 43}"}
+        else:
+            headers = NO_KEY_CASES[case] or {}
+        stored = e.stored()
+        if path.startswith("/internal"):
+            r = e.client.get(path, headers=headers)
+        else:
+            body = logs_request("homeassistant", [log_record("x.y", T0, "hi", "INFO", 9)]) \
+                if path == "/v1/logs" else simple("homeassistant", value=99.0, ts=T0 + 5)
+            r = e.client.post(path, content=json.dumps(body).encode(),
+                              headers={"Content-Type": JSON, **headers})
+        assert r.status_code == 401, (case, r.text)
+        assert r.headers["www-authenticate"] == "Bearer"
+        rows = e.rows("SELECT status, path, detail FROM audit WHERE kind='ingest_denied'")
+        assert len(rows) == 1
+        status, audited_path, detail = rows[0]
+        assert (status, audited_path) == (401, path)
+        assert json.loads(detail)["reason"] == "missing or invalid ingest key"
+        # Nothing of the request was stored.
+        assert e.rows("SELECT COUNT(*) FROM host_events")[0][0] == 0
+        assert e.stored() == stored
     finally:
         e.close()
 

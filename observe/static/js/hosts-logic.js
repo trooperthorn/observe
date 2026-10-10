@@ -32,11 +32,19 @@ function rank(status) {
 export function hostRow(h) {
   return {
     name: h.host, platform: h.platform || "", status: h.status, statusRank: rank(h.status),
-    age: h.heard ? h.age_seconds : null, stale: !!h.stale, agent: h.agent_version || "",
+    age: h.heard ? h.age_seconds : null, stale: !!h.stale,
+    agent: h.agent_label || h.agent_version || "",
     monitored: !!h.monitored, monitor: h.monitor && h.monitor.name ? h.monitor.name : "",
     detail: h.status_reason || "", href: hostHref(h.host), settings: settingsHref(h.host),
-    waiting: false, heard: !!h.heard, notes: installNotes(h),
+    waiting: false, heard: !!h.heard, notes: [...installNotes(h), ...dropNotes(h)],
   };
+}
+
+// The agent is dropping data from its outbox (observe/agentdrops.py), until the count stops
+// growing.
+export function dropNotes(h) {
+  const d = h.agent_drops;
+  return d && d.text ? [d.text] : [];
 }
 
 // The newest failed console install step, until a later report clears it.

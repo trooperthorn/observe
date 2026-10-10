@@ -105,6 +105,9 @@ class HostView(BaseModel):
     host: str
     platform: str
     agent_version: str
+    agent_label: str = Field(
+        "", description="For a host Observe polls itself, how (\"polled by Observe (Home "
+        "Assistant monitor)\"): its agent_version is a producer marker, not a version.")
     heard: bool
     last_seen: IsoTs | None = None
     age_seconds: float | None = None
@@ -113,6 +116,10 @@ class HostView(BaseModel):
     status_reason: str
     install_problem: dict[str, Any] | None = Field(
         None, description="The newest failed console install step not cleared since.")
+    agent_drops: dict[str, Any] | None = Field(
+        None, description="The agent is dropping data from its outbox: dropped (points in the "
+        "current run), total (the agent's running total), since, at (the newest report) and "
+        "text. Null when the count has stopped growing.")
 
 
 class HostSummary(BaseModel):
@@ -120,6 +127,9 @@ class HostSummary(BaseModel):
     host: str
     platform: str
     agent_version: str
+    agent_label: str = Field(
+        "", description="For a host Observe polls itself, how (\"polled by Observe (Home "
+        "Assistant monitor)\"): its agent_version is a producer marker, not a version.")
     heard: bool
     last_seen: IsoTs | None = None
     age_seconds: float | None = None
@@ -130,6 +140,10 @@ class HostSummary(BaseModel):
     status: str
     status_reason: str
     install_problem: dict[str, Any] | None = None
+    agent_drops: dict[str, Any] | None = Field(
+        None, description="The agent is dropping data from its outbox: dropped (points in the "
+        "current run), total (the agent's running total), since, at (the newest report) and "
+        "text. Null when the count has stopped growing.")
     sections: dict[str, str]
     states: dict[str, str]
 

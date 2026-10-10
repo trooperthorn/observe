@@ -43,7 +43,8 @@ normalizing run on a worker thread, not on the event loop.
 
 A request is checked in this order, cheapest and least informative first: the per-peer rate limit
 (429 with `Retry-After: 60`); a valid unrevoked bearer key (401, before the body is read), where a
-valid key of the control (`wpc`) or read (`wpr`) scope is a 403; the per-key rate limit (429); the
+valid key of the control (`wpc`) or read (`wpr`) scope is a 403; the per-key rate limit (429, with
+`Retry-After` set to the seconds until the key's bucket holds the next request); the
 content type and content encoding (415); the body cap of 1 MiB on the wire (413); gzip inflation
 capped at 4 MiB while inflating (413, and a malformed, truncated or multi-member stream is 400),
 and a body that inflates to more than 100 times its compressed size (at least 64 KiB are always
@@ -159,14 +160,38 @@ replayed older batch leaves newer state alone.
 Denied requests are written to the audit log as `ingest_denied`, through an
 aggregator adapted from hostwatch's hub: at most one row per peer per minute,
 carrying the number of denials it covers, with at most 4096 peers tracked. The
-row holds the key's public prefix and never the key. The rate limit is a fixed
-window per ingest key, set by `server.ingest_rate_per_minute` (default 120, against about 8 requests a
-minute from one host sending metrics and logs every 15 s). A valid key is never counted against its peer,
+row holds the key's public prefix and never the key. The rate limit per ingest key is a token
+bucket: it holds `server.ingest_burst` requests (default 2000) and refills at
+`server.ingest_rate_per_minute` (default 120, against about 8 requests a minute from one host sending
+metrics and logs every 15 s). The burst is there for an agent that comes back after an outage or a
+restart and replays its outbox: truenas-svr queued 1,625 requests, and a fixed window of 120 a minute
+refused it once a minute while its outbox overflowed and dropped 492,443 points. A whole backlog of
+that size is accepted at once, and a key that keeps sending is still held to the refill rate (an
+empty bucket takes about 17 minutes to fill). A valid key is never counted against its peer,
 so 16 hosts behind one NAT or proxy are not throttled together. A missing or wrong key is counted per
-peer in a second window of the same size, and that window answers 429 once it is used up. The peer is the socket address; forwarded headers are not
+peer in a fixed one-minute window of `ingest_rate_per_minute`, and that window answers 429 (with
+`Retry-After: 60`) once it is used up. The peer is the socket address; forwarded headers are not
 trusted. The routes do not use the dashboard basic auth, because producers authenticate with
 their own key. A batch the store could not write is recorded as `ingest_failed` and is a server
 error; a database with no free read connection in time is a 503 with `Retry-After: 5`.
+
+Agent contract: every 429 and 503 from `/v1/metrics`, `/v1/logs` and `/internal/v1/agent-config`
+carries `Retry-After` in seconds, and an agent (hostwatch, ha_Int_soc, a field phone) must not send
+again to that route before it has passed; it keeps the batch in its outbox and resends it with the
+same `Idempotency-Key`. Retrying sooner only spends the bucket's refill and is refused again.
+hostwatch is a separate repository, so honouring the header is its change to make, not Observe's.
+
+The agent's outbox drop count is a host warning (`observe/agentdrops.py`). hostwatch reports an
+outbox over its limit as an event ("outbox over a limit: N data point(s) ... dropped in total ...");
+it is usually info, so before it showed only under Recent events. A report is recognised by
+"outbox" in its kind or title, and the running total is read from a numeric detail key
+(`dropped_total`, `dropped_points`, `points_dropped`, `dropped`) or from the "N data point(s)" text.
+While the total grows, `build_host_view` adds `agent_drops` (`dropped` in the current run, `total`,
+`since`, `at`, `text`) and a warning item `agent.outbox_dropping` to the alerts section, so the one
+verdict, its reason, the Hosts row and the pushed_host check all say "agent dropped N data points
+since <time>". It clears when a report repeats the previous total, or when no report has arrived for
+an hour; a smaller total is a restarted agent and starts a new run. The Hosts list query reads the
+outbox reports beside the warning and critical events.
 
 Not built in this slice: the metric allow-list and the `legacy_key` mapping of section 3 (a series
 is named by the scope, metric and attributes the producer sends), cumulative reset tracking for
@@ -832,6 +857,17 @@ forensics and watchdog breaches are log records. It must stay inside the ordinar
 points per container and a handful per other source, so a 60 s cycle is far inside them. Observe
 never holds an HA admin token; the pull monitor (`mode: host`) keeps using the non-admin token,
 and both write to the same host, because series are keyed by source, metric and labels.
+
+Which credential writes a Home Assistant host: the `mode: host` monitor is polled by Observe with
+the monitor's `credential` (the non-admin long-lived token) and writes in process through
+`Store.ingest_batch`; nothing is pushed, so the host has no ingest key and its settings page lists
+none. A push from ha_Int_soc needs a `wpi` key bound to `homeassistant`, which is listed under the
+host's keys and on Users and keys and can be revoked there. The batch the poller writes names its
+producer in `agent_version` (`observe-ha-host`, `observe-snmp-host` for SNMP), which ranks the
+producers and is not a version: the host view, the Hosts row and the settings document carry
+`agent_label` ("polled by Observe (Home Assistant monitor)") for it, and the settings document
+lists the monitors that poll the host with the name of their credential (`polled_by`,
+`observe/producers.py`).
 
 ha_Int_soc names its points as in `docs/DATA-API-DESIGN.md` section 3.4, under the scopes
 `ha_soc.collector.<name>`. The golden files it sends are copied into `tests/fixtures/observe_otlp`

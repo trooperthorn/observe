@@ -17,7 +17,7 @@ import {
 } from "/static/js/wizard-logic.js";
 import {
   hostFromPath, draftFromAllowlist, allowlistFromDraft, diffAllowlist, allowlistChip,
-  allowlistHelp, taskChip, taskTitle, shouldPoll,
+  allowlistHelp, taskChip, taskTitle, shouldPoll, agentText, dataPathText,
 } from "/static/js/settings-logic.js";
 
 const POLL_MS = 3000;
@@ -52,17 +52,20 @@ function drawIdentity() {
   const rows = [["Host", host]];
   if (s.enrolled) {
     rows.push(["Platform", s.platform_label]);
-    rows.push(["Agent", s.agent_version ? `hostwatch ${s.agent_version}` : (s.agent ? "hostwatch, not reporting yet" : "not chosen")]);
+    rows.push(["Agent", agentText(s)]);
     rows.push(["Control", s.control ? "thermal-control chosen" : "not chosen"]);
     rows.push(["Added", `${formatWhen(s.created)}${s.created_by ? ` by ${s.created_by}` : ""}`]);
     rows.push(["Install command", s.installed ? "has been run" : "not run yet"]);
   } else {
-    rows.push(["Agent", s.agent_version ? `hostwatch ${s.agent_version}` : "unknown"]);
+    rows.push(["Agent", agentText(s)]);
   }
+  const data = dataPathText(s);
+  if (data) rows.push(["Data", data]);
   rows.push(["Active keys", s.active_by_scope ? activeKeysText(s.active_by_scope) : String(s.active_keys)]);
   const list = clear($("identity-list"));
   for (const [k, v] of rows) list.append(el("dt", null, k), el("dd", null, v));
   $("identity-note").textContent = s.enrolled ? ""
+    : data ? "Observe polls this host itself, so it has no keys to revoke; its data stops when the monitor above is removed or disabled in the YAML."
     : "This host was not added through the console, so its allowlist and install command are not managed here. You can still revoke its keys or remove it below.";
   $("reporting").replaceChildren(statusChip(s.reporting ? "up" : "pending", s.reporting ? "Reporting" : "Not reporting"));
 }

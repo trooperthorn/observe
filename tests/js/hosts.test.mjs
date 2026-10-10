@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  STATUS_STATE, ageText, downTileLabel, filterRows, hostRow, hostRows, plural, summaryText,
+  STATUS_STATE, ageText, downTileLabel, dropNotes, filterRows, hostRow, hostRows, plural, summaryText,
   waitingRow,
 } from "../../observe/static/js/hosts-logic.js";
 
@@ -92,6 +92,21 @@ test("the dashboard Down tile counts what the Hosts list calls Down", () => {
 test("a failed install step shows on the row until cleared", () => {
   const h = { ...nas, install_problem: { step: "agent", status: "failed", note: "", at: 1 } };
   assert.deepEqual(hostRow(h).notes, ["install step agent failed"]);
+  assert.deepEqual(hostRow(nas).notes, []);
+});
+
+test("a host Observe polls shows how in the Agent column, not its producer marker", () => {
+  const ha = { ...nas, host: "homeassistant", agent_version: "observe-ha-host",
+    agent_label: "polled by Observe (Home Assistant monitor)" };
+  assert.equal(hostRow(ha).agent, "polled by Observe (Home Assistant monitor)");
+  assert.equal(hostRow(nas).agent, "0.9.0");
+});
+
+test("an agent dropping data shows on the row until the count stops growing", () => {
+  const text = "agent dropped 434,541 data points since 2026-10-10 03:19 UTC";
+  const h = { ...nas, status: "warning", agent_drops: { dropped: 434541, text } };
+  assert.deepEqual(hostRow(h).notes, [text]);
+  assert.deepEqual(dropNotes({ ...nas, agent_drops: null }), []);
   assert.deepEqual(hostRow(nas).notes, []);
 });
 

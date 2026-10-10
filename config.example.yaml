@@ -28,6 +28,7 @@ server:
   # The audit log has its own retention, separate from polls and host samples.
   audit_retention_days: 365
   ingest_rate_per_minute: 120  # POST /v1/metrics and /v1/logs requests per ingest key per minute (wrong keys: per peer)
+  # ingest_burst: 2000  # requests one key may send at once, so an agent can replay its outbox
   # plugin_rate_per_minute: 300  # requests per peer to /api/plugins/* routes
   # The address install commands tell hosts to call, http(s)://host[:port] with no path and never
   # localhost. When unset, an admin confirms one in the Add host wizard. The request's Host

@@ -45,6 +45,12 @@ class TokenBucket:
             return 0
         return max(1, math.ceil((cost - entry[0]) / self.rate))
 
+    def charge(self, key: str, extra: float) -> None:
+        """Take `extra` more tokens from a key, down to empty, for a request that cost more than
+        it was charged (a body refused only after it was inflated or decoded)."""
+        entry = self._bucket(key, self._clock())
+        entry[0] = max(0.0, entry[0] - extra)
+
     def exhausted(self, key: str) -> bool:
         """True when the key has less than one token. Takes nothing."""
         return self._bucket(key, self._clock())[0] < 1.0

@@ -30,6 +30,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from .agentdrops import agent_drops, alert_item
+from .producers import agent_label
 from .checks.host import CRITICAL, GOOD, STALE, WARNING, grade, grade_components
 from .config import Thresholds
 from .enrol import install_problem
@@ -549,6 +551,7 @@ def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
     out: dict[str, Any] = {
         "host": row["host"], "platform": row.get("platform", ""),
         "agent_version": row.get("agent_version", ""),
+        "agent_label": agent_label(row.get("agent_version", "")),  # a polled host's producer
         "heard": heard, "last_seen": row["last_seen"] if heard else None,
         "age_seconds": age, "stale": host_stale, "stale_after": stale_after,
         "confirmed": bool(row.get("confirmed")), "monitored": monitor is not None,
@@ -564,6 +567,11 @@ def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
     _memory_extra(out["memory"], overrides)
     out["components"] = _components(monitor, row, samples, sources, windows, now)
     out["alerts"] = _alerts(events, now, monitor)
+    # The agent's outbox is dropping data: a warning in the verdict until the count stops growing.
+    out["agent_drops"] = agent_drops(events, now)
+    if out["agent_drops"]:
+        out["alerts"]["items"] = [alert_item(out["agent_drops"]), *out["alerts"]["items"]]
+        out["alerts"]["status"] = worst([out["alerts"]["status"], WARNING])
     if not heard and not out["alerts"]["items"]:
         out["alerts"]["status"] = NO_DATA  # a host that never reported has no "Up" anywhere
     out["events"] = events
@@ -606,7 +614,8 @@ def _cause(view: dict[str, Any]) -> str:
 def summarize(view: dict[str, Any]) -> dict[str, Any]:
     """The compact row shown in GET /api/hosts."""
     keys = ("host", "platform", "agent_version", "heard", "last_seen", "age_seconds", "stale",
-            "confirmed", "monitored", "monitor", "status", "status_reason", "install_problem")
+            "confirmed", "monitored", "monitor", "status", "status_reason", "install_problem",
+            "agent_drops", "agent_label")
     out = {k: view[k] for k in keys}
     out["sections"] = {n: view[n]["status"] for n in (*SECTIONS, "alerts")}
     if view["components"]["items"]:

@@ -254,7 +254,8 @@ function render(h) {
   }
   head.append(crumb, titleRow);
   head.append(el("p", "card-sub",
-    `${h.platform || "unknown platform"}, agent ${h.agent_version || "unknown"}. ` +
+    `${h.platform || "unknown platform"}, ` +
+    `${h.agent_label || `agent ${h.agent_version || "unknown"}`}. ` +
     (h.heard ? `Last report ${ago(h.age_seconds)}.` : "No batch has ever arrived.")));
   if (!h.monitored) {
     head.append(el("p", "card-sub", "Not listed as a pushed_host monitor, so it never alerts."));
@@ -267,6 +268,8 @@ function render(h) {
       `The console install reported step ${p.step} ${p.status}${p.note ? `: ${p.note}` : ""}. ` +
       "It clears when a rerun of the install passes that step."));
   }
+  if (h.agent_drops) head.append(el("p", "card-sub row-note", `${h.agent_drops.text}: ` +
+    "its outbox is over its limit. This clears when the count stops growing."));
   const b = h.boot;
   if (b.boot_ts) {
     const prev = b.clean_shutdown === true ? "previous shutdown was clean"

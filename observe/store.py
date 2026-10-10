@@ -546,13 +546,15 @@ class Store:
                 out[host]["sources"][source] = {"available": bool(available), "reason": reason,
                                                 "updated": updated}
         # Of the 50 newest events of a host, only the warnings and criticals inside the alert
-        # window reach the list (the summary shows the alert section, not the event rows).
+        # window reach the list (the summary shows the alert section, not the event rows), and
+        # the agent's outbox reports, which say whether it is dropping data (agentdrops.py).
         for host, ts, kind, severity, src, title, detail, boot_id in db.execute(
                 "SELECT host, ts, kind, severity, source, title, detail, boot_id FROM ("
                 "SELECT host, ts, kind, severity, source, title, detail, boot_id, id, "
                 "ROW_NUMBER() OVER (PARTITION BY host ORDER BY ts DESC, id DESC) AS rn "
                 "FROM host_events WHERE ts >= ?) e WHERE rn <= 50 "
-                "AND severity IN ('warning','critical') ORDER BY host, ts DESC, id DESC",
+                "AND (severity IN ('warning','critical') OR LOWER(kind) LIKE '%outbox%' "
+                "OR LOWER(title) LIKE '%outbox%') ORDER BY host, ts DESC, id DESC",
                 (alert_since,)).fetchall():
             if host in out:
                 out[host]["events"].append(
