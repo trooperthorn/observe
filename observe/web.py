@@ -734,6 +734,12 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         # The page holds no data; it reads and writes through /api/v2 with an admin session.
         return FileResponse(STATIC / "admin-storage.html")
 
+    @app.get("/admin/updates", include_in_schema=False)
+    async def admin_updates_page() -> FileResponse:
+        # The page holds no data; it reads through /api/v2 with an admin session and writes the
+        # update request through the admin route below.
+        return FileResponse(STATIC / "admin-updates.html")
+
     @app.post("/api/admin/updates/observe", include_in_schema=False)
     async def request_observe_update(
             request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:

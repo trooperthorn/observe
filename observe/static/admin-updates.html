@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Updates - Observe</title>
+<link rel="stylesheet" href="/static/css/tokens.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/shell.css">
+<link rel="stylesheet" href="/static/css/components.css">
+<link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+<header id="shell-header" class="shell-head">
+  <div id="summary" aria-live="polite"></div>
+</header>
+<nav id="shell-nav" aria-label="Main"></nav>
+<main class="admin-main" id="page">
+  <div class="admin-title">
+    <p class="crumbs muted">Admin / Updates</p>
+    <h1>Updates</h1>
+  </div>
+  <p id="msg" class="msg-line" role="alert"></p>
+  <section class="card" aria-labelledby="observe-h">
+    <h3 id="observe-h">Observe</h3>
+    <p class="card-sub" id="version-line">Reading the running version.</p>
+    <p id="upstream-line"></p>
+    <p id="update-state" aria-live="polite"></p>
+    <div id="phases" class="phase-row" aria-label="Update phases"></div>
+    <pre id="update-log" class="update-log" hidden aria-label="Update log"></pre>
+    <p id="updated-line" class="card notice" role="status" hidden></p>
+    <p class="row-actions">
+      <button type="button" class="btn primary" id="update-observe">Update Observe...</button>
+    </p>
+    <p class="admin-note" id="observe-note">The button writes a request into the data volume. A helper on the Docker host, installed once with scripts/install-updater.sh, backs up the database, pulls origin/main with a fast-forward only, builds, validates and restarts the container, and puts the previous version back if the restart fails. Nothing here runs inside the container.</p>
+  </section>
+  <section class="card" aria-labelledby="agents-h">
+    <h3 id="agents-h">Agents</h3>
+    <p class="card-sub">Every host that has pushed, its hostwatch version and whether its control daemon can be asked to update the agent. Windows and TrueNAS hosts take a new install command from their settings page.</p>
+    <p class="row-actions">
+      <button type="button" class="btn" id="update-all">Update all eligible agents...</button>
+    </p>
+    <p id="agents-summary" aria-live="polite"></p>
+    <ul id="agents-refused" class="finding-list"></ul>
+    <div id="agents"></div>
+  </section>
+  <p class="admin-note" id="footer"></p>
+</main>
+<script type="module" src="/static/admin-updates.js"></script>
+<script type="module" src="/static/js/shell.js"></script>
+</body>
+</html>

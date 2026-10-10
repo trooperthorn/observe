@@ -5,7 +5,7 @@ import { typedMatches } from "/static/js/dialog-logic.js";
 
 let counter = 0;
 
-function open({ title, body, lines, confirmText, danger, typedName }) {
+function open({ title, body, lines, confirmText, danger, typedName, typedLabel }) {
   return new Promise((resolve) => {
     const opener = document.activeElement;
     const dlg = el("dialog", "dlg");
@@ -23,7 +23,7 @@ function open({ title, body, lines, confirmText, danger, typedName }) {
     let input = null;
     if (typedName) {
       const label = el("label", "field");
-      label.append(el("span", null, `Type the name (${typedName}) to confirm`));
+      label.append(el("span", null, typedLabel || `Type the name (${typedName}) to confirm`));
       input = el("input");
       input.type = "text";
       input.autocomplete = "off";
@@ -60,6 +60,8 @@ export function confirmDialog({ title, body, lines, confirmText, danger }) {
   return open({ title, body, lines, confirmText, danger });
 }
 
-export function typedConfirm({ title, name, body, lines, confirmText }) {
-  return open({ title, body, lines, confirmText: confirmText || "Confirm", danger: true, typedName: name });
+// `typedLabel` replaces the field's label ("Type the name (x) to confirm") when the typed word
+// is not a host name, such as the word update on the Updates page.
+export function typedConfirm({ title, name, body, lines, confirmText, typedLabel }) {
+  return open({ title, body, lines, confirmText: confirmText || "Confirm", danger: true, typedName: name, typedLabel });
 }
