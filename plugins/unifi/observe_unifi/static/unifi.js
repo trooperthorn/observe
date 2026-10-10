@@ -21,9 +21,11 @@ const DASH = "—";
 const DEVICE_PAGES = [25, 50, 100];
 const deviceSeen = (r) => (String(r.state || "").toUpperCase() === "ONLINE" ? r.last_seen : r.online_at || null);
 const CLASSIC_NOTE = "Offline clients, switch ports, VLANs, uptime, bandwidth, Wi-Fi names, clients per SSID and the Wi-Fi join diagnostics need the optional classic controller account.";
-// Where the classic account is set up: a unifi_classic credential named in
-// plugin_settings.unifi.classic_credential, described in the README.
-const CLASSIC_HELP = "https://github.com/trooperthorn/observe#setting-up-unifi-and-home-assistant-sources";
+// Where the classic account is set up. It is configuration, not a console setting, so there is
+// no page to link to (and a page may not link off-origin): the card names the YAML key and the
+// README section that describes it.
+const CLASSIC_KEY = "plugin_settings.unifi.classic_credential";
+const CLASSIC_HELP = "README, “Setting up UniFi and Home Assistant sources”";
 
 // The SSID filter chosen on the overview bars; it is applied to the clients table. While the
 // Clients tab is open, `applySsid` is that table's setter; otherwise the tab is opened with it.
@@ -54,11 +56,8 @@ function classicNeeded(title) {
   const card = el("section", "card classic-needed");
   card.append(el("h3", null, title), el("p", null, CLASSIC_NOTE));
   const how = el("p", "muted");
-  const link = el("a", null, "Setting up UniFi and Home Assistant sources");
-  link.href = CLASSIC_HELP;
-  link.rel = "noopener";
-  how.append(document.createTextNode("Add a view-only local UniFi account as a unifi_classic credential and name it in plugin_settings.unifi.classic_credential: see "),
-    link, document.createTextNode(" in the README."));
+  how.append(document.createTextNode("Where to set it up: add a view-only local UniFi account as a unifi_classic credential in Observe's configuration file and name it in "),
+    el("code", null, CLASSIC_KEY), document.createTextNode(`, then restart Observe. The steps are in the ${CLASSIC_HELP}.`));
   card.append(how);
   return card;
 }

@@ -295,7 +295,8 @@ def test_every_classic_only_value_degrades_to_a_dash_and_the_note_explains_why()
     # widgets only the classic views fill: above the tabs, and as the whole Wi-Fi tab.
     assert 'classicNeeded("Classic controller account not set up")' in js
     assert 'classicNeeded("Wi-Fi Join Diagnostics")' in js
-    assert "plugin_settings.unifi.classic_credential" in js and "link.href = CLASSIC_HELP" in js
+    assert "plugin_settings.unifi.classic_credential" in js
+    assert "Setting up UniFi and Home Assistant sources" in js
     assert "if (!d.classic_configured) {" in js  # the Wi-Fi section
     assert "This list needs the classic controller account" not in js  # no placeholder text
     assert "status.classic_configured" in js

@@ -1025,9 +1025,9 @@ band, WPA3 only, open, a schedule, a restricted access point group), which acces
 it now, and the clients the console knows but is not carrying, newest first; no UniFi source
 records a failed join, so nothing there says a client failed. A value only the classic account
 gives (VLAN, uptime, bandwidth, SSID names, Internet state and the WAN address) is a dash without
-it. Without the account the page shows one "needs the classic controller account" card with a
-link to its setup, the clients per SSID bars are left out (no client has an SSID) and the Wi-Fi
-join tab is that card alone. The page shows what the last poll stored, not live data, with a stale
+it. Without the account the page shows one "needs the classic controller account" card naming
+the configuration key to set and this section, the clients per SSID bars are left out (no client
+has an SSID) and the Wi-Fi join tab is that card alone. The page shows what the last poll stored, not live data, with a stale
 marker when the devices or classic collector has not succeeded within twice its interval.
 The collector sends only GET requests, never follows a redirect, refuses a response over 4 MB
 and a list over 50 pages. After a 401 or 403 it stops sending requests, waits one interval, and
