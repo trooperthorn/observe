@@ -40,7 +40,7 @@ export function sortableTable({ columns, rows, empty, pageSizes, caption }) {
   const draw = () => {
     const col = sort && columns.find((c) => c.key === sort.key);
     const sorted = col && col.get ? sortRows(data, col.get, sort.dir) : data;
-    const view = pageSlice(sorted, page, size);
+    const view = pageSlice(sorted, page, size, sizes);
     page = view.page;
     const wrap = el("div", "table-wrap");
     const table = el("table", "data");

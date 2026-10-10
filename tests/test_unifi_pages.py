@@ -179,10 +179,123 @@ def test_the_page_uses_shared_components_and_tokens_only():
     assert 'class="admin-main"' in html and "/static/js/shell.js" in html
     assert "<title>UniFi - Observe</title>" in html
     js = (PKG / "static" / "unifi.js").read_text(encoding="utf-8")
-    for needed in ("sortableTable", "statusChip", "kpi-row", "windowFor", "filterClients"):
+    for needed in ("sortableTable", "statusChip", "kpi-row", "windowFor", "filterClients",
+                   "formatValue", "neutralChip", "monoTag"):
         assert needed in js
     css = (PKG / "static" / "unifi.css").read_text(encoding="utf-8")
     assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(", css)
+    tokens = (ROOT / "observe" / "static" / "css" / "tokens.css").read_text(encoding="utf-8")
+    for name in set(re.findall(r"var\((--[\w-]+)", css)):
+        assert re.search(rf"{re.escape(name)}\s*:", tokens), name  # every token exists in both themes
+
+
+# ---- the network view (slice 3): what the page builds, read from the sources ----------------
+
+def _js(name: str) -> str:
+    text = (PKG / "static" / name).read_text(encoding="utf-8")
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"(?m)(^|\s)//.*$", r"\1", text)
+
+
+def test_the_page_builds_the_five_tiles_from_the_overview_resource():
+    js = _js("unifi.js")
+    assert f'get(`${{API}}/overview`)' in js
+    assert '"kpi-row five"' in js
+    for label in ("Network status", "Internet", "WAN bandwidth", "Wireless clients", "Total clients"):
+        assert f'"{label}"' in js, label
+    assert "`site ${o.site_id}`" in js and "`WAN ${o.wan.ip}`" in js
+    assert "`${o.wired_clients} wired`" in js and "`${o.device_count} network devices`" in js
+    # Status words are chips with an icon, never colour alone.
+    assert 'statusChip("up", "Online")' in js and 'statusChip("down", "Offline")' in js
+    assert 'statusChip("up", "Connected")' in js and 'statusChip("down", "Down")' in js
+    css = (PKG / "static" / "unifi.css").read_text(encoding="utf-8")
+    assert ".kpi-row.five" in css and "repeat(5, minmax(0, 1fr))" in css
+
+
+def test_rates_are_formatted_as_rates_and_totals_as_bytes_with_the_shared_formatter():
+    js = _js("unifi.js")
+    # The HA SOC view formatted per-second rates as byte totals; here a rate is bytes per
+    # second shown in bits per second and a total is bytes, both through format.js.
+    assert 'formatValue(bytesPerSecond * 8, "bit/s")' in js
+    assert 'formatValue(v, "By")' in js
+    assert 'formatValue(s, "s")' in js  # uptime as a duration
+    assert "uptimeSeconds(c, now)" in js
+    assert "toFixed" not in js  # no private byte or rate formatter
+
+
+def test_clients_per_ssid_bars_need_no_inline_style_and_set_the_table_filter():
+    js = _js("unifi.js")
+    assert 'el("progress")' in js and "bar.max = max" in js and "bar.value = r.count" in js
+    assert '"ssid-name"' in js and 'setAttribute("aria-pressed"' in js
+    assert "applySsid(ssidFilter)" in js and 'location.hash = "clients"' in js
+    assert "Clients per SSID" in js and "click to filter the table" in js
+
+
+def test_clients_tab_has_the_vlan_and_ssid_filters_and_the_eight_columns():
+    js = _js("unifi.js")
+    assert 'COLS = ["Client", "IPv4", "MAC", "VLAN", "SSID", "Uptime", "Bandwidth", "Last seen"]' in js
+    assert 'select("VLAN"' in js and 'select("SSID"' in js and 'select("State"' in js
+    assert "vlanOptions(all)" in js and "ssidOptions(all)" in js
+    assert "filterClients(all, { q: q.value, state: state.value, vlan: vlan.value, ssid: ssid.value })" in js
+    assert '"wireless"' in js  # the subline word
+    assert "windowFor(scroll.scrollTop" in js  # still virtualised
+    assert "const DASH = \"—\"" in js  # the em dash of a classic-only value
+
+
+def test_devices_tab_has_search_the_firmware_words_totals_and_25_50_100_pages():
+    js = _js("unifi.js")
+    assert "DEVICE_PAGES = [25, 50, 100]" in js and "pageSizes: DEVICE_PAGES" in js
+    for label in ('"Device"', '"IPv4"', '"MAC"', '"VLAN"', '"Model"', '"Firmware"', '"Bandwidth"',
+                  '"Last seen"'):
+        assert label in js, label
+    assert 'statusChip("warn", "Update available")' in js
+    assert 'statusChip("up", "Up to date")' in js
+    assert 'statusChip("unavailable", "Not reported")' in js
+    assert "Search devices" in js
+    # The management VLAN is not read, so the column says so instead of showing zero.
+    assert "management VLAN" in js.lower() or "management VLAN is not read" in js
+    core = (ROOT / "observe" / "static" / "js" / "table-core.js").read_text(encoding="utf-8")
+    assert "export function pageSlice(rows, page, size, sizes = PAGE_SIZES)" in core
+    table = (ROOT / "observe" / "static" / "js" / "table.js").read_text(encoding="utf-8")
+    assert "pageSlice(sorted, page, size, sizes)" in table
+
+
+def test_wifi_join_section_copies_the_ha_soc_intro_and_builds_one_card_per_ssid():
+    js = _js("unifi.js")
+    intro = ("No UniFi source records an association attempt or an authentication failure, so "
+             "nothing here says a client failed. What it shows is the configuration that decides "
+             "whether a join is permitted, which access points carry each SSID, and the wireless "
+             "clients the controller knows but is not carrying now.")
+    assert intro in js
+    assert '"Wi-Fi Join Diagnostics"' in js and '"Known but not connected"' in js
+    for label in ('"Network"', '"Radios"', '"Permitted APs"', '"Carrying clients now"'):
+        assert label in js, label
+    assert "`${w.network_name} (VLAN ${w.vlan})`" in js
+    assert 'statusChip("up", "Enabled")' in js and 'statusChip("down", "Disabled")' in js
+    assert 'neutralChip("Guest")' in js and "neutralChip(w.security)" in js
+    assert 'el("li", `finding ${f.severity}`)' in js and 'el("span", "sev", f.severity)' in js
+    assert "w.summary" in js and "defaultSsid(d.wlans)" in js
+    assert f'get(`${{API}}/wlans`)' in js and f'getAll(`${{API}}/absent-clients`)' in js
+    for col in ('"Client"', '"MAC"', '"Last SSID"', '"Last seen"'):
+        assert col in js, col
+    css = (PKG / "static" / "unifi.css").read_text(encoding="utf-8")
+    for rule in (".finding.blocking .sev", ".finding.possible .sev", ".wifi-ssid", ".wifi-grid"):
+        assert rule in css, rule
+
+
+def test_every_classic_only_value_degrades_to_a_dash_and_the_note_explains_why():
+    js = _js("unifi.js")
+    assert "CLASSIC_NOTE" in js and "classic controller account" in js
+    assert "if (!d.classic_configured) notes.push(note(CLASSIC_NOTE))" in js
+    assert "if (!d.classic_configured) {" in js  # the Wi-Fi section
+    assert "status.classic_configured" in js
+    assert js.count("dash()") >= 6
+
+
+def test_tabs_default_to_clients_and_keep_devices_wifi_and_protect():
+    js = _js("unifi.js")
+    assert 'TABS = [["clients", "Clients"], ["devices", "Devices"], ["wifi", "Wi-Fi join"], ["protect", "Protect"]]' in js
+    assert 'return LOADERS[h] ? h : "clients"' in js
 
 
 def test_package_data_lists_the_page_and_script_files():
