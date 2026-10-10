@@ -79,6 +79,9 @@ export function agentRowState(agent) {
   if (!agent) return { kind: "none", text: "no data" };
   if (agent.eligible) return { kind: "update", text: "" };
   if (agent.reason === "install command only") return { kind: "install", text: "install command only" };
+  if (agent.reason === "agent too old, reinstall from host settings") {
+    return { kind: "reinstall", text: "agent too old, reinstall from " };
+  }
   return { kind: "none", text: agent.reason || "" };
 }
 

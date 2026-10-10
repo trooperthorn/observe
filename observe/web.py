@@ -1258,14 +1258,18 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         now = auth_clock()
         row = await enrolment_row(host)
         reporting = {r["host"]: r for r in await store.host_rows()}.get(host)
-        keys = await store.fetch(
-            "SELECT COUNT(*) FROM ingest_keys WHERE host=? AND scope IN ('wpi', 'wpc') "
-            "AND revoked_at IS NULL", (host,))
-        if row is None and reporting is None and host not in pushed and not keys[0][0]:
+        by_scope = {"wpi": 0, "wpc": 0}
+        for scope, n in await store.fetch(
+                "SELECT scope, COUNT(*) FROM ingest_keys WHERE host=? AND scope IN ('wpi', 'wpc') "
+                "AND revoked_at IS NULL GROUP BY scope", (host,)):
+            by_scope[scope] = n
+        active = sum(by_scope.values())
+        if row is None and reporting is None and host not in pushed and not active:
             return None
         out: dict[str, Any] = {
             "host": host, "enrolled": row is not None, "in_config": host in pushed,
-            "reporting": reporting is not None, "active_keys": keys[0][0],
+            "reporting": reporting is not None, "active_keys": active,
+            "active_by_scope": by_scope,
             "agent_version": reporting["agent_version"] if reporting else "",
             "control_ready": bool(control_public_key()), "ttl_s": enrol.TOKEN_TTL_S,
             "platform": "", "platform_label": "", "agent": False, "control": False,

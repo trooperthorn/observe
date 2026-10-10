@@ -290,6 +290,18 @@ def test_eligibility_follows_platform_key_and_pull(platform, enrolled, key, pull
     assert row["pull_age_s"] == (None if pull is None else NOW - pull)
 
 
+@pytest.mark.parametrize("version, eligible", [
+    ("0.1.0", False), ("0.1.9", False), ("", False), ("dev", False), ("0.2.0", True),
+    ("1.4.0", True)])
+def test_an_agent_too_old_for_agent_update_is_not_offered_it(version, eligible):
+    """Bug plan WP5: agent 0.1.0 refuses agent.update as an unknown action, so it is neither
+    offered the button nor counted in "Update all eligible agents"."""
+    row = agent_row({"host": "mediain-svr", "platform": "linux", "agent_version": version},
+                    "linux", True, NOW - 30, NOW)
+    assert row["eligible"] is eligible
+    assert row["reason"] == ("" if eligible else updates.TOO_OLD)
+
+
 # ---- the routes ------------------------------------------------------------------------------
 
 @pytest.fixture

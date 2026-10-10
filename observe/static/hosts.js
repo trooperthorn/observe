@@ -56,6 +56,13 @@ function settingsCell(r) {
   return a;
 }
 
+function detailCell(r) {
+  const box = el("span");
+  box.append(muted(r.detail));
+  for (const note of r.notes || []) box.append(el("span", "row-note", note));
+  return box;
+}
+
 function columns() {
   const cols = [
     { key: "host", label: "Host", get: (r) => r.name, render: nameCell },
@@ -66,7 +73,7 @@ function columns() {
     { key: "agent", label: "Agent", get: (r) => r.agent || null,
       render: (r) => r.agent || muted("unknown") },
     { key: "monitor", label: "Monitor", get: (r) => (r.monitored ? 0 : 1), render: monitorCell },
-    { key: "detail", label: "Detail", render: (r) => muted(r.detail) },
+    { key: "detail", label: "Detail", render: detailCell },
   ];
   if (isAdmin) cols.push({ key: "settings", label: "Settings", render: settingsCell });
   return cols;

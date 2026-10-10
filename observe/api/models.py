@@ -111,6 +111,8 @@ class HostView(BaseModel):
     stale: bool
     status: str
     status_reason: str
+    install_problem: dict[str, Any] | None = Field(
+        None, description="The newest failed console install step not cleared since.")
 
 
 class HostSummary(BaseModel):
@@ -127,6 +129,7 @@ class HostSummary(BaseModel):
     monitor: dict[str, Any] | None = None
     status: str
     status_reason: str
+    install_problem: dict[str, Any] | None = None
     sections: dict[str, str]
     states: dict[str, str]
 

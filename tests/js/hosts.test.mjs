@@ -88,3 +88,23 @@ test("the dashboard Down tile counts what the Hosts list calls Down", () => {
   assert.equal(plural(1, "host"), "1 host");
   assert.equal(plural(2, "host"), "2 hosts");
 });
+
+test("a failed install step shows on the row until cleared", () => {
+  const h = { ...nas, install_problem: { step: "agent", status: "failed", note: "", at: 1 } };
+  assert.deepEqual(hostRow(h).notes, ["install step agent failed"]);
+  assert.deepEqual(hostRow(nas).notes, []);
+});
+
+test("a silent listed host and an unlisted reporting host get hints naming each other", () => {
+  const listed = { host: "truenas", platform: "", agent_version: "", heard: false,
+    age_seconds: null, stale: false, monitored: true, monitor: { name: "truenas" },
+    status: "critical", status_reason: "no batch received yet" };
+  const reporting = { host: "truenas-svr", platform: "truenas", agent_version: "0.2.0", heard: true,
+    age_seconds: 20, stale: false, monitored: false, monitor: null, status: "good",
+    status_reason: "" };
+  const rows = hostRows([listed, reporting, nas], []);
+  const by = Object.fromEntries(rows.map((r) => [r.name, r]));
+  assert.match(by.truenas.notes[0], /"truenas-svr" reports but is not listed.*host: truenas-svr/);
+  assert.match(by["truenas-svr"].notes[0], /"truenas" has never reported.*change that host to truenas-svr/);
+  assert.deepEqual(by.nas01.notes, []);
+});

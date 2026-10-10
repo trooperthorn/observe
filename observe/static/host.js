@@ -257,6 +257,12 @@ function render(h) {
   } else if (h.monitor) {
     head.append(el("p", "card-sub", monitorLine(h)));
   }
+  if (h.install_problem) {
+    const p = h.install_problem;
+    head.append(el("p", "card-sub row-note",
+      `The console install reported step ${p.step} ${p.status}${p.note ? `: ${p.note}` : ""}. ` +
+      "It clears when a rerun of the install passes that step."));
+  }
   const b = h.boot;
   if (b.boot_ts) {
     const prev = b.clean_shutdown === true ? "previous shutdown was clean"

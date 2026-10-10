@@ -10,6 +10,7 @@ import { confirmDialog, typedConfirm } from "/static/js/dialog.js";
 import { toast } from "/static/js/toast.js";
 import { notAdmin, showError, copyText } from "/static/js/admin-ui.js";
 import { NEEDS_URL, askPublicUrl } from "/static/js/public-url.js";
+import { activeKeysText } from "/static/js/keys-logic.js";
 import {
   validHeader, validService, progressChip, reportChip, noticeFor, guardText,
 } from "/static/js/wizard-logic.js";
@@ -57,7 +58,7 @@ function drawIdentity() {
   } else {
     rows.push(["Agent", s.agent_version ? `hostwatch ${s.agent_version}` : "unknown"]);
   }
-  rows.push(["Active keys", String(s.active_keys)]);
+  rows.push(["Active keys", s.active_by_scope ? activeKeysText(s.active_by_scope) : String(s.active_keys)]);
   const list = clear($("identity-list"));
   for (const [k, v] of rows) list.append(el("dt", null, k), el("dd", null, v));
   $("identity-note").textContent = s.enrolled ? ""

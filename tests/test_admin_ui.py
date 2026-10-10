@@ -191,3 +191,19 @@ def test_revoke_url_containing_the_full_key_leaves_no_key_text_in_the_audit_log(
     everything = " ".join(str(x) for row in env.rows("SELECT * FROM audit") for x in row)
     assert made["key"] not in everything and secret not in everything
     assert env.rows("SELECT COUNT(*) FROM audit WHERE kind LIKE 'key_revoke%'")[0][0] >= 1
+
+
+def test_the_last_enabled_admin_cannot_be_disabled_or_demoted(env):
+    """The only enabled admin, here the signed-in one, is never disabled or made a user: the
+    server refuses with 409 and audits it, and the account stays an enabled admin."""
+    hdr = admin_login(env)
+    root = user_id(env, "root")
+    for path, value in [("disabled", True), ("admin", False)]:
+        r = env.client.post(f"/api/admin/users/{root}/{path}", json={"value": value}, headers=hdr)
+        assert r.status_code == 409 and "last active admin" in r.json()["detail"]
+    assert env.rows("SELECT is_admin, disabled FROM users WHERE id=?", root) == [(1, 0)]
+    assert [r[1] for r in audit_rows(env, "user_change_failed")] == [409, 409]
+    # With a second enabled admin the first may step down.
+    env.user("alice", admin=True)
+    assert env.client.post(f"/api/admin/users/{root}/admin", json={"value": False},
+                           headers=hdr).status_code == 200

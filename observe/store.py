@@ -442,10 +442,13 @@ class Store:
     async def host_rows(self) -> list[dict[str, Any]]:
         """One row per host that has ever pushed, ordered by name."""
         rows = await self.fetch(
-            "SELECT host, platform, agent_version, first_seen, last_seen, boot_id, boot_ts, "
-            "clean_shutdown, confirmed FROM hosts ORDER BY host")
+            "SELECT h.host, h.platform, h.agent_version, h.first_seen, h.last_seen, h.boot_id, "
+            "h.boot_ts, h.clean_shutdown, h.confirmed, e.reports FROM hosts h "
+            "LEFT JOIN enrolments e ON e.host = h.host ORDER BY h.host")
+        # install_reports: the console install's step reports (enrol.record_step), or None for a
+        # host that was not added through the console.
         keys = ("host", "platform", "agent_version", "first_seen", "last_seen", "boot_id",
-                "boot_ts", "clean_shutdown", "confirmed")
+                "boot_ts", "clean_shutdown", "confirmed", "install_reports")
         return [dict(zip(keys, r)) for r in rows]
 
     async def host_sources(self, host: str) -> dict[str, dict[str, Any]]:

@@ -16,9 +16,10 @@ from pydantic import BaseModel, Field
 from observe.api import ApiContext, ApiRegistry
 from observe.api.cursor import PageParams, encode
 from observe.api.models import Page, Ts
+from observe.updates import supports_update
 
 from .actions import COMPONENTS, CONTROLLERS, MODES, capabilities
-from .queue import ACTIONS, EXPIRABLE_STATES
+from .queue import ACTIONS, EXPIRABLE_STATES, UPDATE
 
 
 class CommandResult(BaseModel):
@@ -101,7 +102,10 @@ class Capabilities(BaseModel):
 async def host_capabilities(ctx: ApiContext, host: str = "") -> dict[str, Any]:
     """The actions and what the host last reported, so a client offers only valid choices."""
     data = await ctx.store.latest_host(host) if host else None
-    return {"host": host, "known": data is not None, "actions": list(ACTIONS),
+    # agent.update is offered only to an agent whose control daemon runs it (observe/updates.py).
+    actions = [a for a in ACTIONS if a != UPDATE
+               or (data is not None and supports_update(str(data.get("agent_version") or "")))]
+    return {"host": host, "known": data is not None, "actions": actions,
             "capabilities": capabilities(data["samples"] if data else []),
             "controllers": list(CONTROLLERS), "modes": list(MODES),
             "components": list(COMPONENTS)}

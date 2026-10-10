@@ -16,7 +16,7 @@ const ACTION_TEXT = {
   "service.restart": "Restart a service", "host.reboot": "Reboot the host",
   "agent.update": "Update the hostwatch agent",
 };
-const COMPONENT_TEXT = { agent: "agent container", control: "control daemon", all: "agent and control daemon" };
+const COMPONENT_TEXT = { agent: "hostwatch agent", control: "control daemon", all: "agent and control daemon" };
 let ctlCsrf = "";
 let ctlCaps = null;
 let ctlHistoryBox = null;

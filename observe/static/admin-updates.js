@@ -138,8 +138,8 @@ function actionCell(r) {
     return b;
   }
   const span = el("span", "muted");
-  if (state.kind === "install") {
-    span.append(el("span", null, "install command only, see "));
+  if (state.kind === "install" || state.kind === "reinstall") {
+    span.append(el("span", null, state.kind === "install" ? "install command only, see " : state.text));
     const a = el("a", null, "host settings");
     a.href = settingsHref(r.host);
     span.append(a);

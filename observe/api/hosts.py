@@ -23,7 +23,7 @@ from .problems import ApiProblem
 from .registry import ApiContext, ApiRegistry
 
 # Keys of the host document that hold a unix timestamp. They are written as RFC 3339 strings.
-TIME_KEYS = frozenset({"last_seen", "boot_ts", "ts", "updated"})
+TIME_KEYS = frozenset({"last_seen", "boot_ts", "ts", "updated", "at"})
 
 
 def _times(value: Any) -> Any:

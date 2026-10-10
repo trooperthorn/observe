@@ -32,6 +32,7 @@ from typing import Any
 
 from .checks.host import CRITICAL, GOOD, STALE, WARNING, grade, grade_components
 from .config import Thresholds
+from .enrol import install_problem
 from .tiers import Staleness
 from .otelnames import HA_SOC_PREFIX, RETIRED_SOURCES, collector_scope, short_source
 from .store import ABSENT_REASON
@@ -552,6 +553,7 @@ def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
         "age_seconds": age, "stale": host_stale, "stale_after": stale_after,
         "confirmed": bool(row.get("confirmed")), "monitored": monitor is not None,
         "monitor": monitor_state,
+        "install_problem": install_problem(row.get("install_reports")),
         "boot": {"boot_id": row.get("boot_id"), "boot_ts": row.get("boot_ts"),
                  "clean_shutdown": None if row.get("clean_shutdown") is None
                  else bool(row["clean_shutdown"])},
@@ -602,7 +604,7 @@ def _cause(view: dict[str, Any]) -> str:
 def summarize(view: dict[str, Any]) -> dict[str, Any]:
     """The compact row shown in GET /api/hosts."""
     keys = ("host", "platform", "agent_version", "heard", "last_seen", "age_seconds", "stale",
-            "confirmed", "monitored", "monitor", "status", "status_reason")
+            "confirmed", "monitored", "monitor", "status", "status_reason", "install_problem")
     out = {k: view[k] for k in keys}
     out["sections"] = {n: view[n]["status"] for n in (*SECTIONS, "alerts")}
     if view["components"]["items"]:

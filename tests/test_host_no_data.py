@@ -100,3 +100,27 @@ def test_viewer_cannot_change_ignored_readings(env):
     csrf = {"X-CSRF-Token": env.client.get("/api/v2/session").json().get("csrf", "")}
     r = env.client.put("/api/hosts/nas01/ignored", json={"ignored": ["a"]}, headers=csrf)
     assert r.status_code in (401, 403)
+
+
+def test_failed_install_step_is_shown_until_a_later_success_clears_it(env):
+    """Bug plan WP5: an enrol_install_problem (step agent, failed) was only in the audit log."""
+    import json as _json
+    from observe import enrol
+    reports = [{"step": "download", "status": "ok", "note": "", "at": 10.0},
+               {"step": "agent", "status": "failed", "note": "pull timed out", "at": 11.0}]
+    assert enrol.install_problem(_json.dumps(reports))["step"] == "agent"
+    assert enrol.install_problem(reports + [{"step": "ready", "status": "ok", "at": 12.0}]) is None
+    rerun = [r for r in reports if r["step"] != "agent"] + [
+        {"step": "agent", "status": "ok", "note": "", "at": 13.0}]
+    assert enrol.install_problem(rerun) is None
+
+    env.push(hv.batch("x15-wk", samples=[hv.s("cpu", "system.cpu.utilization", 0.05, "1")]))
+    env.store.storage.write_sync(lambda db: db.execute(
+        "INSERT INTO enrolments (host, platform, agent, control, token_hash, created, expires_at, "
+        "reports) VALUES ('x15-wk', 'linux', 1, 0, 'h', 1, 2, ?)", (_json.dumps(reports),)))
+    env.login()
+    page = hv.detail(env, "x15-wk")
+    assert page["install_problem"]["step"] == "agent"
+    assert page["install_problem"]["status"] == "failed"
+    row = env.client.get("/api/v2/hosts").json()["items"][0]
+    assert row["install_problem"]["note"] == "pull timed out"

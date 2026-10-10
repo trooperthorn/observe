@@ -9,9 +9,12 @@ import { sortableTable } from "/static/js/table.js";
 import { confirmDialog } from "/static/js/dialog.js";
 import { toast } from "/static/js/toast.js";
 import { button, copyText, notAdmin, showError } from "/static/js/admin-ui.js";
+import { isLastAdmin, keyUsage, scopeText } from "/static/js/keys-logic.js";
 
 let csrf = "";
 let tables = null;
+let usage = new Map();
+let allUsers = [];
 const msg = document.getElementById("msg");
 const when = (ts) => (ts ? new Date(seconds(ts) * 1000).toLocaleString() : "never");
 
@@ -25,8 +28,16 @@ function keyColumns() {
   return [
     { key: "id", label: "Id", get: (k) => k.id, render: (k) => monoTag(k.id) },
     { key: "host", label: "Host", get: (k) => k.host },
+    { key: "scope", label: "Kind", get: (k) => scopeText(k.scope) },
     { key: "state", label: "State", get: (k) => (k.active ? 0 : 1),
-      render: (k) => (k.active ? statusChip("up", "Active") : statusChip("pending", `Revoked ${when(k.revoked_at)}`)) },
+      render: (k) => {
+        if (!k.active) return statusChip("pending", `Revoked ${when(k.revoked_at)}`);
+        const note = usage.get(k.id) || "";
+        const box = el("span");
+        box.append(statusChip(note.startsWith("spare") ? "warn" : "up", "Active"));
+        if (note) box.append(" ", el("span", "muted", note));
+        return box;
+      } },
     { key: "by", label: "Created by", get: (k) => k.created_by },
     { key: "used", label: "Last used", numeric: true, get: (k) => seconds(k.last_used) || 0, render: (k) => when(k.last_used) },
     { key: "act", label: "Actions", render: (k) => {
@@ -66,6 +77,14 @@ function userColumns() {
         }),
         button(u.is_admin ? "Make user" : "Make admin", "", () =>
           run(() => api("POST", `/api/admin/users/${u.id}/admin`, csrf, { value: !u.is_admin }), "Role changed.")));
+      if (isLastAdmin(allUsers, u)) {
+        // The only enabled admin cannot be disabled or demoted; the server refuses it too.
+        for (const b of box.querySelectorAll("button")) {
+          b.disabled = true;
+          b.title = "The only enabled admin cannot be disabled or made a user.";
+        }
+        box.append(el("span", "muted", " only admin"));
+      }
       return box;
     } },
   ];
@@ -83,6 +102,8 @@ async function refresh() {
   try {
     const [keys, users] = await Promise.all([getAll("/api/v2/admin/keys"), getAll("/api/v2/admin/users")]);
     if (!tables) tables = mountTables();
+    usage = keyUsage(keys);
+    allUsers = users;
     tables.keys.setRows(keys);
     tables.users.setRows(users);
   } catch (e) {

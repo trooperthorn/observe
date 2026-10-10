@@ -941,6 +941,18 @@
             "title": "Host",
             "type": "string"
           },
+          "install_problem": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Install Problem"
+          },
           "last_seen": {
             "anyOf": [
               {
@@ -1042,6 +1054,19 @@
           "host": {
             "title": "Host",
             "type": "string"
+          },
+          "install_problem": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The newest failed console install step not cleared since.",
+            "title": "Install Problem"
           },
           "last_seen": {
             "anyOf": [
