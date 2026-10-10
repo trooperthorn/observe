@@ -1,6 +1,10 @@
 /* Admin, audit, map admin and port pages. Tokens only, no colour literals. Loaded after
    components.css so these rules come last. */
-.admin-main { max-width: var(--o-maxw); margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4); }
+.admin-main { max-width: var(--o-maxw); margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4);
+              grid-template-columns: minmax(0, 1fr); }
+/* Grid items may shrink below their content, so a wide table scrolls inside its .table-wrap on a
+   phone instead of widening the whole page. */
+.admin-main > *, .admin-main .card { min-width: 0; }
 .admin-main h1 { font-size: var(--o-fs-h); margin: 0; }
 .admin-title { display: grid; gap: var(--o-s1); }
 .admin-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--o-s4); }

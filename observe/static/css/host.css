@@ -1,6 +1,8 @@
 /* Host page layout and the Control card. Tokens only, no colour literals. Loaded after
    components.css so these rules come last. */
-.host-main { max-width: 1100px; margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4); }
+.host-main { max-width: 1100px; margin: 0 auto; padding: var(--o-s4); display: grid; gap: var(--o-s4);
+             grid-template-columns: minmax(0, 1fr); }
+.host-main > *, .host-body > * { min-width: 0; }
 .host-body { display: grid; gap: var(--o-s4); }
 .host-title { display: grid; gap: var(--o-s1); }
 .host-title .crumbs { margin: 0; font-size: var(--o-fs-sm); }
