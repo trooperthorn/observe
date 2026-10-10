@@ -10,13 +10,14 @@ import { confirmDialog } from "/static/js/dialog.js";
 import { toast } from "/static/js/toast.js";
 import { button, copyText, notAdmin, showError } from "/static/js/admin-ui.js";
 import { isLastAdmin, keyUsage, scopeText } from "/static/js/keys-logic.js";
+import { formatWhen } from "/static/js/format.js";
 
 let csrf = "";
 let tables = null;
 let usage = new Map();
 let allUsers = [];
 const msg = document.getElementById("msg");
-const when = (ts) => (ts ? new Date(seconds(ts) * 1000).toLocaleString() : "never");
+const when = (ts) => formatWhen(seconds(ts));
 
 async function run(fn, done) {
   msg.textContent = "";

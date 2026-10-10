@@ -9,6 +9,7 @@ import "/static/js/theme.js";
 import { layoutForce } from "/static/js/graph/force.js";
 import { createGraphView, structureKey, mergeLayout } from "/static/js/graph/view.js";
 import { GROUPS, buildGraph, defaultView, viewFromHash } from "/static/js/graph/infra.js";
+import { refreshedText } from "/static/js/format.js";
 
 const LAYER_TITLES = [
   ["core", "Core"], ["distribution", "Distribution"], ["access", "Access"],
@@ -286,7 +287,7 @@ async function refresh() {
     fillDevices(data.nodes);
     fillLinks(data.edges, data.nodes);
     applyView(data);
-    document.getElementById("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;
+    document.getElementById("footer").textContent = refreshedText();
   } catch (e) {
     if (e.message === "not signed in") return;
     document.getElementById("footer").textContent = "observe unreachable, retrying";

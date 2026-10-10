@@ -19,6 +19,7 @@ const DEVICE_STATES = { ONLINE: ["up", "Online"], OFFLINE: ["down", "Offline"],
   UPDATING: ["warn", "Updating"], PENDING_ADOPTION: ["pending", "Pending adoption"] };
 const DASH = "—";
 const DEVICE_PAGES = [25, 50, 100];
+const deviceSeen = (r) => (String(r.state || "").toUpperCase() === "ONLINE" ? r.last_seen : r.online_at || null);
 const CLASSIC_NOTE = "Offline clients, switch ports, VLANs, uptime, bandwidth, Wi-Fi names and the SSID configuration need the optional classic controller account.";
 
 // The SSID filter chosen on the overview bars; it is applied to the clients table. While the
@@ -171,7 +172,10 @@ function devicesView(d) {
         : r.firmware_updatable === false ? statusChip("up", "Up to date") : statusChip("unavailable", "Not reported")) },
     { key: "bw", label: "Bandwidth", get: (r) => (typeof r.rx_bytes === "number" || typeof r.tx_bytes === "number" ? (r.rx_bytes || 0) + (r.tx_bytes || 0) : null),
       render: (r) => (typeof r.rx_bytes === "number" || typeof r.tx_bytes === "number" ? pair(bytesText(r.rx_bytes), bytesText(r.tx_bytes)) : dash()) },
-    { key: "seen", label: "Last seen", get: (r) => r.last_seen, render: (r) => el("span", null, when(r.last_seen)) },
+    // An offline device's last poll says nothing about it; show when it was last online, or
+    // nothing when Observe never saw it online.
+    { key: "seen", label: "Last seen", get: (r) => deviceSeen(r),
+      render: (r) => el("span", null, deviceSeen(r) ? when(deviceSeen(r)) : DASH) },
   ];
   const q = el("input");
   q.type = "search";

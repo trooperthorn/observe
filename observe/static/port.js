@@ -6,6 +6,7 @@ import { statusChip, monoTag } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { toast } from "/static/js/toast.js";
 import { button, card } from "/static/js/admin-ui.js";
+import { refreshedText } from "/static/js/format.js";
 
 const page = document.getElementById("page");
 const params = new URLSearchParams(location.search);
@@ -97,7 +98,7 @@ function render(d) {
     card("Findings", null, findingsBlock(d)),
     card("Current properties", null, props),
     card("Property history", null, history));
-  document.getElementById("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;
+  document.getElementById("footer").textContent = refreshedText();
 }
 
 async function refresh() {

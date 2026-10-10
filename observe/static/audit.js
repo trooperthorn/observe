@@ -5,11 +5,12 @@ import { api, seconds, whoami } from "/static/js/api.js";
 import { statusChip, monoTag } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { notAdmin, showError } from "/static/js/admin-ui.js";
+import { formatWhen } from "/static/js/format.js";
 import { CHIP, GROUPS, actorText, filterRows, httpCode, outcomeOf, outcomeWord }
   from "/static/js/audit-logic.js";
 
 const msg = document.getElementById("msg");
-const when = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : "never");
+const when = (ts) => formatWhen(ts);
 const active = new Set(GROUPS.map(([id]) => id));
 let rows = [];
 

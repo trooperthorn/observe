@@ -6,6 +6,7 @@ import { ApiError, get as apiGet } from "/static/js/api.js";
 import { statusChip, monoTag } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { svg } from "/static/js/dom.js";
+import { refreshedText } from "/static/js/format.js";
 
 const page = document.getElementById("page");
 const footer = document.getElementById("footer");
@@ -357,7 +358,7 @@ async function jackView() {
     await whoami();
     const view = page.dataset.view;
     await (view === "report" ? reportView : view === "jack" ? jackView : listView)();
-    footer.textContent = `refreshed ${new Date().toLocaleTimeString()}`;
+    footer.textContent = refreshedText();
   } catch (_) {
     if (footer.textContent === "") footer.textContent = "observe unreachable";
   }

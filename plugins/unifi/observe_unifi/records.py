@@ -132,6 +132,13 @@ MIGRATIONS = (
   PRIMARY KEY (site_id, wlan_id)
 )""",
     )),
+    # Version 5: when a device was last ONLINE. `last_seen` moves with every poll that lists the
+    # device, offline or not, so it said nothing about an offline device (bug plan WP8). NULL
+    # for a device never seen online; the page then shows no time rather than the poll time.
+    Migration(5, (
+        "ALTER TABLE unifi_devices ADD COLUMN online_at REAL",
+        "UPDATE unifi_devices SET online_at = last_seen WHERE state = 'ONLINE'",
+    )),
 )
 
 
@@ -339,8 +346,8 @@ def write_devices(db: Conn, devices: list[Device], now: float) -> int:
         db.execute(
             """INSERT INTO unifi_devices (site_id, device_id, mac, name, model, state, ip,
                firmware, firmware_updatable, device_type, role, features, rx_bytes, tx_bytes,
-               rx_rate_bps, tx_rate_bps, first_seen, last_seen)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               rx_rate_bps, tx_rate_bps, first_seen, last_seen, online_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT (site_id, device_id) DO UPDATE SET
                mac=excluded.mac, name=excluded.name, model=excluded.model,
                state=excluded.state, ip=excluded.ip, firmware=excluded.firmware,
@@ -348,11 +355,13 @@ def write_devices(db: Conn, devices: list[Device], now: float) -> int:
                device_type=excluded.device_type, role=excluded.role, features=excluded.features,
                rx_bytes=excluded.rx_bytes, tx_bytes=excluded.tx_bytes,
                rx_rate_bps=excluded.rx_rate_bps, tx_rate_bps=excluded.tx_rate_bps,
-               last_seen=excluded.last_seen""",
+               last_seen=excluded.last_seen,
+               online_at=COALESCE(excluded.online_at, unifi_devices.online_at)""",
             (d.site_id, d.device_id, d.mac, d.name, d.model, d.state, d.ip, d.firmware,
              None if d.firmware_updatable is None else int(d.firmware_updatable),
              d.device_type, d.role, json.dumps(list(d.features)) if d.features else "",
-             d.rx_bytes, d.tx_bytes, d.rx_rate_bps, d.tx_rate_bps, now, now))
+             d.rx_bytes, d.tx_bytes, d.rx_rate_bps, d.tx_rate_bps, now, now,
+             now if d.state.upper() == "ONLINE" else None))
     return len(devices)
 
 

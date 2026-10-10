@@ -11,6 +11,7 @@ import { toast } from "/static/js/toast.js";
 import { notAdmin, showError, copyText } from "/static/js/admin-ui.js";
 import { NEEDS_URL, askPublicUrl } from "/static/js/public-url.js";
 import { activeKeysText } from "/static/js/keys-logic.js";
+import { formatWhen } from "/static/js/format.js";
 import {
   validHeader, validService, progressChip, reportChip, noticeFor, guardText,
 } from "/static/js/wizard-logic.js";
@@ -23,7 +24,7 @@ const POLL_MS = 3000;
 const $ = (id) => document.getElementById(id);
 const msg = $("msg");
 const host = hostFromPath(window.location.pathname);
-const when = (ts) => (ts ? new Date(ts * 1000).toLocaleTimeString() : "");
+const when = (ts) => (ts ? formatWhen(ts) : "");
 const hostUrl = (tail) => `/api/hosts/${encodeURIComponent(host)}${tail}`;       // changes
 const hostRead = (tail) => `/api/v2/hosts/${encodeURIComponent(host)}${tail}`;  // reads
 
@@ -53,7 +54,7 @@ function drawIdentity() {
     rows.push(["Platform", s.platform_label]);
     rows.push(["Agent", s.agent_version ? `hostwatch ${s.agent_version}` : (s.agent ? "hostwatch, not reporting yet" : "not chosen")]);
     rows.push(["Control", s.control ? "thermal-control chosen" : "not chosen"]);
-    rows.push(["Added", `${new Date(s.created * 1000).toLocaleString()}${s.created_by ? ` by ${s.created_by}` : ""}`]);
+    rows.push(["Added", `${formatWhen(s.created)}${s.created_by ? ` by ${s.created_by}` : ""}`]);
     rows.push(["Install command", s.installed ? "has been run" : "not run yet"]);
   } else {
     rows.push(["Agent", s.agent_version ? `hostwatch ${s.agent_version}` : "unknown"]);

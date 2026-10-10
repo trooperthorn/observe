@@ -663,3 +663,19 @@ def test_devices_poll_reads_uplinks_from_the_device_detail_and_draws_links(tmp_p
     assert len(links) == 3 and {s for _, _, s in links} == {"config"}
     edges = table(env, "SELECT a, b FROM map_edges")
     assert len(edges) == 3
+
+
+def test_offline_device_keeps_when_it_was_last_online_not_the_poll_time(tmp_path):
+    """Bug plan WP8: an offline device showed 'Last seen' equal to the poll time."""
+    console = Full([], devices=[device(1), device(2, state="OFFLINE")])
+    env = env_with(tmp_path, console)
+    run(env.plugin.collect_devices(env.store))
+    first = dict(table(env, "SELECT device_id, online_at FROM unifi_devices"))
+    assert first["dev-1"] == env.now and first["dev-2"] is None
+    console.devices[0]["state"] = "OFFLINE"
+    env.now += 600
+    env.plugin.wall = lambda: env.now
+    run(env.plugin.collect_devices(env.store))
+    rows = {r[0]: r[1:] for r in table(env, "SELECT device_id, online_at, last_seen FROM unifi_devices")}
+    assert rows["dev-1"] == (env.now - 600, env.now)  # last online before, listed now
+    assert rows["dev-2"][0] is None

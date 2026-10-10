@@ -5,7 +5,7 @@ import { el } from "/static/js/dom.js";
 import { statusChip } from "/static/js/chips.js";
 import { api, get, poller, whoami } from "/static/js/api.js";
 import { toast } from "/static/js/toast.js";
-import { formatValue } from "/static/js/format.js";
+import { formatValue, formatWhen, readingText, refreshedText } from "/static/js/format.js";
 
 const SECTIONS = [
   ["cpu", "CPU"], ["memory", "Memory"], ["power", "Power"], ["temperatures", "Temperatures"],
@@ -41,12 +41,11 @@ function ago(s) {
 }
 
 function fmtTime(ts) {
-  return new Date((typeof ts === "number" ? ts : Date.parse(ts) / 1000) * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
+  return formatWhen(ts);
 }
 
 function fmtValue(i) {
-  if (i.value == null) return "no value";
-  return formatValue(i.value, i.unit);
+  return readingText(i);
 }
 
 function labelText(labels) {
@@ -290,7 +289,7 @@ function render(h) {
   ev.append(h.events.length ? eventsList(h.events) : el("p", "card-sub", "No events reported."));
   frag.append(ev, sourcesTable(h.sources));
   page.replaceChildren(frag);
-  document.getElementById("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;
+  document.getElementById("footer").textContent = refreshedText();
 }
 
 // The poller waits for a refresh to finish before it plans the next one, and runs again when the

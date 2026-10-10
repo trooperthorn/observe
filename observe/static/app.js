@@ -8,7 +8,7 @@ import { stateInfo } from "/static/js/chip-states.js";
 import { applyLayout, initTiles, setDeclared } from "/static/js/tiles.js";
 import { groupTile } from "/static/js/tiles-logic.js";
 import { getAll, get, poller, seconds } from "/static/js/api.js";
-import { eventText, monitorReading } from "/static/js/format.js";
+import { eventText, formatWhen, monitorReading, refreshedText } from "/static/js/format.js";
 import { downTileLabel } from "/static/js/hosts-logic.js";
 
 const ORDER = { down: 0, unreachable: 1, warn: 2, pending: 3, up: 4 };
@@ -47,7 +47,7 @@ function ago(ts) {
 }
 
 function fmtTime(ts) {
-  return new Date(seconds(ts) * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
+  return formatWhen(seconds(ts));
 }
 
 const fmtVal = monitorReading;
@@ -275,7 +275,7 @@ function drawDashboard(data) {
 
   const bad = Object.entries(data.alerts).filter(([, a]) => a.last_error);
   document.getElementById("footer").textContent =
-    `observe ${data.version} · refreshed ${new Date().toLocaleTimeString()}` +
+    `observe ${data.version} · ${refreshedText()}` +
     (bad.length ? ` · alert delivery failing: ${bad.map(([n, a]) => `${n} (${a.last_error})`).join("; ")}` : "");
 }
 

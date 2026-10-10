@@ -8,10 +8,11 @@ import { statusChip } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { notAdmin } from "/static/js/admin-ui.js";
 import { backendText, levelName, rollupText } from "/static/js/admin-settings-logic.js";
+import { formatWhen, refreshedText } from "/static/js/format.js";
 
 const when = (ts) => {
   const s = seconds(ts);
-  return s ? new Date(s * 1000).toLocaleString() : "never";
+  return formatWhen(s);
 };
 
 function drawLevels(levels) {
@@ -42,7 +43,7 @@ async function refresh() {
   document.getElementById("rollup-line").textContent = rollupText(status);
   drawLevels(status.levels);
   drawSeqs(status.change_seqs);
-  document.getElementById("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;
+  document.getElementById("footer").textContent = refreshedText();
 }
 
 (async () => {

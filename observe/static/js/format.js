@@ -83,9 +83,41 @@ export function formatValue(value, unit) {
     return `${i ? round(x) : plain(x)} ${SI[i]}${u}`;
   }
   if (u === "s") return duration(value);
+  if (Object.prototype.hasOwnProperty.call(UNIT_WORDS, u)) {
+    const w = UNIT_WORDS[u];
+    return w ? `${plain(value)}${w.startsWith("°") ? "" : " "}${w}` : plain(value);
+  }
   const note = /^\{([^{}]*)\}$/.exec(u);
   if (note) return counted(value, note[1]);
   return `${plain(value)}${u ? " " + u : ""}`;
+}
+
+// UCUM codes the agents send that read badly as they are: Cel is a temperature, {rpm} a fan
+// speed, and {thread}, {count} and {reason} only say the number is a count (a load average or
+// a number of things), which the reading's name already tells.
+const UNIT_WORDS = {
+  Cel: "°C", "{rpm}": "RPM", "{thread}": "", "{count}": "", "{reason}": "", W: "W", V: "V",
+};
+
+// Gauges that say which state a thing is in, one point per state: 1 means "in this state". They
+// carry the unit "1", so formatValue would print "100 %". Each names the attribute that holds the
+// state word.
+const STATE_GAUGES = {
+  "hw.status": "hw.state", "observe.thermal.mode": "observe.thermal.mode",
+  "observe.ups.status": "observe.ups.flag", "observe.mdraid.sync_action": "observe.mdraid.action",
+};
+
+// The value cell of one host reading: a state gauge as its state word, else the value with its
+// unit in words.
+export function readingText(item) {
+  if (!item || item.value == null) return "no value";
+  const key = STATE_GAUGES[item.metric];
+  if (key) {
+    const state = item.labels && item.labels[key];
+    if (state) return item.value ? state : `not ${state}`;
+    return item.value ? "yes" : "no";
+  }
+  return formatValue(item.value, item.unit);
 }
 
 // Monitor results store units such as " ms" and " days" with a leading space, and "%" or none.
@@ -122,4 +154,22 @@ export function eventText(e, names) {
     return `${who}: ${from} → ${to} (${e.body})`;
   }
   return `${who}: ${e.event_name} (${e.body})`;
+}
+
+// The one date and time format of the console: "Oct 10, 2026, 2:33:05 PM" in the reader's locale,
+// with the year, so no page writes 10/10/26 while another writes 10/10/2026 or the time alone.
+// `ts` is unix seconds, an RFC 3339 string or a Date; nothing is "never".
+const WHEN = { dateStyle: "medium", timeStyle: "medium" };
+
+export function formatWhen(ts, locale = []) {
+  if (ts === null || ts === undefined || ts === "" || ts === 0) return "never";
+  const ms = ts instanceof Date ? ts.getTime()
+    : typeof ts === "number" ? ts * 1000 : Date.parse(ts);
+  if (!Number.isFinite(ms)) return "never";
+  return new Date(ms).toLocaleString(locale, WHEN);
+}
+
+// The "refreshed ..." footer line, in the same format.
+export function refreshedText(now = new Date()) {
+  return `refreshed ${formatWhen(now)}`;
 }

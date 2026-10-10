@@ -7,6 +7,7 @@ import { get, getAll, poller, whoami } from "/static/js/api.js";
 import { statusChip, neutralChip } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { STATUS_STATE, ageText, filterRows, hostRows, summaryText } from "/static/js/hosts-logic.js";
+import { refreshedText } from "/static/js/format.js";
 
 const summary = document.getElementById("hosts-summary");
 const footer = document.getElementById("footer");
@@ -102,7 +103,7 @@ async function refresh() {
       getAll("/api/v2/hosts"), get("/api/v2/waiting-hosts")]);
     rows = hostRows(hosts, waiting.items);
     draw();
-    footer.textContent = `refreshed ${new Date().toLocaleTimeString()}`;
+    footer.textContent = refreshedText();
   } catch (e) {
     if (e.status === 401) return;  // the client is already sending the visitor to sign in
     footer.textContent = "observe unreachable, retrying";

@@ -7,6 +7,7 @@ import { statusChip } from "/static/js/chips.js";
 import { notAdmin, showError, copyText } from "/static/js/admin-ui.js";
 import { confirmDialog } from "/static/js/dialog.js";
 import { NEEDS_URL, askPublicUrl } from "/static/js/public-url.js";
+import { formatWhen } from "/static/js/format.js";
 import {
   STEPS, controlBlock, defaultFans, defaultServices, platformNote, validName,
   validHeader, validService, buildBody, stepAnnouncement, stepFromHash, progressChip, reportChip, hostHref,
@@ -16,7 +17,7 @@ import {
 const POLL_MS = 3000;
 const $ = (id) => document.getElementById(id);
 const msg = $("msg");
-const when = (ts) => (ts ? new Date(ts * 1000).toLocaleTimeString() : "");
+const when = (ts) => (ts ? formatWhen(ts) : "");
 
 let csrf = "";
 let known = new Set();

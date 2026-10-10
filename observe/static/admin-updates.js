@@ -14,6 +14,7 @@ import { sortableTable } from "/static/js/table.js";
 import { notAdmin, showError } from "/static/js/admin-ui.js";
 import { hostHref } from "/static/js/wizard-logic.js";
 import { settingsHref } from "/static/js/settings-logic.js";
+import { refreshedText } from "/static/js/format.js";
 import {
   agentRowState, overallChip, phaseChips, polling, pullAgeText, updateAllSummary, updateResultText,
   upstreamText, versionChanged,
@@ -54,7 +55,7 @@ let fast = false;
 async function refreshStatus() {
   const status = await get("/api/v2/updates/status");
   drawStatus(status);
-  $("footer").textContent = `refreshed ${new Date().toLocaleTimeString()}`;
+  $("footer").textContent = refreshedText();
   const wantFast = polling(status);
   if (wantFast !== fast) {
     fast = wantFast;

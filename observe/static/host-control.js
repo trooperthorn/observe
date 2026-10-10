@@ -7,6 +7,7 @@ import { statusChip } from "/static/js/chips.js";
 import { confirmDialog, typedConfirm } from "/static/js/dialog.js";
 import { toast } from "/static/js/toast.js";
 import { updateResultText } from "/static/js/updates-logic.js";
+import { formatWhen } from "/static/js/format.js";
 
 const ctlBox = document.getElementById("control");
 const ctlHost = (location.pathname.startsWith("/hosts/")
@@ -182,7 +183,7 @@ function historyTable(commands) {
   t.append(head);
   for (const c of commands) {
     const r = cel("tr");
-    r.append(cel("td", null, new Date(seconds(c.issued_at) * 1000).toLocaleString()),
+    r.append(cel("td", null, formatWhen(seconds(c.issued_at))),
       cel("td", null, describe(c.action, c.params)), cel("td", null, c.requested_by));
     const st = cel("td");
     st.append(statusChip(STATE_CHIP[c.state] || "pending", c.state));
