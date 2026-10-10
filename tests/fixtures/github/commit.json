@@ -1,0 +1,10 @@
+{
+  "sha": "9f2c1d0e8b7a6c5d4e3f2a1b0c9d8e7f6a5b4c3d",
+  "node_id": "C_kwDOExample",
+  "commit": {
+    "author": {"name": "Sean", "email": "sean@example.invalid", "date": "2026-10-09T18:12:44Z"},
+    "message": "Add a Hosts list page at /hosts"
+  },
+  "html_url": "https://github.com/trooperthorn/observe/commit/9f2c1d0e8b7a6c5d4e3f2a1b0c9d8e7f6a5b4c3d",
+  "parents": [{"sha": "2daaa87a1b2c3d4e5f60718293a4b5c6d7e8f901"}]
+}

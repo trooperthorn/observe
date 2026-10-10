@@ -1,6 +1,12 @@
 services:
   observe:
-    build: .
+    build:
+      context: .
+      args:
+        # The commit shown on the Updates page. Set OBSERVE_GIT_COMMIT in .env or run
+        # `OBSERVE_GIT_COMMIT=$(git rev-parse HEAD) docker compose build`; the update helper
+        # passes it for you. Unset, the page shows "unknown".
+        OBSERVE_GIT_COMMIT: ${OBSERVE_GIT_COMMIT:-unknown}
     image: observe:local
     container_name: observe
     restart: unless-stopped

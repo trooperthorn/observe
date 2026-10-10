@@ -40,6 +40,15 @@ server:
   # api_rate_per_second: 20   # requests per second per login, token or (anonymous) peer
   # api_burst: 40
   # api_auth_cache_s: 5       # a revoked login or token stops working within this many seconds
+  # The Updates page (/admin/updates, README "Updating"). update_check lets Observe ask the
+  # GitHub API, at most once an hour, for the newest commit on main and the latest release of
+  # github.com/trooperthorn/observe. The request carries nothing but the repository path,
+  # times out in 10 s, follows no redirect and reads at most 1 MB; a failure shows as
+  # "could not check". Off by default: it is the one outbound request that is not to a
+  # device you monitor. update_dir is where the Update button writes its request for the host
+  # helper (scripts/install-updater.sh) and where the helper reports progress.
+  # update_check: false
+  # update_dir: /data/update
   # Logins (create the first admin with --create-admin). Defaults shown.
   # session_idle_s: 1800
   # session_absolute_s: 43200

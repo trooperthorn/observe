@@ -44,6 +44,7 @@ from ..ingest.api import DenialAggregator
 from ..storage.base import CHANGE_DOMAINS, StorageBusy, StorageTimeout, not_retryable
 from ..store import Store
 from . import cursor as cursor_mod
+from ..updates import GitHubCheck
 from .principals import RANK, Authenticator, Principal, csrf_ok
 from .problems import ApiProblem, new_request_id
 from .ratelimit import TokenBucket
@@ -142,6 +143,9 @@ class ApiRuntime:
         # far, and the infrastructure services the map and port resources read through.
         self.resources: list[Any] = []
         self.infra: Any = None
+        # The hourly upstream check of the Updates page (observe/updates.py), on only when
+        # server.update_check is set.
+        self.update_check = GitHubCheck(s.update_check)
 
     async def denied(self, request: Request, status: int, reason: str,
                      principal: Principal | None = None) -> None:

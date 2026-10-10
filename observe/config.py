@@ -783,6 +783,14 @@ class ServerConfig(Strict):
     # How long a session or token lookup is remembered, so an unchanged page can be answered
     # with a 304 without a database read. A revoked session or token stops working within this.
     api_auth_cache_s: float = Field(default=5.0, ge=0, le=60)
+    # The Updates page (README "Updating"). update_check lets Observe ask the GitHub API, at
+    # most once an hour, for the newest commit on origin/main and the latest release tag of the
+    # upstream repository; the request carries nothing but the repository path. Off by default
+    # because it is the one outbound request Observe makes that is not to a monitored device.
+    # update_dir is where the Update button writes its request and the host-side helper writes
+    # its progress (the `update` folder of the data volume).
+    update_check: bool = False
+    update_dir: str = "/data/update"
 
     @field_validator("public_url")
     @classmethod

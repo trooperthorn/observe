@@ -38,7 +38,7 @@ from . import api as apimod
 from . import audit
 from . import auth as authmod
 from . import (enrol, hosttasks, layout, recheck_settings, retention, rules, scripts, taskscripts,
-               tiers)
+               tiers, updates)
 from .alerts import Alerter
 from .config import Config
 from .infra import InfraError, InfraService
@@ -733,6 +733,47 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     async def admin_storage_page() -> FileResponse:
         # The page holds no data; it reads and writes through /api/v2 with an admin session.
         return FileResponse(STATIC / "admin-storage.html")
+
+    @app.post("/api/admin/updates/observe", include_in_schema=False)
+    async def request_observe_update(
+            request: Request, sess: authmod.Session = Depends(guards.admin_mutating)) -> Response:
+        """Ask the host helper to update Observe to origin/main (README "Updating"). The body
+        is `{"confirmed": true, "confirm_text": "update"}`: the dialog's Confirm button sends
+        both, and the typed word is checked again here. Writes `request.json` into
+        `server.update_dir` with mode 0600 and answers 202; a request that is still open is
+        409. Admin session and CSRF. Audited as `update_requested` or `update_request_failed`."""
+        remote = request.client.host if request.client else ""
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+
+        async def refused(status: int, reason: str) -> JSONResponse:
+            await audit.record(store, "update_request_failed", actor=sess.username, method="POST",
+                               path="/api/admin/updates/observe", status=status, remote=remote,
+                               detail={"reason": reason})
+            return JSONResponse({"detail": reason}, status_code=status)
+
+        if body.get("confirmed") is not True:
+            return await refused(400, "the request was not confirmed")
+        if body.get("confirm_text") != "update":
+            return await refused(400, "type the word update to confirm")
+        now = auth_clock()
+        try:
+            made = updates.write_request(config.server.update_dir, sess.username, now)
+        except updates.UpdateOpen as err:
+            return await refused(409, str(err))
+        except updates.UpdateError as err:
+            return await refused(500, str(err))
+        await audit.record(store, "update_requested", actor=sess.username, method="POST",
+                           path="/api/admin/updates/observe", status=202, remote=remote,
+                           detail={"request_id": made["id"], "target": made["target"],
+                                   "version": __version__, "commit": updates.git_commit()})
+        return JSONResponse({"id": made["id"], "target": made["target"],
+                             "requested_at": made["requested_at"], "state": "requested"},
+                            status_code=202)
 
     @app.get("/audit", include_in_schema=False)
     async def audit_page() -> FileResponse:

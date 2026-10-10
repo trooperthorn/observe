@@ -13,7 +13,8 @@ from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
-from . import admin, changes, console, events, ha, hosts, metrics, monitors, network, problems
+from . import (admin, changes, console, events, ha, hosts, metrics, monitors, network, problems,
+               updates)
 from .registry import (ApiContext, ApiRegistry, ApiRuntime, CachedBody, NotModified,
                        on_cached, on_not_modified)
 
@@ -69,6 +70,7 @@ def build(runtime: ApiRuntime) -> tuple[FastAPI, ApiRegistry]:
     network.register(registry)
     ha.register(registry)
     admin.register(registry)
+    updates.register(registry)
     runtime.resources = registry.resources
 
     @app.get("/openapi.json", include_in_schema=False)
