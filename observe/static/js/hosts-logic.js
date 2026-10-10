@@ -79,3 +79,22 @@ export function summaryText(rows) {
   if (waiting) parts.push(`${waiting} waiting for first data`);
   return parts.join(", ");
 }
+
+// "1 host", "3 hosts": a count with its noun.
+export function plural(n, noun) {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+// How many hosts the Hosts list shows as Down: the same verdict (status critical) the list,
+// the host page and the pushed_host monitor all read.
+export function downHostCount(hosts) {
+  return (hosts || []).filter((h) => h.status === "critical").length;
+}
+
+// The sub-label of the dashboard's Down tile. `hosts` is the Hosts list, or null when this
+// viewer may not read it; the count then falls back to Down pushed_host monitors.
+export function downTileLabel(hosts, monitors) {
+  const n = hosts ? downHostCount(hosts)
+    : (monitors || []).filter((m) => m.effective_state === "down" && m.type === "pushed_host").length;
+  return n ? `${plural(n, "host")} down` : "";
+}

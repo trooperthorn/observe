@@ -117,11 +117,11 @@ export async function get(path, params, { signal, redirect = true } = {}) {
 }
 
 // Every item of a list, 500 at a time.
-export async function getAll(path, limit = 500, params = {}) {
+export async function getAll(path, limit = 500, params = {}, opts = {}) {
   const items = [];
   let cursor = null;
   do {
-    const page = await get(path, { ...params, limit, cursor });
+    const page = await get(path, { ...params, limit, cursor }, opts);
     items.push(...page.items);
     cursor = page.next_cursor;
   } while (cursor);

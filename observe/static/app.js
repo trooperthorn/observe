@@ -9,6 +9,7 @@ import { applyLayout, initTiles, setDeclared } from "/static/js/tiles.js";
 import { groupTile } from "/static/js/tiles-logic.js";
 import { getAll, get, poller, seconds } from "/static/js/api.js";
 import { formatReading } from "/static/js/format.js";
+import { downTileLabel } from "/static/js/hosts-logic.js";
 
 const ORDER = { down: 0, unreachable: 1, warn: 2, pending: 3, up: 4 };
 const expanded = new Set();
@@ -203,9 +204,8 @@ function drawDashboard(data) {
   const week = Date.now() / 1000 + 7 * 86400;
   const soon = forecasts.filter((m) =>
     Math.min(m.forecast.crit_at ?? Infinity, m.forecast.warn_at ?? Infinity) <= week).length;
-  const downHosts = data.monitors.filter((m) => m.effective_state === "down" && m.type === "pushed_host").length;
   setKpi("kpi-monitors", data.monitors.length, `${groups.size} groups`);
-  setKpi("kpi-down", counts.down, downHosts ? `${downHosts} hosts` : "", counts.down > 0);
+  setKpi("kpi-down", counts.down, downTileLabel(data.hosts, data.monitors), counts.down > 0);
   setKpi("kpi-warn", counts.warn, counts.unreachable ? `${counts.unreachable} unreachable` : "");
   setKpi("kpi-capacity", soon, `full within 7 days, ${forecasts.length} forecasts`);
   document.getElementById("tiles").replaceChildren(...[
@@ -333,11 +333,13 @@ async function renderWaiting() {
 // not given a growing queue of overlapping requests. It runs again when a domain it reads moves.
 async function refresh() {
   try {
-    const [monitors, groups, status] = await Promise.all([
+    const [monitors, groups, status, hosts] = await Promise.all([
       getAll("/api/v2/monitors"), getAll("/api/v2/groups"), get("/api/v2/status"),
+      // The Hosts list needs a session; an anonymous viewer gets the monitor count instead.
+      getAll("/api/v2/hosts", 500, {}, { redirect: false }).catch(() => null),
     ]);
     lastData = {
-      version: status.version, monitors,
+      version: status.version, monitors, hosts,
       groups: Object.fromEntries(groups.map((g) => [g.name, g])),
       alerts: Object.fromEntries(status.alerts.map((a) => [a.name, a])),
     };

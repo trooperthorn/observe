@@ -84,7 +84,7 @@ def test_states_map_to_samples_and_grades():
                 **{"container.name": "home_assistant_core"})["status"] == "good"
     unknown = item(v, "containers", "container.cpu.utilization",
                    **{"container.name": "home_assistant_supervisor"})
-    assert unknown["value"] is None and unknown["status"] == "warning"  # never zero
+    assert unknown["value"] is None and unknown["status"] == "no_data"  # never zero
     assert item(v, "disks", "system.filesystem.utilization")["value"] == 0.2
     assert item(v, "disks", "system.filesystem.usage",
                 **{"system.filesystem.state": "free"})["value"] == 80e9

@@ -57,6 +57,23 @@ class HostViews:
                                    < ctx.config.effective(cur, "interval")):
                     self.snmp_hosts[m.host_name] = m
 
+    def overrides(self, host: str) -> dict[tuple[str, str], Any]:
+        """Thresholds that replace the built-in ones on this host's page. A pushed_host monitor's
+        components apply to its own readings. A Home Assistant monitor in `unavailable` mode on
+        the same instance sets the limits of the unavailable-entity count, so the host page grades
+        the same crossing with the same severity the dashboard does."""
+        mon = self.pushed.get(host)
+        out: dict[tuple[str, str], Any] = {(c.source, c.metric): c for c in mon.components} \
+            if mon else {}
+        ha = self.ha_hosts.get(host)
+        if ha is not None:
+            for m in self.ctx.scheduler.monitors:
+                if (m.type == "homeassistant" and m.mode == "unavailable" and m.enabled
+                        and m.thresholds is not None and (m.host, m.port) == (ha.host, ha.port)):
+                    out[(hostview.HA_POLL, "observe.ha.entity.unavailable")] = m.thresholds
+                    break
+        return out
+
     def names(self, rows: dict[str, dict[str, Any]]) -> list[str]:
         return sorted({*rows, *self.pushed, *self.ha_hosts, *self.snmp_hosts})
 
@@ -114,7 +131,7 @@ class HostViews:
             data = await store.latest_host(
                 host, window=max(stale_after.longest, LATEST_WINDOW_S), now=now,
                 series=tuple((c.source, c.metric) for c in mon.components) if mon else ())
-        overrides = {(c.source, c.metric): c for c in mon.components} if mon else {}
+        overrides = self.overrides(host)
         return hostview.build_host_view(
             row, data, await store.host_sources(host),
             await store.host_events(host, limit=50), now, stale_after, mon, overrides,
@@ -147,7 +164,7 @@ class HostViews:
                     continue
             got = found.get(name)
             data = {"samples": got["samples"]} if got is not None and name in rows else None
-            overrides = {(c.source, c.metric): c for c in mon.components} if mon else {}
+            overrides = self.overrides(name)
             out.append(hostview.build_host_view(
                 row, data, got["sources"] if got else {}, got["events"] if got else [], now,
                 windows[name], mon, overrides, self._monitor_state(mon)))

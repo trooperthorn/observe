@@ -4,7 +4,8 @@ The grouping and the section names follow hostwatch/integrations/summary.py
 (hostwatch, same owner), adapted: Observe reads its own store, and every
 reading is graded Good, Warning or Critical here. Nothing is guessed:
 
-- A reading with no value this cycle is a Warning, never zero.
+- A reading with no value this cycle is "no data", never zero and never a
+  breach: it claims nothing, so it does not make the host look worse.
 - A reading, a source, or a whole host that has not reported within the stale
   window is marked stale and is at least a Warning. A reading's window comes from
   the polling tier its collector runs in (observe/tiers.py), so a reading polled
@@ -29,13 +30,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from .checks.host import CRITICAL, GOOD, WARNING, grade
+from .checks.host import CRITICAL, GOOD, STALE, WARNING, grade, grade_components
 from .config import Thresholds
 from .tiers import Staleness
 from .otelnames import HA_SOC_PREFIX, RETIRED_SOURCES, collector_scope, short_source
 from .store import ABSENT_REASON
 
-_RANK = {GOOD: 0, WARNING: 1, CRITICAL: 2}
+NO_DATA = "no_data"  # a reading or section with nothing to grade; ranks below Good
+_RANK = {NO_DATA: -1, GOOD: 0, WARNING: 1, CRITICAL: 2}
 UTILIZATION = "system.memory.utilization"  # the computed memory ratio of the memory section
 ALERT_WINDOW_S = 86400.0
 HA_UNAVAILABLE_WARN = 25  # unavailable entities at or above this make the HA section Warning
@@ -351,6 +353,9 @@ RULES: dict[str, dict[tuple[str, str], Grader]] = {
 }
 SECTIONS = ("cpu", "memory", "power", "temperatures", "fans", "raid", "zfs", "disks", "ups",
             "ha", "containers", "integrations", "repairs", "backups", "network")
+# Everything a host's one verdict is the worst of. The pushed_host check, the Hosts list, the host
+# page and its header all read that verdict (`status`, `status_reason`), never their own.
+VERDICT = (*SECTIONS, "components", "alerts")
 
 
 def _sources_of(section: str) -> list[str]:
@@ -392,7 +397,7 @@ def _item(rule: Grader, override: Thresholds | None, s: dict[str, Any], now: flo
     labels = s["labels"]
     reasons: list[str] = []
     if s["value"] is None:
-        level = WARNING
+        level = NO_DATA
         reasons.append("no value this cycle")
     else:
         level, why = rule(s["value"], labels)
@@ -483,9 +488,30 @@ def _memory_extra(sec: dict[str, Any], overrides: dict[tuple[str, str], Threshol
     sec["status"] = worst([sec["status"], level])
 
 
-def _alerts(events: list[dict[str, Any]], now: float) -> dict[str, Any]:
+def _components(monitor: Any | None, row: dict[str, Any], samples: list[dict[str, Any]],
+                sources: dict[str, dict[str, Any]], windows: Staleness, now: float
+                ) -> dict[str, Any]:
+    """What the pushed_host monitor's YAML adds: its configured components, required sources and
+    crash hold, graded by the same function the check uses. Empty for a host with no monitor."""
+    if getattr(monitor, "type", None) != "pushed_host":
+        return {"status": GOOD, "state": "ok", "note": "", "items": [], "levels": {}}
+    levels, reasons = grade_components(monitor, samples, sources, windows, now,
+                                       row.get("boot_ts"), row.get("clean_shutdown"))
+    items = [{"name": n, "status": CRITICAL if lvl == STALE else lvl, "stale": lvl == STALE,
+              "reason": reasons.get(n, "")} for n, lvl in sorted(levels.items())]
+    return {"status": worst([i["status"] for i in items]), "state": "ok",
+            "note": "the components the monitor lists", "items": items, "levels": levels}
+
+
+def _alerts(events: list[dict[str, Any]], now: float,
+            monitor: Any | None = None) -> dict[str, Any]:
+    """Warning and critical events of the last day. For a host listed as a pushed_host monitor a
+    boot classification is left to the monitor's crash hold (`crash_hold_s`, `crash_result`,
+    graded under `components`), so a crash counts for as long, and as badly, as the YAML says."""
+    crash_policy = getattr(monitor, "type", None) == "pushed_host"
     recent = [e for e in events if e["severity"] in ("warning", "critical")
-              and now - e["ts"] <= ALERT_WINDOW_S]
+              and now - e["ts"] <= ALERT_WINDOW_S
+              and not (crash_policy and str(e.get("kind", "")).startswith("boot."))]
     level = worst([CRITICAL if e["severity"] == "critical" else WARNING for e in recent])
     return {"status": level, "state": "ok", "note": f"warning and critical events in the last "
             f"{int(ALERT_WINDOW_S // 3600)}h", "items": recent}
@@ -519,10 +545,11 @@ def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
     for name in SECTIONS:
         out[name] = _section(name, samples, sources, overrides, now, windows, host_stale)
     _memory_extra(out["memory"], overrides)
-    out["alerts"] = _alerts(events, now)
+    out["components"] = _components(monitor, row, samples, sources, windows, now)
+    out["alerts"] = _alerts(events, now, monitor)
     out["events"] = events
     out["sources"] = source_views(sources, now, windows)
-    levels = [out[n]["status"] for n in (*SECTIONS, "alerts")]
+    levels = [out[n]["status"] for n in VERDICT]
     if host_stale:
         out["status"] = CRITICAL
         out["status_reason"] = "no batch received yet" if not heard else \
@@ -536,8 +563,8 @@ def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
 def _cause(view: dict[str, Any]) -> str:
     """Why a host that is not stale is not good: the section and the first item that carry the
     worst level, so a warning or critical summary always names its cause."""
-    top = worst([view[n]["status"] for n in (*SECTIONS, "alerts")])
-    for name in (*SECTIONS, "alerts"):
+    top = worst([view[n]["status"] for n in VERDICT])
+    for name in VERDICT:
         sec = view[name]
         if sec["status"] != top:
             continue
@@ -545,6 +572,9 @@ def _cause(view: dict[str, Any]) -> str:
             if name == "alerts":
                 if item.get("severity") == ("critical" if top == CRITICAL else "warning"):
                     return f"alerts: {item.get('title', '')}"[:240]
+            elif name == "components":
+                if item["status"] == top and item["reason"]:
+                    return f"{item['name']}: {item['reason']}"[:240]
             elif item["status"] == top and item["reason"]:
                 label = f"{item['source']} {item['metric']}"
                 return f"{name}: {label}: {item['reason']}"[:240]
@@ -560,5 +590,7 @@ def summarize(view: dict[str, Any]) -> dict[str, Any]:
             "confirmed", "monitored", "monitor", "status", "status_reason")
     out = {k: view[k] for k in keys}
     out["sections"] = {n: view[n]["status"] for n in (*SECTIONS, "alerts")}
+    if view["components"]["items"]:
+        out["sections"]["components"] = view["components"]["status"]
     out["states"] = {n: view[n]["state"] for n in SECTIONS}
     return out

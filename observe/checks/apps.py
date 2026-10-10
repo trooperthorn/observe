@@ -28,6 +28,7 @@ from typing import Any
 import httpx
 
 from ..httpclient import http_client
+from ..portkey import mac_digits
 from . import ha_host
 from .base import Check, CheckResult, Result
 from .platforms import AuthFailed, http_api_context, pct
@@ -270,7 +271,12 @@ class UniFiNetworkCheck(_UniFiCheck):
             msg = f"{len(considered) - len(down)}/{len(considered)} devices online"
             if down:
                 msg += "; not online: " + ", ".join(down)
-            res = CheckResult.ok(msg, value=float(len(down)), detail={"not_online": down})
+            # The state of each device, so a map node linked to this aggregate monitor shows its
+            # own device's state, not the monitor's (observe/infra_map.py).
+            each = [{"name": d.get("name"), "mac": mac_digits(str(d.get("macAddress") or "")),
+                     "state": d.get("state")} for d in considered]
+            res = CheckResult.ok(msg, value=float(len(down)),
+                                 detail={"not_online": down, "devices": each})
             if down and m.thresholds is None:
                 res.result = Result.FAIL
             return res

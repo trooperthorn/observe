@@ -3,7 +3,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  STATUS_STATE, ageText, filterRows, hostRow, hostRows, summaryText, waitingRow,
+  STATUS_STATE, ageText, downTileLabel, filterRows, hostRow, hostRows, plural, summaryText,
+  waitingRow,
 } from "../../observe/static/js/hosts-logic.js";
 
 const nas = { host: "nas01", platform: "linux", agent_version: "0.9.0", heard: true, age_seconds: 12,
@@ -72,4 +73,18 @@ test("summaryText counts hosts, attention and waiting", () => {
   assert.equal(summaryText(hostRows([nas], [])), "1 host");
   assert.equal(summaryText(hostRows([nas, stray, silent], [waiting])),
     "4 hosts, 2 need attention, 1 waiting for first data");
+});
+
+test("the dashboard Down tile counts what the Hosts list calls Down", () => {
+  const hosts = [nas, silent, stray, { ...silent, host: "b" }, { ...silent, host: "c" }];
+  // Nine Down monitors, one of them a pushed host: the Hosts list still decides.
+  const monitors = [...Array(8)].map(() => ({ effective_state: "down", type: "ping" }))
+    .concat([{ effective_state: "down", type: "pushed_host" }]);
+  assert.equal(downTileLabel(hosts, monitors), "3 hosts down");
+  assert.equal(downTileLabel([silent], monitors), "1 host down");
+  assert.equal(downTileLabel([nas], monitors), "");
+  // A viewer who may not read the Hosts list sees the pushed_host monitors.
+  assert.equal(downTileLabel(null, monitors), "1 host down");
+  assert.equal(plural(1, "host"), "1 host");
+  assert.equal(plural(2, "host"), "2 hosts");
 });

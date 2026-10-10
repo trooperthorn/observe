@@ -110,6 +110,10 @@ async def test_unifi_devices_summary_pages_and_ignore(unifi):
     assert ok.result is Result.OK and "3/3" in ok.message
     srv, _ = unifi
     assert any("offset=2" in p for p, _ in srv.seen)          # second page was requested
+    # Each device's own state is in the detail, for map nodes linked to this aggregate monitor.
+    states = {d["name"]: d["state"] for d in res.detail["devices"]}
+    assert len(states) == 4 and states["Remote Flex"] != "ONLINE"
+    assert sum(1 for v in states.values() if v == "ONLINE") == 3
 
 
 async def test_unifi_device_modes(unifi):

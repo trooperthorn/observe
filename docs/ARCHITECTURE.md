@@ -862,7 +862,12 @@ Missing data is shown, not hidden. Each section has a `state`: `ok`, `stale`
 source reported a failure, with its reason), `absent` (the agent says the host
 has no such hardware) or `not_reported` (no source for it ever reported). Stale
 and unavailable make the section at least Warning; absent and not_reported claim
-nothing and stay Good. A reading with no value is a Warning and never zero. A
+nothing and stay Good. A reading with no value is "no data": never zero and never a
+breach. A host has one verdict (`status`, `status_reason`), the worst of its sections, the
+components its pushed_host monitor lists (graded by `checks/host.grade_components`) and its
+alerts; the pushed_host check maps that verdict to its result, so the dashboard card, the Hosts
+list, the host page and its header chip cannot disagree. For a pushed_host monitor a boot
+classification counts through the monitor's crash hold, not the 24 hour alerts window. A
 host with no batch inside its stale window is Critical, matching the monitor.
 The host's silence limit is the monitor's `stale_after`, else the larger of three
 intervals (the default interval for a host that is not listed) and 2.5 times its

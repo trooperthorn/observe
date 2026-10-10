@@ -608,7 +608,21 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
     def state_of(slug: str) -> tuple[str, str | None] | None:
         return scheduler.rollup.effective(slug) if slug in scheduler.states else None
 
-    mapper = MapService(config, infra, matcher, state_of, map_clock, live_port)
+    def device_state_of(slug: str, mac: str | None, name: str) -> str | None:
+        st = scheduler.states.get(slug)
+        detail = st.last.detail if st is not None and st.last is not None else None
+        devices = detail.get("devices") if isinstance(detail, dict) else None
+        if not isinstance(devices, list):
+            return None
+        for dev in devices:
+            if isinstance(dev, dict) and ((mac and dev.get("mac") == mac)
+                                          or (not mac and name and dev.get("name") == name)):
+                state = dev.get("state")
+                return str(state) if state else None
+        return None
+
+    mapper = MapService(config, infra, matcher, state_of, map_clock, live_port,
+                        device_state_of=device_state_of)
     app.state.mapper = mapper
     scheduler.hooks.append(mapper.tick)
 

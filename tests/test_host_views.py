@@ -213,13 +213,15 @@ def test_status_labels(env):
     assert d["status"] == "critical" and not d["stale"]
 
 
-def test_null_value_is_warning_not_zero(env):
+def test_null_value_is_no_data_not_zero(env):
     env.push(batch(samples=[s("cpu", "system.cpu.utilization", None, "1")],
                    sources=[{"source": "cpu", "available": True}]))
     env.login()
-    item = detail(env)["cpu"]["items"][0]
-    assert item["value"] is None and item["status"] == "warning"
+    d = detail(env)
+    item = d["cpu"]["items"][0]
+    assert item["value"] is None and item["status"] == "no_data"
     assert "no value" in item["reason"]
+    assert d["status"] == "good"  # a missing value claims nothing, the same as the check
 
 
 def test_missing_source_is_reported_honestly(env):

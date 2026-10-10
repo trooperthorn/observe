@@ -108,6 +108,66 @@ async def reachable(address: str, port: int | None, timeout: float) -> bool:
     return bool(host.is_alive)
 
 
+def grade_components(monitor: Any, samples: list[dict[str, Any]],
+                     sources: dict[str, dict[str, Any]], windows: tiers.Staleness, now: float,
+                     boot_ts: float | None, clean_shutdown: int | None
+                     ) -> tuple[dict[str, str], dict[str, str]]:
+    """The level and reason of each component a pushed_host monitor lists in the YAML: its
+    configured thresholds, its required sources and a recent crash. A configured component whose
+    newest reading is older than its tier window is stale, which counts as Critical so a replay
+    or a lagging clock cannot read as healthy; a stale reading is never graded against its
+    thresholds."""
+    components: dict[str, str] = {}
+    reasons: dict[str, str] = {}
+
+    def mark(name: str, level: str, why: str) -> None:
+        if _RANK[level] >= _RANK[components.get(name, GOOD)]:
+            components[name] = level
+            reasons[name] = why
+
+    for th in monitor.components:
+        name = f"{short_source(th.source)}.{th.metric}"
+        components.setdefault(name, GOOD)
+        for s in samples:
+            if s["source"] != th.source or s["metric"] != th.metric or s["value"] is None:
+                continue  # a null value is unavailable, never zero
+            window = windows.for_scope(s["source"])
+            if now - s["ts"] > window:
+                mark(name, STALE, f"last reading {now - s['ts']:.0f}s old "
+                                  f"(limit {window:.0f}s)")
+                continue
+            level = grade(s["value"], th)
+            if level != GOOD:
+                limit = th.crit if level == CRITICAL else th.warn
+                mark(name, level, f"{s['value']:g}{s['unit']} past {limit:g}")
+    for src in monitor.require_sources:
+        info = sources.get(src)
+        if info is None or not info["available"]:
+            why = (info or {}).get("reason") or "not reported"
+            mark(src, WARNING, f"source unavailable: {why}")
+        else:
+            components.setdefault(src, GOOD)
+    if (clean_shutdown == 0 and boot_ts is not None
+            and 0 <= now - boot_ts <= monitor.crash_hold_s):
+        mark("boot", CRITICAL if monitor.crash_result == "fail" else WARNING,
+             f"previous boot ended in a crash {now - boot_ts:.0f}s ago "
+             f"(held for {monitor.crash_hold_s:.0f}s)")
+    return components, reasons
+
+
+def verdict_result(view: dict[str, Any], age: float) -> CheckResult:
+    """The check result of a host view: the same state and the same reason the Hosts list, the
+    host page and its header show, so no page can call the host good while another calls it
+    critical (observe/hostview.py decides; this only maps it)."""
+    detail = {"age_seconds": age, "components": view["components"]["levels"],
+              "status": view["status"], "status_reason": view["status_reason"]}
+    if view["status"] == GOOD:
+        return CheckResult.ok(f"{view['host']}: all components good", value=age, unit="s",
+                              detail=detail)
+    result = Result.FAIL if view["status"] == CRITICAL else Result.WARN
+    return CheckResult(result, view["status_reason"], value=age, unit="s", detail=detail)
+
+
 class PushedHostCheck(Check):
     def __init__(self, monitor: Any, config: Config, store: Any,
                  clock: Callable[[], float] = time.time,
@@ -166,51 +226,17 @@ class PushedHostCheck(Check):
         if age > self.stale_after:
             return await self._missed(age)
 
-        components: dict[str, str] = {}
-        reasons: dict[str, str] = {}
+        from .. import hostview  # hostview imports this module's grading
 
-        def mark(name: str, level: str, why: str) -> None:
-            if _RANK[level] >= _RANK[components.get(name, GOOD)]:
-                components[name] = level
-                reasons[name] = why
-
-        for th in m.components:
-            name = f"{short_source(th.source)}.{th.metric}"
-            components.setdefault(name, GOOD)
-            for s in data["samples"]:
-                if s["source"] != th.source or s["metric"] != th.metric or s["value"] is None:
-                    continue  # a null value is unavailable, never zero
-                window = windows.for_scope(s["source"])
-                if now - s["ts"] > window:
-                    mark(name, STALE, f"last reading {now - s['ts']:.0f}s old "
-                                      f"(limit {window:.0f}s)")
-                    continue
-                level = grade(s["value"], th)
-                if level != GOOD:
-                    limit = th.crit if level == CRITICAL else th.warn
-                    mark(name, level, f"{s['value']:g}{s['unit']} past {limit:g}")
-        for src in m.require_sources:
-            info = data["sources"].get(src)
-            if info is None or not info["available"]:
-                why = (info or {}).get("reason") or "not reported"
-                mark(src, WARNING, f"source unavailable: {why}")
-            else:
-                components.setdefault(src, GOOD)
-
-        boot_ts = data.get("boot_ts")
-        if (data.get("clean_shutdown") == 0 and boot_ts is not None
-                and 0 <= now - boot_ts <= m.crash_hold_s):
-            mark("boot", CRITICAL if m.crash_result == "fail" else WARNING,
-                 f"previous boot ended in a crash {now - boot_ts:.0f}s ago "
-                 f"(held for {m.crash_hold_s:.0f}s)")
-
-        worst = max(components.values(), key=_RANK.__getitem__, default=GOOD)
-        detail = {"age_seconds": age, "components": components}
-        if worst == GOOD:
-            return CheckResult.ok(f"{m.host}: all components good", value=age, unit="s",
-                                  detail=detail)
-        bad = "; ".join(f"{n}: {reasons[n]}" for n in sorted(components)
-                        if components[n] == worst)
-        result = Result.FAIL if worst in (CRITICAL, STALE) else Result.WARN
-        return CheckResult(result, f"{m.host}: {worst}, {bad}", value=age, unit="s",
-                           detail=detail)
+        row = {"host": m.host, "platform": data.get("platform", ""),
+               "agent_version": data.get("agent_version", ""), "last_seen": data["last_seen"],
+               "boot_ts": data.get("boot_ts"), "clean_shutdown": data.get("clean_shutdown"),
+               "confirmed": 1}
+        sources = await self.store.host_sources(m.host) if hasattr(self.store, "host_sources") \
+            else {k: {**v, "updated": data["last_seen"]} for k, v in data["sources"].items()}
+        events = await self.store.host_events(m.host, since=now - hostview.ALERT_WINDOW_S) \
+            if hasattr(self.store, "host_events") else []
+        view = hostview.build_host_view(
+            row, data, sources, events, now, windows, m,
+            {(c.source, c.metric): c for c in m.components}, None)
+        return verdict_result(view, age)

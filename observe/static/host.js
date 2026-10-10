@@ -147,6 +147,32 @@ function notice(h) {
   return n;
 }
 
+// The monitor reads the same verdict as this page (observe/hostview.py), but changes state only
+// after its failures_to_down confirmation, so a fresh change is said to be pending, never shown
+// as a contradiction.
+const VERDICT_STATE = { good: "up", warning: "warn", critical: "down" };
+function monitorLine(h) {
+  const m = h.monitor;
+  const want = VERDICT_STATE[h.status];
+  const shown = m.effective_state;
+  if (!want || shown === want) return `Monitor ${m.name}: ${shown}.`;
+  if (m.blocked_by) return `Monitor ${m.name}: ${shown}, held by ${m.blocked_by}.`;
+  return `Monitor ${m.name}: ${shown}, changing to ${want} once the next polls confirm it.`;
+}
+
+// The components the pushed_host monitor lists in the YAML, graded by the same function as the
+// monitor itself.
+function componentsCard(sec) {
+  if (!sec || !sec.items || !sec.items.length) return null;
+  const box = card("Monitor components", chip(sec.status));
+  box.append(dataTable(["Component", "Status", "Reason"], sec.items.map((i) => {
+    const st = el("span");
+    st.append(chip(i.status), i.stale ? " stale" : "");
+    return [i.name, st, i.reason || ""];
+  })));
+  return box;
+}
+
 function render(h) {
   document.title = `${h.host} - Observe`;
   document.getElementById("summary").replaceChildren(chip(h.status, `${h.host}: ${h.status}`));
@@ -171,7 +197,7 @@ function render(h) {
   if (!h.monitored) {
     head.append(el("p", "card-sub", "Not listed as a pushed_host monitor, so it never alerts."));
   } else if (h.monitor) {
-    head.append(el("p", "card-sub", `Monitor ${h.monitor.name}: ${h.monitor.effective_state}.`));
+    head.append(el("p", "card-sub", monitorLine(h)));
   }
   const b = h.boot;
   if (b.boot_ts) {
@@ -182,6 +208,8 @@ function render(h) {
   frag.append(head, kpis(h));
   const n = notice(h);
   if (n) frag.append(n);
+  const comps = componentsCard(h.components);
+  if (comps) frag.append(comps);
   for (const [key, title] of SECTIONS) frag.append(section(title, h[key], key === "alerts"));
   const crashes = h.events.filter((e) => e.kind.startsWith("boot.") && !e.kind.startsWith("boot.clean"));
   if (crashes.length) {
