@@ -154,7 +154,7 @@ function render(h) {
   const head = el("div", "host-title");
   const crumb = el("p", "card-sub");
   const back = el("a", null, "Hosts");
-  back.href = "/";
+  back.href = "/hosts";
   crumb.append(back, " / ", h.host);
   const line = el("h1");
   line.append(h.host, " ", chip(h.status));

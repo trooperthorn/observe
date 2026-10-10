@@ -73,4 +73,10 @@ ol#capacity li, ol#events li, ol.mon-events li { padding: .3rem 0; border-bottom
                                   overflow-wrap: anywhere; }
 .when { color: var(--o-text-muted); font-variant-numeric: tabular-nums; margin-right: .4rem; }
 footer { color: var(--o-text-muted); font-size: .75rem; padding: 1.5rem 1rem; }
-a.hostlink { margin-left: .5rem; font-size: .8rem; color: var(--o-text-muted); }
+/* The link to a pushed host's page: a small chip-styled button in the accent colour, which
+   meets 4.5:1 on the card (tests/test_ui_tokens.py), not muted text. */
+a.hostlink { display: inline-flex; align-items: center; margin-left: .5rem; padding: 0 var(--o-s2);
+             min-height: 24px; font-size: .8rem; font-weight: 600; color: var(--o-accent);
+             border: 1px solid var(--o-accent-line); border-radius: var(--o-radius-sm);
+             text-decoration: none; }
+a.hostlink:hover { background: var(--o-accent-tint); }
