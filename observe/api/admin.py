@@ -326,8 +326,10 @@ def tier_settings(db: Any) -> dict[str, Any]:
 
 
 def retention_settings(db: Any, ctx: ApiContext) -> dict[str, Any]:
-    """The days each level keeps, with the bounds, the defaults and the per-metric overrides."""
-    return retention.describe(rollups.load_levels(db, ctx.config.server.retention_days))
+    """The days each level keeps as saved, with the bounds, the defaults, the per-metric
+    overrides and any level that keeps longer than its own summary."""
+    return retention.describe(rollups.load_levels(db, ctx.config.server.retention_days,
+                                                  as_saved=True))
 
 
 def recheck_view(db: Any, ctx: ApiContext) -> dict[str, Any]:

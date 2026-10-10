@@ -4,9 +4,31 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  backendText, levelName, levelOf, numberOrNull, recheckBody, retentionBody, rollupText, ruleFromFields,
-  ruleSummary, tierHostRows, tiersBody,
+  backendText, levelName, levelOf, numberOrNull, recheckBody, retentionBody, retentionOrderProblems, rollupText,
+  ruleFromFields, ruleSummary, tierHostRows, tiersBody,
 } from "../../observe/static/js/admin-settings-logic.js";
+
+test("retentionOrderProblems wants raw <= 5 minute <= hourly <= daily, per override too", () => {
+  const ok = { raw_days: 7, rollup_5m_days: 14, hourly_days: 90, daily_days: 730, history_days: 1 };
+  assert.deepEqual(retentionOrderProblems({ ...ok, overrides: {} }), []);
+  // The reported case: raw 30 days, 5 minute summaries 14 days.
+  const names = { raw_days: "Raw samples", rollup_5m_days: "5 minute summaries" };
+  assert.deepEqual(retentionOrderProblems({ ...ok, raw_days: 30 }, (n) => names[n]),
+    ["5 minute summaries must keep at least as long as raw samples (30 days)"]);
+  // Daily shorter than hourly.
+  assert.equal(retentionOrderProblems({ ...ok, daily_days: 30 }).length, 1);
+  // A level an override leaves out follows the finer levels, so raw 20 days for one metric is fine.
+  assert.deepEqual(retentionOrderProblems({ ...ok, overrides: { cpu: { raw_days: 20 }, gpu: { rollup_5m_days: 100 } } }), []);
+  // An override that sets a summary shorter than a finer level is reported.
+  assert.deepEqual(retentionOrderProblems({ ...ok, overrides: { cpu: { rollup_5m_days: 100, hourly_days: 95 } } }),
+    ["For cpu: hourly_days must keep at least as long as rollup_5m_days (100 days)"]);
+  assert.deepEqual(retentionOrderProblems({ ...ok, overrides: { cpu: { daily_days: 30 } } }),
+    ["For cpu: daily_days must keep at least as long as hourly_days (90 days)"]);
+  // A broken global level is reported once, not again for each override.
+  assert.equal(retentionOrderProblems({ ...ok, daily_days: 30, overrides: { cpu: { raw_days: 2 } } }).length, 1);
+  // A global level missing from the body is not compared.
+  assert.deepEqual(retentionOrderProblems({ raw_days: 30 }), []);
+});
 
 test("numberOrNull reads a number, an empty cell as nothing, and refuses text", () => {
   assert.equal(numberOrNull(""), null);

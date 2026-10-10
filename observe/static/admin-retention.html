@@ -24,7 +24,9 @@
   <p class="admin-note">The last compaction and rollup runs are on the <a href="/admin/storage">Storage</a> page.</p>
   <form id="retention-form" class="card" aria-labelledby="set-h">
     <h3 id="set-h">Global settings</h3>
-    <p class="card-sub">Days each level keeps. A change applies at the next compaction run.</p>
+    <p class="card-sub">Days each level keeps. A change applies at the next compaction run. Each level keeps
+    at least as long as the one before it: raw samples, then 5 minute, hourly and daily summaries.</p>
+    <div id="retention-problems" class="card-warn" role="status" hidden></div>
     <div id="retention-global" class="settings-grid"></div>
     <h3 id="ov-h">Per-metric overrides</h3>
     <p class="card-sub" id="ov-sub">A row with no metric name is ignored. Leave a level empty to keep the global value.</p>

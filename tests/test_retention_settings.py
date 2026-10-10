@@ -273,6 +273,52 @@ def test_an_admin_reads_and_updates_the_settings(env):
     assert detail["old"]["raw_days"] == 30 and detail["new"]["raw_days"] == 4
 
 
+@pytest.mark.parametrize("body", [
+    # The reported case: raw kept 30 days while its 5 minute summary keeps 14.
+    {"raw_days": 30, "rollup_5m_days": 14},
+    # Daily shorter than hourly (hourly's floor is 90).
+    {"daily_days": 30},
+    {"rollup_5m_days": 200},  # longer than the longest hourly level, 180
+    # A metric's override that sets a summary shorter than a finer level.
+    {"overrides": {"cpu": {"rollup_5m_days": 100, "hourly_days": 95}}},
+    {"overrides": {"cpu": {"daily_days": 30}}},
+])
+def test_levels_out_of_order_are_refused_and_nothing_is_written(env, body):
+    hdr = admin(env)
+    r = env.client.put("/api/admin/retention", headers=hdr, json=body)
+    assert r.status_code == 422, r.text
+    assert "at least as long" in r.json()["detail"]
+    assert env.rows("SELECT COUNT(*) FROM app_settings WHERE key LIKE 'retention.%'") == [(0,)]
+    assert env.rows("SELECT kind FROM audit WHERE kind LIKE 'retention%'") == [
+        ("retention_settings_failed",)]
+
+
+def test_an_override_may_keep_raw_longer_and_its_summaries_follow(env):
+    hdr = admin(env)
+    r = env.client.put("/api/admin/retention", headers=hdr, json={
+        "raw_days": 7, "rollup_5m_days": 14, "overrides": {"cpu": {"raw_days": 30}}})
+    assert r.status_code == 200 and r.json()["problems"] == []
+
+
+def test_saved_levels_out_of_order_are_reported_and_do_not_break_the_page(env):
+    """Values saved before the order check: the document still loads, names each problem, and
+    a save that puts them in order clears it."""
+    for key, value in (("retention.raw_days", "30"), ("retention.5m_days", "14"),
+                       ("retention.daily_days", "9")):
+        asyncio.run(env.store.storage.execute(
+            "INSERT INTO app_settings (key, value, updated) VALUES (?, ?, 1)", (key, value)))
+    hdr = admin(env)
+    got = env.client.get("/api/v2/admin/settings/retention").json()
+    assert got["settings"]["raw_days"] == 30 and got["settings"]["rollup_5m_days"] == 14
+    assert got["order"] == ["raw_days", "rollup_5m_days", "hourly_days", "daily_days"]
+    assert got["problems"] == [
+        "Raw samples keep 30 days, longer than 5 minute summaries (14 days)",
+        "Hourly summaries keep 90 days, longer than daily summaries (9 days)"]
+    r = env.client.put("/api/admin/retention", headers=hdr,
+                       json={"rollup_5m_days": 30, "daily_days": 365})
+    assert r.status_code == 200 and r.json()["problems"] == []
+
+
 def test_a_bad_value_is_refused_and_audited(env):
     hdr = admin(env)
     r = env.client.put("/api/admin/retention", headers=hdr, json={"raw_days": 500})

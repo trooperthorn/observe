@@ -38,6 +38,10 @@
 .finding-list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--o-s2); }
 .finding-list li { display: flex; flex-wrap: wrap; gap: var(--o-s2); align-items: center; }
 .admin-note { color: var(--o-text-muted); font-size: var(--o-fs-sm); margin: var(--o-s1) 0 0; }
+/* A saved setting that needs the admin's attention, e.g. retention levels out of order. */
+.card-warn { background: var(--o-warn-bg); color: var(--o-warn); border-radius: var(--o-radius-sm);
+             padding: var(--o-s2) var(--o-s3); margin: var(--o-s2) 0; }
+.card-warn p, .card-warn ul { margin: var(--o-s1) 0 0; }
 /* Updates page: the phase chips in a row, and the host helper's log as a scrolling block. */
 .phase-row { display: flex; flex-wrap: wrap; gap: var(--o-s2); margin: var(--o-s2) 0; }
 pre.update-log { margin: var(--o-s2) 0; padding: var(--o-s3); max-height: 20rem; overflow: auto;

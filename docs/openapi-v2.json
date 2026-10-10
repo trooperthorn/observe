@@ -3887,7 +3887,7 @@
     },
     "/admin/settings/retention": {
       "get": {
-        "description": "The days each level keeps, with the bounds, the defaults and the per-metric overrides.",
+        "description": "The days each level keeps as saved, with the bounds, the defaults, the per-metric\noverrides and any level that keeps longer than its own summary.",
         "operationId": "settings_retention",
         "responses": {
           "200": {
