@@ -490,6 +490,11 @@ batch.
 
 ## Adding a host
 
+Every host is listed at `/hosts` (Hosts in the navigation): name, platform, status chip, last
+report age, agent version, whether it is listed as a `pushed_host` monitor (only a listed host
+alerts), and, for admins, a Settings link. Enrolled hosts that have not reported yet are in
+the same table as "Waiting" with a link to their enrolment page. Each row opens the host's
+page at `/host?name=HOST`, and that page's "Hosts" breadcrumb leads back to the list.
 Admins add a host in the console at `/hosts/new` (Hosts, Add host in the navigation), a
 five-step wizard: host name and platform, agent and control, the control allowlist, the
 one-time install command with a Copy button, and live progress. The wizard uses this API.
@@ -663,8 +668,9 @@ is suppressed when a parent switch is down, and raises alerts. `/metrics` gains
 warning, 2 critical) for pushed hosts, alongside the usual state, effective
 state and group lines.
 
-Each pushed host also has a hardware page at `/host?name=HOST`, linked from its
-row on the dashboard (a card in its group, with a status chip). `GET /api/v2/hosts` lists every host that has pushed (and
+Each pushed host also has a hardware page at `/host?name=HOST`, linked from the Hosts list at
+`/hosts` and from the "Host page" button on its row on the dashboard (a card in its group, with a
+status chip). `GET /api/v2/hosts` lists every host that has pushed (and
 every listed `pushed_host` monitor that never has), and `GET /api/v2/hosts/HOST` (a host name may contain slashes; the route takes the rest of the path)
 returns its CPU, memory, power, temperatures, fans with the fan controller
 state, RAID, ZFS pools, disks, UPS, recent alerts and events, boot state and

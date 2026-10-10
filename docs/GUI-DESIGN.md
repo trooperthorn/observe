@@ -469,6 +469,27 @@ Hosts / nas01 / Settings                                   [v Up]
 +-------------------------------------------------------------------+
 ```
 
+### 3.12 Hosts list (`hosts.html`, `hosts.js`, `js/hosts-logic.js`, `/hosts`)
+
+```
+Hosts                                            12 hosts, 2 need attention, 1 waiting for first data
++ All hosts ---------------------------------------------------------------------------------+
+| Search [________]                                                                          |
+| Host ↕   | Platform | Status      | Last report | Agent | Monitor      | Detail  | Settings |
+| nas01    | linux    | [v Up]      | 8 s ago     | 0.9.0 | [Listed]     |         | Settings |
+| pi       | rpi      | [! Warning] | 2 h (stale) | 0.8.0 | Not listed   | stale   | Settings |
+| newbox   | windows  | [o Waiting] | never       |       | Not listed   | not run | Enrolment|
++-------------------------------------------------------------------------------------------+
+```
+- The one place every host is listed. The Hosts item in the nav owns `/hosts` and `/host`, so a
+  host page lights the Hosts workspace, and the host and settings breadcrumbs lead back here.
+- Rows come from `GET /api/v2/hosts` (every page, through `getAll`) plus `GET /api/v2/waiting-hosts`.
+  A waiting host has no host page yet, so its only link is its enrolment page, for admins.
+- The Monitor column reports whether the host is listed as a `pushed_host` in the YAML, which is
+  what lets it alert. The page reports it and changes nothing.
+- The Settings column is drawn only for an admin session; the server still decides.
+- The dashboard's link to a host page is a small accent-coloured "Host page" button, not muted text.
+
 ---
 
 ## 4. Accessibility, CSP and theme rules; what must not be copied

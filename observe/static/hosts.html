@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hosts - Observe</title>
+<link rel="stylesheet" href="/static/css/tokens.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/shell.css">
+<link rel="stylesheet" href="/static/css/components.css">
+<link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+<header id="shell-header" class="shell-head">
+  <div id="summary" aria-live="polite"></div>
+</header>
+<nav id="shell-nav" aria-label="Main"></nav>
+<main class="admin-main" id="page">
+  <div class="admin-title">
+    <p class="crumbs muted">Hosts</p>
+    <h1>Hosts</h1>
+  </div>
+  <section class="card" id="hosts-card" aria-labelledby="hosts-h">
+    <h3 id="hosts-h">All hosts</h3>
+    <p class="card-sub">Every host that has reported or is listed as a pushed_host monitor, and every enrolled host still waiting for its first data. A host alerts only when it is listed in the YAML; this page reports that and changes nothing.</p>
+    <div class="filter-bar" id="filters">
+      <label>Search <input id="q" type="search" maxlength="128" autocomplete="off"></label>
+    </div>
+    <div id="hosts"></div>
+  </section>
+  <footer id="footer" class="muted"></footer>
+</main>
+<script type="module" src="/static/hosts.js"></script>
+<script type="module" src="/static/js/shell.js"></script>
+</body>
+</html>

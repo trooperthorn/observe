@@ -43,7 +43,7 @@ function drawIdentity() {
   document.title = `${host} settings - Observe`;
   const crumbs = clear($("crumbs"));
   const home = el("a", null, "Hosts");
-  home.href = "/";
+  home.href = "/hosts";
   const page = el("a", null, host);
   page.href = `/host?name=${encodeURIComponent(host)}`;
   crumbs.append(home, " / ", page, " / Settings");

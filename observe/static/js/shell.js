@@ -14,7 +14,8 @@ export const WORKSPACES = [
 // One row per page that exists. `also` lists pages that belong under the same item.
 // Workspaces with no visible item are not drawn.
 export const NAV = [
-  { workspace: "overview", label: "Dashboard", href: "/", also: ["/host"], admin: false },
+  { workspace: "overview", label: "Dashboard", href: "/", also: [], admin: false },
+  { workspace: "hosts", label: "Hosts", href: "/hosts", also: ["/host"], admin: false },
   { workspace: "hosts", label: "Add host", href: "/hosts/new", also: [], admin: true },
   { workspace: "network", label: "Map", href: "/map", also: ["/port"], admin: false },
   { workspace: "network", label: "Map admin", href: "/admin/infra", also: [], admin: true },

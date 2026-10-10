@@ -699,6 +699,11 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
         # session to /login.
         return FileResponse(STATIC / "admin.html")
 
+    @app.get("/hosts", include_in_schema=False)
+    async def hosts_page() -> FileResponse:
+        # Like /host, the page holds no data; hosts.js sends a visitor without a session to /login.
+        return FileResponse(STATIC / "hosts.html")
+
     @app.get("/hosts/new", include_in_schema=False)
     async def add_host_page() -> FileResponse:
         # The page holds no data; hosts-new.js needs an admin session for everything it does.
