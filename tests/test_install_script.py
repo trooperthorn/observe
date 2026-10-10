@@ -164,6 +164,17 @@ def test_hostile_host_names_are_not_rendered(bad):
         scripts.render_linux(red(host=bad), CTX)
 
 
+def test_the_update_table_follows_the_allowlist_and_never_turns_on_the_daemon_self_update():
+    on = scripts.control_toml("nas01", {**NO_ALLOW, "update": True}, PUBLIC)
+    assert on.endswith("\n[update]\nagent = true\ncontrol = false\n")
+    off = scripts.control_toml("nas01", {**NO_ALLOW, "update": False}, PUBLIC)
+    assert "[update]" not in off and "[update]" not in scripts.control_toml("nas01", NO_ALLOW, PUBLIC)
+    script = scripts.render_linux(red(allowlist={**ALLOW, "update": True}), CTX)
+    assert "[update]" in script and "control = false" in script
+    with pytest.raises(scripts.ScriptError):
+        scripts.render_linux(red(control_key=None, allowlist={**NO_ALLOW, "update": True}), CTX)
+
+
 @pytest.mark.parametrize("allow", [
     {"fans": ["fan;id"]}, {"fans": ["fan\n"]}, {"services": ["smbd\n"]},
     {"services": ["docker:web\n"]}, {"fans": ["a b"]}, {"fans": ["$(id)"]},

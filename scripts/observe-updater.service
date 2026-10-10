@@ -1,0 +1,17 @@
+[Unit]
+Description=Observe update helper (README "Updating")
+Documentation=https://github.com/trooperthorn/observe
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@@DEPLOY@@
+# The installed copy runs, never the script inside the checkout, so a pull cannot change the
+# helper that is running it. Re-run scripts/install-updater.sh to update the helper.
+ExecStart=/usr/local/sbin/observe-updater @@DEPLOY@@
+PrivateTmp=true
+# Output goes to the journal: journalctl -u observe-updater.service
+StandardOutput=journal
+StandardError=journal

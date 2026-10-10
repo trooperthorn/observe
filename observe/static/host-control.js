@@ -6,6 +6,7 @@ import { get, poller, seconds, whoami } from "/static/js/api.js";
 import { statusChip } from "/static/js/chips.js";
 import { confirmDialog, typedConfirm } from "/static/js/dialog.js";
 import { toast } from "/static/js/toast.js";
+import { updateResultText } from "/static/js/updates-logic.js";
 
 const ctlBox = document.getElementById("control");
 const ctlHost = new URLSearchParams(location.search).get("name") || "";
@@ -13,7 +14,9 @@ const BASE = "/api/plugins/control";  // requesting and cancelling; the reads ar
 const ACTION_TEXT = {
   "fan.set_floor": "Set a fan floor", "fan.set_mode": "Switch fan controller mode",
   "service.restart": "Restart a service", "host.reboot": "Reboot the host",
+  "agent.update": "Update the hostwatch agent",
 };
+const COMPONENT_TEXT = { agent: "agent container", control: "control daemon", all: "agent and control daemon" };
 let ctlCsrf = "";
 let ctlCaps = null;
 let ctlHistoryBox = null;
@@ -46,6 +49,7 @@ function describe(action, params) {
   if (action === "fan.set_floor") return `${params.controller} ${params.header} floor ${params.min_duty}%`;
   if (action === "fan.set_mode") return `${params.controller} mode ${params.mode}`;
   if (action === "service.restart") return `restart ${params.name}`;
+  if (action === "agent.update") return `update ${COMPONENT_TEXT[params.component] || params.component}`;
   return "reboot";
 }
 
@@ -83,6 +87,11 @@ function paramInputs(action) {
     inputs.name = cel("input");
     inputs.name.placeholder = "hostwatch-agent";
     box.append(field("Service name", inputs.name));
+  } else if (action === "agent.update") {
+    inputs.component = selectOf(ctlCaps.components || ["agent"]);
+    for (const o of inputs.component.options) o.textContent = COMPONENT_TEXT[o.value] || o.value;
+    box.append(field("Component", inputs.component));
+    box.append(cel("p", "card-sub", "The host pulls the image it was installed with, replaces the agent container with the previous one kept for rollback, and reports the old and new version. The control daemon updates itself only when its allowlist permits it."));
   } else {
     box.append(cel("p", "card-sub", "The host schedules the reboot after its own delay, and you can cancel it from the history below while it waits."));
   }
@@ -155,6 +164,13 @@ function requestForm() {
   return form;
 }
 
+// The result column: the state and the output, where an agent.update output (a JSON object
+// with the old and new version) is read into "old to new".
+function resultText(c) {
+  const out = c.action === "agent.update" ? updateResultText(c.result.output) : c.result.output;
+  return `${c.result.state}${out ? ": " + out : ""}`;
+}
+
 function historyTable(commands) {
   if (!commands.length) return cel("p", "card-sub", "No commands have been requested for this host.");
   const wrap = cel("div", "table-wrap");
@@ -168,7 +184,7 @@ function historyTable(commands) {
       cel("td", null, describe(c.action, c.params)), cel("td", null, c.requested_by));
     const st = cel("td");
     st.append(statusChip(STATE_CHIP[c.state] || "pending", c.state));
-    r.append(st, cel("td", null, c.result ? `${c.result.state}${c.result.output ? ": " + c.result.output : ""}` : ""));
+    r.append(st, cel("td", null, c.result ? resultText(c) : ""));
     const act = cel("td");
     if (c.state === "requested" || (c.action === "host.reboot" && c.state === "scheduled")) {
       const b = cel("button", "btn", c.state === "requested" ? "Cancel" : "Cancel reboot");

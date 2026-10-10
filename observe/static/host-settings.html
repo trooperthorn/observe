@@ -55,6 +55,10 @@
         <legend>Reboot</legend>
         <label class="inline"><input type="checkbox" id="reboot"> Allow reboot (always needs the host name typed to confirm)</label>
       </fieldset>
+      <fieldset class="wiz-fieldset" id="update-set">
+        <legend>Agent updates</legend>
+        <label class="inline"><input type="checkbox" id="update-agent"> Allow agent updates from Observe (the Updates page can replace the agent container; the control daemon never updates itself from here)</label>
+      </fieldset>
       <p class="admin-note" id="allow-error" role="alert"></p>
       <div class="row-actions">
         <button type="submit" class="btn primary" id="save">Save allowlist</button>

@@ -123,7 +123,9 @@ def test_windows_gets_a_powershell_command_and_control_is_refused(env):
     {"allowlist": {"services": ["x" * 129]}}, {"allowlist": {"services": "smbd"}},
     {"allowlist": {"fans": [f"f{i}" for i in range(33)]}},
     {"allowlist": {"reboot": "true"}}, {"allowlist": {"other": []}}, {"allowlist": []},
+    {"allowlist": {"update": "yes"}}, {"allowlist": {"update": 1}},
     {"control": False},  # an allowlist without control
+    {"control": False, "allowlist": {"update": True}},
 ])
 def test_invalid_requests_are_refused_and_audited(env, over):
     hdr = admin(env)

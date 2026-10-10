@@ -520,6 +520,8 @@ Implementation status (slice oc2-boot-and-severity): boot classification runs on
 | `/api/v2/admin/users`, `/admin/sessions` | GET, POST, PATCH, DELETE | users (admin) | |
 | `/api/v2/admin/config` | GET | effective configuration with secrets redacted | |
 | `/api/v2/admin/exporter` | GET | exporter status (the settings are in the config file, section 6.6) | |
+| `/api/v2/updates/status` | GET | running version and commit, the upstream check, the open update request and the host helper's state (admin, README "Updating") | files under `server.update_dir` |
+| `/api/v2/updates/agents` | GET | every pushed host with its control daemon state and whether an agent update can be queued (admin) | `hosts`, `ingest_keys`, `enrolments` |
 | `/api/v2/admin/maintenance/*` | POST | prune now, rebuild rollups, drop legacy | writer |
 | `/api/v2/session` | GET, POST, DELETE | current user, login, logout | |
 | `/api/v2/changes` | GET | change cursor for all domains (below) | `change_seq` |

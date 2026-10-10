@@ -171,6 +171,11 @@ def test_rate_limit_still_applies_to_requests(env):
     ("fan.set_floor", {**FLOOR, "header": "pwm1 "}),
     ("service.restart", {"name": "x", "extra": 1}),
     ("host.reboot", {"x": 1}),
+    ("agent.update", {}),
+    ("agent.update", {"component": "kernel"}),
+    ("agent.update", {"component": "agent", "extra": 1}),
+    ("agent.update", {"component": ["agent"]}),
+    ("agent.update", {"component": "agent\n"}),
     ("rm.everything", {}),
 ])
 def test_bad_parameters_are_refused(env, action, params):
@@ -206,7 +211,8 @@ def test_capabilities_route_reports_headers(env):
     data = env.client.get("/api/v2/control/capabilities", params={"host": HOST}).json()
     assert data["known"] and data["capabilities"] == {"thermalctl": True,
                                                        "headers": ["pwm1", "pwm2"]}
-    assert "host.reboot" in data["actions"]
+    assert "host.reboot" in data["actions"] and "agent.update" in data["actions"]
+    assert data["components"] == ["agent", "control", "all"]
     other = env.client.get("/api/v2/control/capabilities", params={"host": "ghost"}).json()
     assert other["known"] is False
 
@@ -219,6 +225,132 @@ def test_validate_and_capabilities_helpers():
                     caps)["min_duty"] == 0
     with pytest.raises(QueueError):
         validate("fan.set_floor", "nope", caps)
+
+
+# ---- agent.update -----------------------------------------------------------------------------
+
+@pytest.mark.parametrize("component", ["agent", "control", "all"])
+def test_agent_update_is_validated_signed_and_queued_like_any_action(env, component):
+    from observe_control.signing import verify_command
+
+    csrf = login(env)
+    r = post(env, csrf, req("agent.update", {"component": component}))
+    assert r.status_code == 200, r.text
+    cid = r.json()["id"]
+    (params, sig) = env.rows("SELECT params, signature FROM control_commands WHERE id=?", cid)[0]
+    assert json.loads(params) == {"component": component}
+    pulled = env.pull(env.key()).json()["commands"]
+    (item,) = [c for c in pulled if c["command"]["id"] == cid]
+    assert item["command"]["action"] == "agent.update"
+    assert item["command"]["params"] == {"component": component} and item["signature"] == sig
+    assert verify_command(env.public, item["command"], sig)
+    (row,) = [a for a in env.audit("control_requested") if a["command_id"] == cid]
+    assert row["action"] == "agent.update" and row["params"] == {"component": component}
+
+
+def test_agent_update_result_carries_the_versions_the_daemon_reports(env):
+    csrf = login(env)
+    cid = post(env, csrf, req("agent.update", {"component": "agent"})).json()["id"]
+    key = env.key()
+    env.pull(key)
+    output = json.dumps({"old_image_id": "sha256:aa", "new_image_id": "sha256:bb",
+                         "old_version": "1.4.0", "new_version": "1.5.0"})
+    assert env.result(key, {"id": cid, "state": "done", "output": output}).status_code == 200
+    (item,) = [c for c in commands(env) if c["id"] == cid]
+    assert item["state"] == "done" and json.loads(item["result"]["output"])["new_version"] == "1.5.0"
+
+
+def eligible(env, host, pulled=True, platform="linux"):
+    env.store.storage.write_sync(
+        lambda db: db.execute("UPDATE hosts SET platform=? WHERE host=?", (platform, host)))
+    key = env.key(host)
+    if pulled:
+        env.pull(key, host)
+
+
+def update_all(env, csrf, body=None):
+    return env.client.post(BASE + "/update-agents",
+                           json={"component": "agent", "confirmed": True} if body is None else body,
+                           headers={"X-CSRF-Token": csrf})
+
+
+def test_update_all_queues_one_command_per_eligible_host_and_lists_the_rest(env):
+    csrf = login(env)
+    eligible(env, HOST)
+    eligible(env, "nas02", pulled=False)
+    r = update_all(env, csrf)
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert got["component"] == "agent"
+    assert [q["host"] for q in got["queued"]] == [HOST]
+    refused = {x["host"]: x["reason"] for x in got["refused"]}
+    assert refused["nas02"] == "the control daemon has never pulled"
+    assert refused[HOSTILE] == "unknown platform"
+    (cid,) = [q["id"] for q in got["queued"]]
+    assert env.rows("SELECT host, action, params FROM control_commands WHERE id=?", cid) == \
+        [(HOST, "agent.update", '{"component":"agent"}')]
+    # The second run is refused by max_pending_per_action for that host, and says so.
+    again = update_all(env, csrf).json()
+    assert again["queued"] == [] and {x["host"]: x["reason"] for x in again["refused"]}[HOST] == \
+        "agent.update is already pending for this host"
+    assert env.rows("SELECT COUNT(*) FROM control_commands") == [(1,)]
+    assert env.audit("control_request_refused")
+
+
+def test_update_all_honours_the_hourly_limit_per_host(tmp_path):
+    e = Env(tmp_path, max_commands_per_host_per_hour=2, max_pending_per_action=5)
+    now = e.clock.now
+
+    def seed(db):
+        db.execute("INSERT INTO hosts (host, platform, first_seen, last_seen) VALUES (?,?,?,?)",
+                   (HOST, "linux", now, now))
+    e.store.storage.write_sync(seed)
+    run(auth.create_user(e.store, e.cfg, "root", PASSWORD, True, now=now))
+    try:
+        csrf = login(e)
+        eligible(e, HOST)
+        assert post(e, csrf, req("service.restart", {"name": "x"})).status_code == 200
+        assert update_all(e, csrf).json()["queued"] == [{"host": HOST, "id": e.rows(
+            "SELECT id FROM control_commands WHERE action='agent.update'")[0][0]}]
+        third = update_all(e, csrf, {"component": "all", "confirmed": True}).json()
+        assert third["queued"] == [] and third["refused"][0]["reason"] == \
+            "too many commands for this host in the last hour"
+    finally:
+        e.close()
+
+
+@pytest.mark.parametrize("body, status", [
+    ({"component": "agent"}, 400), ({"component": "agent", "confirmed": "true"}, 400),
+    ({"component": "kernel", "confirmed": True}, 422), ({"confirmed": True, "extra": 1}, 422),
+])
+def test_update_all_needs_confirmation_and_a_known_component(env, body, status):
+    csrf = login(env)
+    eligible(env, HOST)
+    r = update_all(env, csrf, body)
+    assert r.status_code == status, r.text
+    assert env.rows("SELECT COUNT(*) FROM control_commands") == [(0,)]
+
+
+def test_update_all_is_admin_only_with_csrf(env):
+    eligible(env, HOST)
+    env.client.cookies.clear()
+    assert env.client.post(BASE + "/update-agents", json={"confirmed": True}).status_code == 401
+    csrf = login(env, "viewer")
+    assert update_all(env, csrf).status_code == 403
+    login(env)
+    assert env.client.post(BASE + "/update-agents", json={"confirmed": True}).status_code == 403
+    assert update_all(env, "wrong").status_code == 403
+    assert env.rows("SELECT COUNT(*) FROM control_commands") == [(0,)]
+
+
+def test_the_host_page_offers_the_update_and_reads_its_result():
+    js = (ROOT / "observe" / "static" / "host-control.js").read_text(encoding="utf-8")
+    assert '"agent.update": "Update the hostwatch agent"' in js
+    assert "ctlCaps.components" in js and "updateResultText" in js
+    assert 'from "/static/js/updates-logic.js"' in js
+    logic = (ROOT / "observe" / "static" / "js" / "updates-logic.js").read_text(encoding="utf-8")
+    assert "export function updateResultText" in logic and "JSON.parse" in logic
+    assert "innerHTML" not in logic
 
 
 # ---- cancel ---------------------------------------------------------------------------------
@@ -395,6 +527,7 @@ def test_host_page_loads_the_control_section_and_writes_only_text(env):
 def test_new_files_use_lf_and_no_em_dashes_or_model_names():
     for rel in ("plugins/control/observe_control/actions.py", "tests/test_control_actions.py",
                 "observe/static/host-control.js", "observe/static/host.html",
+                "observe/static/js/updates-logic.js",
                 "observe/static/host.js", "observe/static/css/host.css",
                 "plugins/control/observe_control/__init__.py", "docs/CONTROL.md"):
         raw = stored_bytes(ROOT / rel)

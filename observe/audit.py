@@ -20,7 +20,8 @@ unknown user), infra_switch_linked, infra_switch_link_failed, infra_depends_acce
 infra_depends_rejected, infra_depends_failed, ingest_denied,
 ingest_failed, enrol_created, enrol_create_failed, enrol_fetched, enrol_fetch_failed,
 enrol_expired, enrol_reissued, host_allowlist_saved, host_task_created, host_task_fetched,
-host_keys_revoked, host_removed (each with a matching _failed kind where it can be refused), api_denied (a refused /api/v2 request), plugin_request, plugin_denied, plugin_failed, and the control plugin's
+host_keys_revoked, host_removed (each with a matching _failed kind where it can be refused),
+update_requested and update_request_failed (the Updates page), api_denied (a refused /api/v2 request), plugin_request, plugin_denied, plugin_failed, and the control plugin's
 control_requested, control_request_refused, control_pull and control_expired. A kind ending in _failed or _error is an action that stopped
 partway or was refused after it started.
 """

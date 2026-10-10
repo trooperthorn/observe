@@ -98,6 +98,7 @@ function drawAllowlist() {
   clear($("fan-list")).append(...draft.fans.map((f) => listItem(f, true)));
   clear($("service-list")).append(...draft.services.map((x) => listItem(x, false)));
   $("reboot").checked = draft.reboot;
+  $("update-agent").checked = draft.update;
   drawAllowlistState();
 }
 
@@ -130,6 +131,7 @@ function addEntry(inputId, list, ok, what) {
 $("fan-add").addEventListener("click", () => addEntry("fan-new", draft.fans, validHeader, "header"));
 $("service-add").addEventListener("click", () => addEntry("service-new", draft.services, validService, "service name"));
 $("reboot").addEventListener("change", () => { draft.reboot = $("reboot").checked; });
+$("update-agent").addEventListener("change", () => { draft.update = $("update-agent").checked; });
 
 $("form-allow").addEventListener("submit", async (e) => {
   e.preventDefault();

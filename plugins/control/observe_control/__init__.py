@@ -18,12 +18,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import JSONResponse
 
 from observe import audit
+from observe.updates import agent_rows
 from observe.plugins import KeyScope, Migration, PluginBase, PluginError, PluginRouter
 
-from .actions import capabilities, validate
+from .actions import COMPONENTS, capabilities, validate
 from .api import register as register_resources
 from .keys import SCOPE
-from .queue import (MAX_HOST, MIGRATIONS, REBOOT, Limits, QueueError, cancel_command,
+from .queue import (MAX_HOST, MIGRATIONS, REBOOT, UPDATE, Limits, QueueError, cancel_command,
                     enqueue_command, pull_commands, record_result)
 from .signing import SigningError, load_private_key, public_key_string
 
@@ -124,6 +125,12 @@ class RequestBody(BaseModel):
     confirm_host: str = Field(default="", max_length=MAX_HOST + 64)
 
 
+class UpdateAllBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    component: str = Field(default="agent", min_length=1, max_length=16)
+    confirmed: Any = None
+
+
 def build_admin_router(plugin: "ControlPlugin") -> APIRouter:
     router = APIRouter()
 
@@ -161,6 +168,43 @@ def build_admin_router(plugin: "ControlPlugin") -> APIRouter:
                                       "host": body.host}
         return JSONResponse({"id": command["id"], "state": "requested", "seq": command["seq"],
                              "expires_at": command["expires_at"]})
+
+    @router.post("/update-agents")
+    async def update_agents(request: Request, body: UpdateAllBody) -> JSONResponse:
+        """Queue one agent.update per eligible host (README "Updating": a Linux or Raspberry
+        Pi host with a control key that has pulled), through the same queue as a single
+        request, so the per-host rate limits and max_pending_per_action apply to each. Answers
+        with the hosts queued and the hosts refused with the reason. Admin session and CSRF."""
+        store = request.app.state.plugin_store
+        actor = request.state.session.username
+        if body.confirmed is not True:
+            await audit.record(store, "control_request_refused", actor=actor, status=400,
+                               detail={"host": "*", "action": UPDATE,
+                                       "reason": "the request was not confirmed"})
+            return JSONResponse({"detail": "the request was not confirmed"}, status_code=400)
+        try:
+            params = validate(UPDATE, {"component": body.component}, {})
+        except QueueError as err:
+            await audit.record(store, "control_request_refused", actor=actor, status=err.status,
+                               detail={"host": "*", "action": UPDATE, "reason": err.reason})
+            return JSONResponse({"detail": err.reason}, status_code=err.status)
+        now = _now(request)
+        queued: list[dict[str, Any]] = []
+        refused: list[dict[str, str]] = []
+        for row in await agent_rows(store, now):
+            if not row["eligible"]:
+                refused.append({"host": row["host"], "reason": row["reason"]})
+                continue
+            try:
+                made = await enqueue_command(store, plugin.signing_key, plugin.limits(),
+                                             row["host"], UPDATE, params, actor, now)
+            except QueueError as err:
+                refused.append({"host": row["host"], "reason": err.reason})
+                continue
+            queued.append({"host": row["host"], "id": made["command"]["id"]})
+        request.state.audit_detail = {"action": UPDATE, "component": body.component,
+                                      "queued": len(queued), "refused": len(refused)}
+        return JSONResponse({"component": body.component, "queued": queued, "refused": refused})
 
     @router.post("/commands/{command_id}/cancel")
     async def cancel(request: Request, command_id: str) -> JSONResponse:

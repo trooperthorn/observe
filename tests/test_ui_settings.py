@@ -71,7 +71,8 @@ def test_the_danger_zone_is_a_closed_details_and_the_page_is_labelled():
     assert "<details class=\"card danger-zone\" id=\"danger\" open" not in html
     for section in ("identity", "allowlist-card", "command-card", "install-card"):
         assert f'id="{section}"' in html
-    assert html.count("<fieldset") == html.count("<legend>") == 3
+    assert html.count("<fieldset") == html.count("<legend>") == 4
+    assert 'id="update-agent"' in html and "Allow agent updates from Observe" in html
     for m in re.finditer(r"<input\b", html):
         before = html[:m.start()]
         assert before.rfind("<label") > before.rfind("</label>"), html[m.start():m.start() + 60]
@@ -183,6 +184,9 @@ def diff_allowlist(before, after):
     lines += [f"Remove service {s}" for s in old_s if s not in new_s]
     if bool(b.get("reboot")) != bool(a.get("reboot")):
         lines.append("Allow reboot" if a.get("reboot") else "Do not allow reboot")
+    if bool(b.get("update")) != bool(a.get("update")):
+        lines.append("Allow agent updates from Observe" if a.get("update")
+                     else "Do not allow agent updates from Observe")
     return lines
 
 
@@ -190,6 +194,7 @@ def test_the_diff_wording_in_python_matches_the_module():
     logic = _read("js/settings-logic.js")
     for text in ("Add fan header ${name} (${limitText(f)})", "Remove fan header ${name}",
                  "Add service ${s}", "Remove service ${s}", "Allow reboot", "Do not allow reboot",
+                 "Allow agent updates from Observe", "Do not allow agent updates from Observe",
                  "Change fan header ${name}: ${limitText(old.get(name))} to ${limitText(f)}",
                  "no lowest duty", "lowest duty ${f.min_duty_limit}%"):
         assert text in logic, text
@@ -209,6 +214,12 @@ def test_the_diff_wording_in_python_matches_the_module():
       "Do not allow reboot"]),
     ({"fans": [{"header": "fan2"}], "services": [], "reboot": False},
      {"fans": [], "services": [], "reboot": False}, ["Remove fan header fan2"]),
+    ({"fans": [], "services": [], "reboot": False},
+     {"fans": [], "services": [], "reboot": False, "update": True},
+     ["Allow agent updates from Observe"]),
+    ({"fans": [], "services": [], "reboot": False, "update": True},
+     {"fans": [], "services": [], "reboot": False, "update": False},
+     ["Do not allow agent updates from Observe"]),
 ])
 def test_diff_cases(before, after, lines):
     assert diff_allowlist(before, after) == lines

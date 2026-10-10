@@ -961,7 +961,9 @@ session and CSRF) takes `name` (lower-case letters, digits and dashes, 1 to 63
 characters), `platform` (`linux`, `truenas`, `windows` or `raspberry-pi`),
 `agent`, `control` and an `allowlist` of `fans` (a header name, or an object
 with `header` and `min_duty_limit` from 0 to 100, which thermalctl needs per
-header for remote floors), `services` and `reboot`. Every entry is matched
+header for remote floors), `services`, `reboot` and `update` (whether the Updates page may
+ask the host's control daemon to replace the agent container, written as the `[update]`
+table of `control.toml`; false when absent). Every entry is matched
 against the same character set the control daemon accepts, so none can hold
 shell syntax. A fan header is 1 to 32 letters, digits, dashes or underscores and
 does not start with a dash, which is hostwatch-control's own rule (`HEADER_ID`),

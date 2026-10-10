@@ -96,6 +96,7 @@ export function buildBody(state) {
     }
     body.allowlist = {
       fans, services: state.services.filter((x) => x.on).map((x) => x.name), reboot: !!state.reboot,
+      update: state.update !== false,
     };
   }
   return { body };

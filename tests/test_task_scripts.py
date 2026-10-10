@@ -136,6 +136,15 @@ def test_update_writes_the_saved_allowlist_with_machine_id_before_any_table(tmp_
 def test_update_with_an_empty_allowlist_writes_no_tables():
     script = update(allowlist={"fans": [], "services": [], "reboot": False})
     assert "[fan]" not in script and "[services]" not in script and "[reboot]" not in script
+    assert "[update]" not in script
+
+
+def test_update_writes_the_update_table_only_when_agent_updates_are_allowed():
+    on = update(allowlist={"fans": [], "services": [], "reboot": False, "update": True})
+    assert "[update]" in on and "agent = true" in on and "control = false" in on
+    assert on.index("[update]") > on.index("host = 'nas01'" if "host = 'nas01'" in on else "host")
+    off = update(allowlist={"fans": [], "services": [], "reboot": False, "update": False})
+    assert "[update]" not in off
 
 
 def test_the_step_key_is_used_only_in_its_assignment_and_notes_are_fixed_text():

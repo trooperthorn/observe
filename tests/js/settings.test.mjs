@@ -9,7 +9,7 @@ import {
 
 const saved = () => ({
   fans: [{ header: "fan1" }, { header: "fan2", min_duty_limit: 20 }],
-  services: ["smbd", "docker:scrutiny"], reboot: true,
+  services: ["smbd", "docker:scrutiny"], reboot: true, update: true,
 });
 
 test("the host name is read from the path and survives encoding", () => {
@@ -33,11 +33,18 @@ test("unticked entries are removed and the diff names each change", () => {
   draft.fans.push({ name: "fan3", on: true, limit: "30" });
   draft.services[0].on = false;
   draft.reboot = false;
+  draft.update = false;
   const built = allowlistFromDraft(draft);
   assert.deepEqual(diffAllowlist(saved(), built.allowlist), [
     "Add fan header fan3 (lowest duty 30%)", "Remove fan header fan1", "Remove service smbd",
-    "Do not allow reboot",
+    "Do not allow reboot", "Do not allow agent updates from Observe",
   ]);
+  // A host saved before agent updates existed reads as off, so ticking it is a change.
+  const old = draftFromAllowlist({ fans: [], services: [], reboot: false });
+  assert.equal(old.update, false);
+  old.update = true;
+  assert.deepEqual(diffAllowlist({ fans: [], services: [], reboot: false }, allowlistFromDraft(old).allowlist),
+    ["Allow agent updates from Observe"]);
 });
 
 test("a changed limit is a change, and bad entries are refused", () => {

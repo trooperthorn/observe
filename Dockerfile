@@ -29,6 +29,11 @@ RUN groupadd --gid 10001 observe \
  && mkdir -p /data && chown 10001:10001 /data
 USER 10001:10001
 
+# The commit the image was built from, shown on the Updates page. docker-compose.yml passes
+# OBSERVE_GIT_COMMIT from the environment or .env; the host helper passes `git rev-parse HEAD`.
+# A plain `docker compose build` with neither set shows "unknown".
+ARG OBSERVE_GIT_COMMIT=unknown
+ENV OBSERVE_GIT_COMMIT=$OBSERVE_GIT_COMMIT
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \

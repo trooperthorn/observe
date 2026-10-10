@@ -1,0 +1,12 @@
+[Unit]
+Description=Watch for an Observe update request (README "Updating")
+Documentation=https://github.com/trooperthorn/observe
+
+[Path]
+# The container writes this file when an admin presses Update Observe. The helper moves it
+# away before it acts, so the unit fires once per request.
+PathExists=@@DEPLOY@@/data/update/request.json
+Unit=observe-updater.service
+
+[Install]
+WantedBy=multi-user.target

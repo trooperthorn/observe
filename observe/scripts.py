@@ -120,6 +120,10 @@ def control_toml(host: str, allow: dict[str, Any], public_key: str) -> str:
         lines += ["", "[services]", f"restart = {_toml_list(list(services))}"]
     if allow.get("reboot") is True:
         lines += ["", "[reboot]", "allow = true", "delay_s = 60"]
+    if allow.get("update") is True:
+        # agent.update may replace the agent container. The daemon's own self-update stays off:
+        # it would restart the daemon that runs the command (docs/CONTROL.md, "[update]").
+        lines += ["", "[update]", "agent = true", "control = false"]
     return "\n".join(lines) + "\n"
 
 
@@ -476,7 +480,8 @@ def render_linux(red: Redeemed, ctx: Context) -> str:
         out.insert(2, MACHINE_ID_LINE)
         toml = "\n".join(out)
         unit = _UNIT
-    elif red.allowlist.get("fans") or red.allowlist.get("services") or red.allowlist.get("reboot"):
+    elif red.allowlist.get("fans") or red.allowlist.get("services") or red.allowlist.get("reboot") \
+            or red.allowlist.get("update"):
         raise ScriptError("an allowlist needs control")
     script = _HEAD + _BODY
     fills = {"@@NAME@@": name, "@@LABEL@@": PLATFORMS[red.platform],
@@ -548,7 +553,7 @@ def _agent_only(red: Redeemed, ctx: Context, platform: str) -> tuple[str, str, s
     if not agent.startswith("wpi_"):
         raise ScriptError("this platform needs an agent key")
     if red.control_key or red.allowlist.get("fans") or red.allowlist.get("services") \
-            or red.allowlist.get("reboot"):
+            or red.allowlist.get("reboot") or red.allowlist.get("update"):
         raise ScriptError("control is not available for this platform")
     return name, url, mid, step, agent, [a for a in addrs if a]
 

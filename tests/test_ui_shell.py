@@ -71,7 +71,8 @@ def test_nav_table_names_only_real_pages_and_marks_admin_ones(env):
         assert env.client.get(str(row["href"])).status_code == 200, row
     admin_only = {r["href"] for r in table if r["admin"]}
     assert admin_only == {"/admin", "/admin/infra", "/admin/tiers", "/admin/retention", "/admin/recheck",
-                          "/admin/rules", "/admin/storage", "/audit", "/hosts/new"}
+                          "/admin/rules", "/admin/storage", "/admin/updates", "/audit",
+                          "/hosts/new"}
     assert {r["workspace"] for r in table} <= NAV_WORKSPACES
     assert "O" in SHELL and 'el("span", "shell-badge", "O")' in SHELL
 

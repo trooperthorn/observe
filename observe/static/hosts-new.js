@@ -29,7 +29,7 @@ let state = fresh();
 const urlParts = { box: $("public-url-box"), form: $("public-url-form"), input: $("public-url"), status: $("public-url-status") };
 
 function fresh() {
-  return { name: "", platform: "linux", pool: "", control: false, reboot: false,
+  return { name: "", platform: "linux", pool: "", control: false, reboot: false, update: true,
            fans: defaultFans("linux"), services: defaultServices() };
 }
 
@@ -155,6 +155,7 @@ function drawAllowlist() {
   clear($("fan-list")).append(...state.fans.map((f) => listItem(f, true)));
   clear($("service-list")).append(...state.services.map((s) => listItem(s, false)));
   $("reboot").checked = state.reboot;
+  $("update-agent").checked = state.update;
   $("allow-error").textContent = "";
 }
 
@@ -172,6 +173,7 @@ function addEntry(inputId, list, ok, what) {
 $("fan-add").addEventListener("click", () => addEntry("fan-new", state.fans, validHeader, "header"));
 $("service-add").addEventListener("click", () => addEntry("service-new", state.services, validService, "service name"));
 $("reboot").addEventListener("change", () => { state.reboot = $("reboot").checked; });
+$("update-agent").addEventListener("change", () => { state.update = $("update-agent").checked; });
 $("allow-back").addEventListener("click", () => go("agent"));
 $("form-allow").addEventListener("submit", (e) => { e.preventDefault(); create(); });
 

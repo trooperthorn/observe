@@ -44,6 +44,91 @@
         "title": "Acked",
         "type": "object"
       },
+      "AgentList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentRow"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AgentList",
+        "type": "object"
+      },
+      "AgentRow": {
+        "properties": {
+          "agent_version": {
+            "title": "Agent Version",
+            "type": "string"
+          },
+          "control": {
+            "description": "The host has an active control (wpc) key.",
+            "title": "Control",
+            "type": "boolean"
+          },
+          "control_pulled": {
+            "title": "Control Pulled",
+            "type": "boolean"
+          },
+          "eligible": {
+            "description": "An agent update can be queued for this host.",
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "last_pull": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Pull"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "pull_age_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pull Age S"
+          },
+          "reason": {
+            "description": "Why not, when eligible is false.",
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "platform",
+          "agent_version",
+          "control",
+          "control_pulled",
+          "eligible",
+          "reason"
+        ],
+        "title": "AgentRow",
+        "type": "object"
+      },
       "AlertTarget": {
         "properties": {
           "last_error": {
@@ -522,6 +607,52 @@
           "acknowledged"
         ],
         "title": "FindingOut",
+        "type": "object"
+      },
+      "GitHubOut": {
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "latest_commit": {
+            "default": "",
+            "title": "Latest Commit",
+            "type": "string"
+          },
+          "latest_tag": {
+            "default": "",
+            "title": "Latest Tag",
+            "type": "string"
+          },
+          "ok": {
+            "description": "False means the last check failed or none was made yet.",
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "repo": {
+            "title": "Repo",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "ok",
+          "repo"
+        ],
+        "title": "GitHubOut",
         "type": "object"
       },
       "GroupOut": {
@@ -1953,6 +2084,35 @@
         "title": "MonitorPage",
         "type": "object"
       },
+      "OpenRequest": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "requested_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested At"
+          }
+        },
+        "required": [
+          "id",
+          "phase"
+        ],
+        "title": "OpenRequest",
+        "type": "object"
+      },
       "PluginList": {
         "properties": {
           "items": {
@@ -2741,6 +2901,131 @@
           "items"
         ],
         "title": "UnlinkedList",
+        "type": "object"
+      },
+      "UpdateState": {
+        "properties": {
+          "failed_in": {
+            "default": "",
+            "description": "The phase a failed update stopped in.",
+            "title": "Failed In",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "log": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Log",
+            "type": "array"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "new_commit": {
+            "default": "",
+            "title": "New Commit",
+            "type": "string"
+          },
+          "old_commit": {
+            "default": "",
+            "title": "Old Commit",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "phase",
+          "message",
+          "updated_at",
+          "log",
+          "stale"
+        ],
+        "title": "UpdateState",
+        "type": "object"
+      },
+      "UpdateStatus": {
+        "properties": {
+          "commit": {
+            "title": "Commit",
+            "type": "string"
+          },
+          "github": {
+            "$ref": "#/components/schemas/GitHubOut"
+          },
+          "phases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Phases",
+            "type": "array"
+          },
+          "request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpenRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UpdateState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "update_dir": {
+            "title": "Update Dir",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "commit",
+          "update_dir",
+          "github",
+          "phases"
+        ],
+        "title": "UpdateStatus",
         "type": "object"
       },
       "UserOut": {
@@ -8676,6 +8961,202 @@
         "x-rate-cost": 1.0,
         "x-roles": [
           "viewer"
+        ]
+      }
+    },
+    "/updates/agents": {
+      "get": {
+        "description": "Every host that has pushed, with its control daemon state and whether an agent update\ncan be queued for it. Pair it with /hosts for the status columns.",
+        "operationId": "update_agents",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "304": {
+            "description": "Unchanged since the ETag in If-None-Match."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid session or read token."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The role is too low, or the CSRF token is missing."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Rate limit exceeded. Retry-After says when to retry."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "An internal error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The database is busy. Retry-After says when."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Agent versions and control daemons, for updates",
+        "tags": [
+          "updates"
+        ],
+        "x-change-domains": [],
+        "x-rate-cost": 1.0,
+        "x-roles": [
+          "admin"
+        ]
+      }
+    },
+    "/updates/status": {
+      "get": {
+        "description": "The running version and commit, the hourly upstream check (when it is on), the open\nrequest if there is one, and the host helper's progress.",
+        "operationId": "update_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "304": {
+            "description": "Unchanged since the ETag in If-None-Match."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid session or read token."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The role is too low, or the CSRF token is missing."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Rate limit exceeded. Retry-After says when to retry."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "An internal error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The database is busy. Retry-After says when."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Version, upstream check and update progress",
+        "tags": [
+          "updates"
+        ],
+        "x-change-domains": [],
+        "x-rate-cost": 1.0,
+        "x-roles": [
+          "admin"
         ]
       }
     },
