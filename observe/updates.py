@@ -13,7 +13,8 @@ Files, all under `server.update_dir` (the `update` folder of the data volume):
   older than ten minutes or with an id it has seen.
 - `state.json`: written by the helper, `{"v": 1, "id", "phase", "message", "started_at",
   "updated_at", "old_commit", "new_commit", "log": [...]}`. Phases: received, backup, fetch,
-  build, validate, restart, done, failed. The log is read back through the audit redactor, cut to
+  build, validate, restart, done, failed, with `failed_in` naming the phase a failure happened
+  in. The log is read back through the audit redactor, cut to
   the last 50 lines, and every line is stripped of control characters before it is served.
 
 The GitHub check (`server.update_check`, off by default) asks api.github.com for the newest
@@ -209,6 +210,8 @@ def read_state(update_dir: str | Path, now: float) -> dict[str, Any] | None:
         "updated_at": updated,
         "old_commit": _commit(data.get("old_commit")),
         "new_commit": _commit(data.get("new_commit")),
+        # The phase the helper was in when it failed, so the page marks that chip.
+        "failed_in": data.get("failed_in") if data.get("failed_in") in PHASES else "",
         "log": lines,
         "stale": phase not in FINAL_PHASES and now - updated > STATE_STALE_S,
     }

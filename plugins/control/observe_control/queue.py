@@ -32,7 +32,8 @@ from observe.store import Store
 
 from .signing import sign_command
 
-ACTIONS = ("fan.set_floor", "fan.set_mode", "service.restart", "host.reboot")
+ACTIONS = ("fan.set_floor", "fan.set_mode", "service.restart", "host.reboot", "agent.update")
+UPDATE = "agent.update"
 REBOOT = "host.reboot"
 OPEN_STATES = ("requested", "pulled", "scheduled")
 EXPIRABLE_STATES = ("requested", "pulled")  # a scheduled command has already been answered

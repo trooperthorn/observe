@@ -17,7 +17,7 @@ from observe.api import ApiContext, ApiRegistry
 from observe.api.cursor import PageParams, encode
 from observe.api.models import Page, Ts
 
-from .actions import CONTROLLERS, MODES, capabilities
+from .actions import COMPONENTS, CONTROLLERS, MODES, capabilities
 from .queue import ACTIONS, EXPIRABLE_STATES
 
 
@@ -95,6 +95,7 @@ class Capabilities(BaseModel):
     capabilities: dict[str, Any]
     controllers: list[str]
     modes: list[str]
+    components: list[str]
 
 
 async def host_capabilities(ctx: ApiContext, host: str = "") -> dict[str, Any]:
@@ -102,7 +103,8 @@ async def host_capabilities(ctx: ApiContext, host: str = "") -> dict[str, Any]:
     data = await ctx.store.latest_host(host) if host else None
     return {"host": host, "known": data is not None, "actions": list(ACTIONS),
             "capabilities": capabilities(data["samples"] if data else []),
-            "controllers": list(CONTROLLERS), "modes": list(MODES)}
+            "controllers": list(CONTROLLERS), "modes": list(MODES),
+            "components": list(COMPONENTS)}
 
 
 def register(api: ApiRegistry) -> None:

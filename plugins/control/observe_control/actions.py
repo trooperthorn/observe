@@ -14,6 +14,9 @@ from .queue import QueueError
 
 CONTROLLERS = ("thermalctl", "thermal-control-suite")
 MODES = ("dry_run", "active")
+# What agent.update may update: the agent container, the control daemon, or both. The
+# daemon's own [update] allowlist (docs/CONTROL.md) has the final say on each.
+COMPONENTS = ("agent", "control", "all")
 _HEADER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,31}")
 _SERVICE = re.compile(r"[A-Za-z0-9_.@:-]{1,128}")
 _FAN_METRICS = ("fan", "fan_duty", "fan_target")
@@ -85,4 +88,9 @@ def validate(action: str, params: Any, caps: dict[str, Any]) -> dict[str, Any]:
     if action == "host.reboot":
         _only(params, ())
         return {}
+    if action == "agent.update":
+        _only(params, ("component",))
+        if params["component"] not in COMPONENTS:
+            raise QueueError(f"component must be one of {', '.join(COMPONENTS)}", 422)
+        return {"component": params["component"]}
     raise QueueError(f"unknown action {action!r}", 422)

@@ -5,14 +5,16 @@ Status: the Observe side is built (the `control` plugin). The hostwatch-control 
 - change a fan floor;
 - switch a fan controller between dry run and active;
 - restart an allowlisted service;
-- reboot.
+- reboot;
+- update the hostwatch agent container, and (off by default) the control daemon itself.
 
 Each host's own allowlist has the final say. These owner decisions were made on 2026-10-04:
 
 - hosts pull commands;
 - a separate control daemon runs on each host;
 - the host's allowlist is the authority;
-- all four actions are in the first build.
+- all four actions are in the first build. `agent.update` was added on 2026-10-10 with the
+  Updates page (README "Updating").
 
 ## Parts
 
@@ -77,10 +79,11 @@ This section is a contract shared with the hostwatch-control daemon. Change it o
 These routes need an admin session, and every POST needs the CSRF token (`X-CSRF-Token`). A non-admin session gets 403 and a missing or wrong token gets 403.
 
 - **Request:** `POST /api/plugins/control/request` takes `{"host", "action", "params", "confirmed", "confirm_host"}`. The host must have reported at least once (404 otherwise). `confirmed` must be the JSON boolean `true`, which is what the dialog's Confirm button sends; the strings "true" and "yes" and the number 1 are refused (400 otherwise). A header or service name must match its pattern in full, so a trailing newline or space is refused before signing (422). For `host.reboot`, `confirm_host` must equal `host` character for character (400 otherwise). A success returns `{"id", "state": "requested", "seq", "expires_at"}` and goes through the queue, so the rate limits (429) and signing apply. Every refusal is audited as `control_request_refused` with the reason.
-- **Parameters:** each action takes exactly these parameters and nothing else (422 otherwise). `fan.set_floor`: `controller` (`thermalctl` or `thermal-control-suite`), `header` (1 to 32 letters, digits, dashes or underscores, not starting with a dash, the rule hostwatch-control applies; dots are refused) and `min_duty` (a whole number from 0 to 100). `fan.set_mode`: `controller` and `mode` (`dry_run` or `active`). `service.restart`: `name` (1 to 128 letters, digits and `. _ @ : -`). `host.reboot`: none.
-- **Capabilities:** Observe compares a request with what the host last reported. When thermalctl has reported fans, a thermalctl `header` must be one of them, and `fan.set_mode` for thermalctl needs a thermalctl source. When the host has reported nothing about a controller, nothing is checked beyond the shape, and the host's allowlist decides. `GET /api/v2/control/capabilities?host=` returns the actions, controllers, modes and the reported headers, so the page can offer valid choices.
+- **Parameters:** each action takes exactly these parameters and nothing else (422 otherwise). `fan.set_floor`: `controller` (`thermalctl` or `thermal-control-suite`), `header` (1 to 32 letters, digits, dashes or underscores, not starting with a dash, the rule hostwatch-control applies; dots are refused) and `min_duty` (a whole number from 0 to 100). `fan.set_mode`: `controller` and `mode` (`dry_run` or `active`). `service.restart`: `name` (1 to 128 letters, digits and `. _ @ : -`). `host.reboot`: none. `agent.update`: `component` (`agent`, `control` or `all`).
+- **Capabilities:** Observe compares a request with what the host last reported. When thermalctl has reported fans, a thermalctl `header` must be one of them, and `fan.set_mode` for thermalctl needs a thermalctl source. When the host has reported nothing about a controller, nothing is checked beyond the shape, and the host's allowlist decides. `GET /api/v2/control/capabilities?host=` returns the actions, controllers, modes, the components an update may name and the reported headers, so the page can offer valid choices.
+- **Update all:** `POST /api/plugins/control/update-agents` takes `{"component", "confirmed": true}` and queues one `agent.update` per eligible host: a host that has pushed, whose platform is `linux` or `raspberry-pi`, that has an active `wpc_` key and whose daemon has pulled at least once (`GET /api/v2/updates/agents` lists the hosts with that verdict and the reason). Each command goes through the queue above, so the per-host rate limits and `max_pending_per_action` apply to each host on its own. The answer is `{"component", "queued": [{"host", "id"}], "refused": [{"host", "reason"}]}`; a host refused by a rate limit or by eligibility is listed, never silently skipped. The Updates page (`/admin/updates`) calls it from its Update all button after a confirm dialog.
 - **Cancel:** `POST /api/plugins/control/commands/{id}/cancel` changes a command in state `requested` (not yet pulled) or `scheduled` to `cancelled` with one guarded update, for any action. A `pulled`, final or expired command gets 409, and an unknown id gets 404. Both are audited (`control_cancelled`, `control_cancel_refused`). A cancelled command is final, so a later result is refused with 409, and it is no longer served. A command cancelled while `scheduled` appears in the `cancel` list of the next pulls, which is how the daemon learns to cancel the delayed reboot.
-- **History:** `GET /api/v2/control/commands?host=` lists that host's commands, newest first, with state and latest result. The Control section of the host page (`/host?name=`) shows it for admins as the last card of the host page, offers the four actions, asks for confirmation in the shared `<dialog>` (the reboot is a separate danger button that needs the host name typed), shows states as status chips, shows a refusal as an inline notice plus an error toast, and shows a Cancel reboot button while a reboot is scheduled. All text on the page is written with `textContent`.
+- **History:** `GET /api/v2/control/commands?host=` lists that host's commands, newest first, with state and latest result. The Control section of the host page (`/host?name=`) shows it for admins as the last card of the host page, offers the four actions, asks for confirmation in the shared `<dialog>` (the reboot is a separate danger button that needs the host name typed), shows states as status chips, shows a refusal as an inline notice plus an error toast, and shows a Cancel reboot button while a reboot is scheduled, and shows an `agent.update` result as the old and new version read from the daemon's output. All text on the page is written with `textContent`.
 
 ## Endpoints
 
@@ -90,6 +93,7 @@ These routes need an admin session, and every POST needs the CSRF token (`X-CSRF
 | `POST /api/v1/control/results` | `wpc_` key for that host | The daemon reports an outcome |
 | `POST /api/plugins/control/request` | admin session and CSRF | Request an action, with confirmation |
 | `POST /api/plugins/control/commands/{id}/cancel` | admin session and CSRF | Cancel a requested or scheduled command |
+| `POST /api/plugins/control/update-agents` | admin session and CSRF | Queue `agent.update` for every eligible host |
 | `GET /api/v2/control/commands?host=` | admin session | Command history with state and result |
 | `GET /api/v2/control/capabilities?host=` | admin session | Valid actions and reported fan headers |
 | `GET /api/v2/control/commands`, `GET /api/v2/control/capabilities?host=` | admin session | The same two reads on the v2 API. The list never writes: a command that expired without an answer is shown as `unknown` from the clock, and the legacy list also stores that state |
@@ -148,7 +152,17 @@ restart = ["hostwatch-agent", "nut-monitor", "docker:scrutiny"]
 [reboot]
 allow = true
 delay_s = 60                       # cancellable during the delay
+
+[update]
+agent = true                       # agent.update may replace the hostwatch-agent container
+control = false                    # agent.update may upgrade and restart this daemon
 ```
+
+A missing `[update]` table means no update is allowed, like a missing `[reboot]`. Observe's
+install and update commands write `[update]` with `agent` set from the "Allow agent updates from
+Observe" choice (on by default in the Add host wizard and on the host settings page) and
+`control = false`, because a control self-update restarts the daemon that is running the
+command. Turn `control` on by hand on a host where that is wanted.
 
 ## Actions
 
@@ -183,6 +197,48 @@ Parameters: none. The host name the admin typed (`confirm_host`) is checked by O
 
 - The daemon schedules the reboot after `delay_s` and reports `scheduled`.
 - Observe shows a cancel button for that window. The host can also cancel locally with `hostwatch-control cancel`.
+
+### `agent.update`
+
+Parameter: component (`agent`, `control` or `all`). Added with the Updates page
+(`/admin/updates`, README "Updating"), which offers it per host and for every eligible host at
+once. The console asks for confirmation in the shared dialog like `service.restart`.
+
+This is a contract shared with the hostwatch-control daemon (hostwatch repository,
+`hostwatch/control/`). Change it only in both repositories together.
+
+- **Allowlist:** the `[update]` table above. `agent` must be true for component `agent`, `control`
+  must be true for component `control`, and `all` needs both; otherwise the daemon refuses with the
+  reason, like any other action its allowlist does not permit.
+- **Component `agent`:** the daemon pulls the image the agent was installed with, which is
+  `ghcr.io/trooperthorn/hostwatch:edge` unless the running container was started from another
+  tag (it reads the tag from the running `hostwatch-agent` container, so a host pinned to a
+  release stays on that release line). It then recreates `hostwatch-agent` the way the installer
+  does (`observe/scripts.py`, `install_agent`): the running container is stopped and renamed
+  `hostwatch-agent-prev`, the new one is started with the installer's arguments (`--network host`,
+  `--user 10001:10001`, `--read-only`, `--tmpfs /tmp`, `--cap-drop ALL`,
+  `--security-opt no-new-privileges:true`, `--env-file /etc/hostwatch/agent.env`, the `/sys`,
+  journal and thermalctl read-only mounts and the `hostwatch-agent-data` volume), and only when
+  the new container is running is `hostwatch-agent-prev` removed. If the new container does not
+  start, the previous one is renamed back and started again, and the result is `failed`. The
+  `agent.env` file is read by Docker, never by the daemon, and no key is ever in the output.
+- **Component `control`:** the daemon runs `pip install --upgrade` of `hostwatch[control]` in
+  `/opt/hostwatch-control/venv` from the source the installer used, posts the result, and only
+  then schedules its own restart through systemd (`systemctl restart hostwatch-control` through
+  the same sudo rule set as `service.restart`, started detached so the result reaches Observe
+  first). `all` does the agent first and the daemon second, so a failed agent update leaves the
+  daemon as it was.
+- **Result:** `done` with the output a JSON object
+  `{"old_image_id": "sha256:...", "new_image_id": "sha256:...", "old_version": "1.4.0",
+  "new_version": "1.5.0"}`. For component `control` the image ids are empty strings and the
+  versions are the package versions before and after; for `all` the agent's values are
+  reported. When the image was already current the ids and versions are equal and the state is
+  still `done`. A failure is `failed` with the reason as plain text. Observe shows the result in
+  the Control card of the host page and on the Updates page as "old to new", or "already at
+  new" when nothing changed.
+- **Rate limits:** the usual ones (one pending per host and action, ten commands per host per
+  hour). The Updates page's Update all applies them per host and lists the hosts it could not
+  queue.
 
 ## Limits and safety
 

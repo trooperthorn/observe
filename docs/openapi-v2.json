@@ -2905,6 +2905,12 @@
       },
       "UpdateState": {
         "properties": {
+          "failed_in": {
+            "default": "",
+            "description": "The phase a failed update stopped in.",
+            "title": "Failed In",
+            "type": "string"
+          },
           "id": {
             "title": "Id",
             "type": "string"

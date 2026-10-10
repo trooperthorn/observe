@@ -40,6 +40,7 @@ class UpdateState(BaseModel):
     updated_at: Ts
     old_commit: str = ""
     new_commit: str = ""
+    failed_in: str = Field("", description="The phase a failed update stopped in.")
     log: list[str]
     stale: bool
 
