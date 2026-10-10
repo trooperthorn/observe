@@ -95,6 +95,28 @@ def test_an_unknown_host_is_404_and_a_host_outside_the_console_is_readable(env):
     assert body["can_update"] is False and body["task"] is None
 
 
+def test_the_enrolled_platform_is_the_platform_everywhere(env):
+    """truenas-svr was "linux" on Hosts and its host page (the agent's word) but "TrueNAS" on
+    its settings page and Updates (the enrolment). The enrolled platform now wins everywhere."""
+    hdr = admin(env)
+    enrol_host(env, hdr, name="truenas-svr", platform="truenas", control=False, allowlist=None)
+    asyncio.run(env.store.execute(
+        "INSERT INTO hosts (host, platform, agent_version, first_seen, last_seen) "
+        "VALUES ('truenas-svr', 'linux', '1.0', 1.0, 2.0) ON CONFLICT (host) DO UPDATE SET "
+        "platform = excluded.platform"))
+    asyncio.run(env.store.execute(
+        "INSERT INTO hosts (host, platform, agent_version, first_seen, last_seen) "
+        "VALUES ('legacy', 'Linux', '1.0', 1.0, 2.0)"))
+    rows = {r["host"]: r for r in asyncio.run(env.store.host_rows())}
+    assert rows["truenas-svr"]["platform"] == "truenas"
+    assert rows["truenas-svr"]["reported_platform"] == "linux"
+    assert rows["legacy"]["platform"] == "Linux"  # not enrolled: the agent's word
+    listed = {h["host"]: h for h in env.client.get("/api/v2/hosts").json()["items"]}
+    assert listed["truenas-svr"]["platform"] == "truenas"
+    assert env.client.get("/api/v2/hosts/truenas-svr").json()["platform"] == "truenas"
+    assert settings(env, "truenas-svr").json()["platform"] == "truenas"
+
+
 # ---------------------------------------------------------------- the allowlist
 
 

@@ -465,16 +465,26 @@ class Store:
             lambda db: self._latest_host_unit(db, host, since, fallback, want))
 
     async def host_rows(self) -> list[dict[str, Any]]:
-        """One row per host that has ever pushed, ordered by name."""
+        """One row per host that has ever pushed, ordered by name. `platform` is the one the
+        admin chose when enrolling the host (enrolments.platform, e.g. truenas), else what the
+        agent reports (hosts.platform, e.g. linux on a TrueNAS box), so the host list, the host
+        page, its settings and Updates name the same platform; `reported_platform` keeps the
+        agent's own word."""
         rows = await self.fetch(
             "SELECT h.host, h.platform, h.agent_version, h.first_seen, h.last_seen, h.boot_id, "
-            "h.boot_ts, h.clean_shutdown, h.confirmed, e.reports FROM hosts h "
+            "h.boot_ts, h.clean_shutdown, h.confirmed, e.reports, e.platform FROM hosts h "
             "LEFT JOIN enrolments e ON e.host = h.host ORDER BY h.host")
         # install_reports: the console install's step reports (enrol.record_step), or None for a
         # host that was not added through the console.
         keys = ("host", "platform", "agent_version", "first_seen", "last_seen", "boot_id",
                 "boot_ts", "clean_shutdown", "confirmed", "install_reports")
-        return [dict(zip(keys, r)) for r in rows]
+        out = []
+        for r in rows:
+            row = dict(zip(keys, r[:10]))
+            row["reported_platform"] = r[1]
+            row["platform"] = r[10] or r[1]
+            out.append(row)
+        return out
 
     async def host_sources(self, host: str) -> dict[str, dict[str, Any]]:
         """Source status for a host, with when each source was last reported."""
