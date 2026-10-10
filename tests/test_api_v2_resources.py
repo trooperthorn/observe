@@ -139,10 +139,10 @@ def test_host_list_and_detail(env):
     body = get(env, "/hosts").json()
     assert [h["host"] for h in body["items"]] == ["alpha", "nas01", "rack/nas 01?#%"]
     first = body["items"][0]
-    assert first["last_seen"].endswith("Z") and first["sections"]["cpu"] == "good"
+    assert first["last_seen"].endswith("Z") and first["sections"]["cpu"] == "no_data"  # source up, nothing graded
     assert set(first) >= {"status", "stale", "confirmed", "monitored", "states"}
     detail = get(env, "/hosts/nas01").json()
-    assert detail["host"] == "nas01" and detail["cpu"]["status"] == "good"
+    assert detail["host"] == "nas01" and detail["cpu"]["status"] == "no_data"
     assert detail["sources"][0]["updated"].endswith("Z")
     assert all(i["ts"].endswith("Z") for i in detail["cpu"]["items"])
     odd = get(env, "/hosts/rack%2Fnas%2001%3F%23%25")

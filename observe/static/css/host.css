@@ -32,3 +32,4 @@ table.items td, table.items th { text-align: left; padding: .2rem .4rem;
 table.items td.num { font-variant-numeric: tabular-nums; }
 .stalemark { color: var(--o-text-muted); font-style: italic; }
 .when { color: var(--o-text-muted); font-variant-numeric: tabular-nums; margin-right: var(--o-s1); }
+.hostpage ~ #footer { max-width: 70rem; }

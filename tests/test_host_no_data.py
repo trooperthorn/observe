@@ -32,7 +32,7 @@ def test_never_reported_host_has_no_up_or_warning_sections(tmp_path):
             assert d[sec]["status"] == "no_data", sec
             assert d[sec]["state"] == "not_reported", sec
         row = env.client.get("/api/v2/hosts").json()["items"][0]
-        assert set(row["sections"].values()) <= {"no_data", "good"}  # alerts is just empty
+        assert set(row["sections"].values()) == {"no_data"}  # no Up, no Warning anywhere
         assert row["sections"]["cpu"] == "no_data"
     finally:
         env.close()
@@ -124,3 +124,14 @@ def test_failed_install_step_is_shown_until_a_later_success_clears_it(env):
     assert page["install_problem"]["status"] == "failed"
     row = env.client.get("/api/v2/hosts").json()["items"][0]
     assert row["install_problem"]["note"] == "pull timed out"
+
+
+def test_a_section_whose_source_reports_but_has_no_readings_is_no_data(env):
+    # The hwmon source is up but sends no power reading: Power is not "Up" with nothing in it.
+    env.push(hv.batch(samples=[hv.s("hwmon", "hw.temperature", 41.0, "Cel",
+                                    labels={"hw.id": "coretemp:0"})],
+                      sources=[{"source": "hwmon", "available": True}]))
+    env.login()
+    d = hv.detail(env)
+    assert d["power"]["state"] == "ok" and d["power"]["items"] == []
+    assert d["power"]["status"] == "no_data" and d["temperatures"]["status"] == "good"

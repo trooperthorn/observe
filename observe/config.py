@@ -1187,3 +1187,33 @@ def load_config(path: str | Path) -> Config:
         if isinstance(dsn, str) and dsn:
             message = message.replace(dsn, "[withheld]")
         raise ConfigError(message) from None
+
+
+# Text the example configurations use where a real name belongs. A monitor whose target still
+# holds one checks nothing real (a DNS query for observe-svr.yourdomain is only ever NXDOMAIN).
+PLACEHOLDERS = ("yourdomain", "your-domain", "example.com", "example.org", "example.net",
+                "changeme", "change-me")
+
+
+# Only fields that name what a monitor checks are read, never headers, bodies or credentials,
+# so no secret can reach the log.
+TARGET_FIELDS = ("host", "address", "url", "query", "nameserver", "server_name", "device",
+                 "host_name", "base_path", "path", "topic")
+
+
+def placeholder_warnings(config: Config) -> list[str]:
+    """One line per monitor target field that still holds an example placeholder."""
+    out: list[str] = []
+    for m in config.monitors:
+        for field in TARGET_FIELDS:
+            value = getattr(m, field, None)
+            for text in (value if isinstance(value, list) else [value]):
+                if not isinstance(text, str):
+                    continue
+                hit = next((p for p in PLACEHOLDERS if p in text.lower()), None)
+                if hit:
+                    # A URL can carry a token in its query, so only its field is named.
+                    shown = "" if field == "url" else f" {text!r}"
+                    out.append(f"monitor {m.name!r}: {field}{shown} still holds the example "
+                               f"placeholder {hit!r}")
+    return out

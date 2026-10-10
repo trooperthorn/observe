@@ -40,3 +40,7 @@ header {
   display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center;
   padding: .75rem 1rem; border-bottom: 1px solid var(--o-border);
 }
+/* The "refreshed ..." line sits under the page's own column on every page, not against the
+   window edge. */
+#footer { max-width: var(--o-maxw); margin: 0 auto; padding: var(--o-s3) var(--o-s4) var(--o-s5);
+          color: var(--o-text-muted); font-size: var(--o-fs-sm); }

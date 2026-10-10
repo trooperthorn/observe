@@ -26,7 +26,7 @@ import uvicorn
 
 from . import __version__
 from .alerts import Alerter
-from .config import ConfigError, load_config
+from .config import ConfigError, load_config, placeholder_warnings
 from .otlp.export import Exporter
 from .plugins import PluginError, load_plugins
 from .scheduler import Scheduler
@@ -317,6 +317,8 @@ def main() -> int:
     except ConfigError as err:
         print(f"config error: {err}", file=sys.stderr)
         return 2
+    for line in placeholder_warnings(config):
+        log.warning("config: %s", line)
     if args.validate:
         plugins = _plugins(config)
         if plugins is None:

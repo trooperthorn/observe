@@ -461,7 +461,7 @@ def _section(name: str, samples: list[dict[str, Any]], sources: dict[str, dict[s
     level = worst([i["status"] for i in counted])
     if state in ("stale", "unavailable"):
         level = worst([level, WARNING])
-    elif state in ("absent", "not_reported"):
+    elif state in ("absent", "not_reported") or not counted:
         level = NO_DATA  # nothing to grade: neither Up nor Warning
     return {"status": level, "state": state, "note": note, "items": items}
 
@@ -564,6 +564,8 @@ def build_host_view(row: dict[str, Any], data: dict[str, Any] | None,
     _memory_extra(out["memory"], overrides)
     out["components"] = _components(monitor, row, samples, sources, windows, now)
     out["alerts"] = _alerts(events, now, monitor)
+    if not heard and not out["alerts"]["items"]:
+        out["alerts"]["status"] = NO_DATA  # a host that never reported has no "Up" anywhere
     out["events"] = events
     out["sources"] = source_views(sources, now, windows)
     levels = [out[n]["status"] for n in VERDICT]

@@ -14,7 +14,14 @@
 .graphcols { display: grid; grid-template-columns: minmax(0, 1fr) 18rem; gap: var(--o-s3); align-items: start; }
 .selectedcard { border: 1px solid var(--o-border); border-radius: var(--o-radius); padding: var(--o-s3); }
 .selectedcard h2 { margin-top: 0; }
-.viewbtn[aria-pressed="true"] { font-weight: 700; text-decoration: underline; }
+/* The view and zoom buttons take their colours from the tokens, so they are not white blocks on
+   the dark theme. */
+.graph-toolbar button { background: var(--o-surface); color: var(--o-text);
+                        border: 1px solid var(--o-border-input); border-radius: 4px;
+                        padding: 0 var(--o-s3); }
+.graph-toolbar button:hover { background: var(--o-accent-tint); }
+.viewbtn[aria-pressed="true"] { font-weight: 700; text-decoration: underline;
+                                border-color: var(--o-accent); color: var(--o-accent); }
 @media (max-width: 900px) { .graphcols { grid-template-columns: minmax(0, 1fr); } }
 
 /* Map page layers, nodes and edges. */
