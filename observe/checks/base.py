@@ -66,8 +66,11 @@ def threshold_level(value: float, th: Thresholds, held: Result = Result.OK) -> R
     return Result.OK
 
 
+_RANK = {Result.OK: 0, Result.WARN: 1, Result.FAIL: 2}
+
+
 def apply_thresholds(res: CheckResult, th: Thresholds | None,
-                     held: Result = Result.OK) -> CheckResult:
+                     held: Result = Result.OK, level: Result | None = None) -> CheckResult:
     """Downgrade an OK result to WARN or FAIL based on its numeric value. `held` is the level
     the thresholds gave the previous value (threshold_level).
 
@@ -76,7 +79,8 @@ def apply_thresholds(res: CheckResult, th: Thresholds | None,
     """
     if th is None or res.result is Result.FAIL or res.value is None:
         return res
-    level = threshold_level(res.value, th, held)
+    if level is None:
+        level = threshold_level(res.value, th, held)
     unit = unit_suffix(res.unit)
     if level is Result.FAIL:
         res.result = Result.FAIL
@@ -96,8 +100,10 @@ class Check:
         self.timeout: float = config.effective(monitor, "timeout")
         # Set by the scheduler before each run: the monitor is in its fast re-check window.
         self.rechecking: bool = False
-        # The level the thresholds gave the last value, for their hysteresis.
+        # The level the thresholds gave the last value, for their hysteresis, and how many
+        # polls in a row the value has been back below that level (Thresholds.clear_polls).
         self.threshold_held: Result = Result.OK
+        self.threshold_clearing: int = 0
 
     def credential(self) -> Any:
         name = getattr(self.monitor, "credential", None)
@@ -118,5 +124,15 @@ class Check:
         if th is None or res.result is Result.FAIL or res.value is None:
             return res
         held = self.threshold_held
-        self.threshold_held = threshold_level(res.value, th, held)
-        return apply_thresholds(res, th, held)
+        level = threshold_level(res.value, th, held)
+        if _RANK[level] < _RANK[held]:
+            # Back inside the band: the held level clears only after clear_polls such polls.
+            self.threshold_clearing += 1
+            if self.threshold_clearing < th.clear_after():
+                level = held
+            else:
+                self.threshold_clearing = 0
+        else:
+            self.threshold_clearing = 0
+        self.threshold_held = level
+        return apply_thresholds(res, th, held, level)

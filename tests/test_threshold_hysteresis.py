@@ -75,9 +75,10 @@ def test_a_count_unit_is_left_out_of_the_message():
 
 
 class Scripted(Check):
-    def __init__(self, values: list[float]) -> None:
+    def __init__(self, values: list[float], **extra) -> None:
         cfg = make_config([{"name": "a", "type": "tcp", "host": "192.0.2.1", "port": 1,
-                            "thresholds": {"direction": "above", "warn": 2, "crit": 10}}])
+                            "thresholds": {"direction": "above", "warn": 2, "crit": 10,
+                                           **extra}}])
         super().__init__(cfg.monitors[0], cfg)
         self.values = list(values)
 
@@ -88,10 +89,34 @@ class Scripted(Check):
 
 
 def test_a_check_keeps_its_level_between_polls():
-    check = Scripted([1.9, 2.1, 1.9, 2.0, -1, 1.95, 1.8])
+    check = Scripted([1.9, 2.1, 1.9, 2.0, -1, 1.95, 1.8], clear_polls=1)
 
     async def run():
         return [(await check.run()).result for _ in range(7)]
 
     assert asyncio.run(run()) == [Result.OK, Result.WARN, Result.WARN, Result.WARN,
                                   Result.FAIL, Result.WARN, Result.OK]
+
+
+def test_a_noisy_rate_around_the_threshold_does_not_flap():
+    """Round 2 R10.8: dns1-servfail-rate still flipped warn/up around 1.9-2.1 % against 2 %,
+    because one poll below the 5 % band cleared the warning. By default a held threshold now
+    clears only after three polls in a row back inside the band, as threshold rules do."""
+    noisy = [2.1, 1.85, 2.0, 1.88, 1.95, 2.05, 1.86, 1.9]
+    check = Scripted(noisy + [1.5, 1.5, 1.5])
+
+    async def run():
+        return [(await check.run()).result for _ in range(len(noisy) + 3)]
+
+    got = asyncio.run(run())
+    assert got[:len(noisy)] == [Result.WARN] * len(noisy)  # no flap
+    assert got[len(noisy):] == [Result.WARN, Result.WARN, Result.OK]  # clears on the third
+
+
+def test_clear_polls_is_validated():
+    import pytest
+    from observe.config import Thresholds
+    assert Thresholds(warn=2).clear_after() == 3
+    assert Thresholds(warn=2, clear_polls=1).clear_after() == 1
+    with pytest.raises(ValueError):
+        Thresholds(warn=2, clear_polls=0)

@@ -229,7 +229,9 @@ A kept Up state with a good result no older than three intervals comes back Up a
 with the kept `since`. A missed reply of a monitor whose prior state is Down starts no Degraded
 episode. Built-in YAML `thresholds` have a clear band (`hysteresis`, default 5% of each
 threshold): `Check` keeps the level they gave the last value and `threshold_level` holds it until
-the value is back past the threshold by the band.
+the value is back past the threshold by the band, and has stayed back for `clear_polls` polls
+in a row (default 3, as a threshold rule's `clear`), so a noisy rate that dips under the band for
+one poll does not flap.
 
 A host or field push refused with `StorageBusy` is answered 503 at once and writes no audit row,
 so a refused push adds no unit to the full queue. Writes made by plugin collectors run with
