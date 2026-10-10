@@ -450,14 +450,16 @@ def test_overview_carries_the_five_tiles_and_clients_per_ssid(tmp_path):
         polled(e)
         got = e.client.get(API + "/overview").json()
         assert got["site_id"] == "site-1" and got["status"] == "online"
+        assert got["site_name"] == "Default"  # from the /sites list, not the id
         assert got["gateway"] == {"device_id": "dev-1", "name": "UDM", "state": "ONLINE"}
-        assert got["internet_up"] is True
+        assert got["internet_up"] is True and got["internet_source"] == "console"
         assert got["wan"] == {"ip": "192.0.2.9", "port": "eth8", "rx_rate_bps": 1500.0,
                               "tx_rate_bps": 250.0, "latency_ms": 12.0}
         assert (got["wireless_clients"], got["wired_clients"], got["total_clients"],
                 got["device_count"]) == (3, 2, 5, 3)
         assert got["clients_per_ssid"] == [{"ssid": "IoT", "count": 2},
                                            {"ssid": "HomeWiFi", "count": 1}]
+        assert got["clients_unknown_ssid"] == 0
         assert got["devices_stale"] is False and got["classic_stale"] is False
         assert got["devices_updated"].endswith("Z") and got["classic_updated"].endswith("Z")
         assert got["clients_updated"].endswith("Z") and got["classic_configured"] is True
@@ -477,13 +479,15 @@ def test_overview_degrades_without_the_classic_account_and_marks_an_offline_gate
     try:
         polled(e, classic=False)
         got = e.client.get(API + "/overview").json()
+        # An offline gateway's last rates say nothing about the Internet now.
         assert got["status"] == "offline" and got["internet_up"] is None
+        assert got["internet_source"] is None
         assert got["wan"] == {"ip": "", "port": "eth8", "rx_rate_bps": 1500.0,
                               "tx_rate_bps": 250.0, "latency_ms": None}
         assert got["classic_configured"] is False and got["classic_updated"] is None
         assert got["classic_stale"] is False
-        # Without classic detail every wireless client sits on the unknown SSID.
-        assert got["clients_per_ssid"] == [{"ssid": "(unknown SSID)", "count": 3}]
+        # Without classic detail no SSID is known: no bar named "(unknown SSID)", only a count.
+        assert got["clients_per_ssid"] == [] and got["clients_unknown_ssid"] == 3
         assert (got["wireless_clients"], got["wired_clients"]) == (3, 2)
         assert e.client.get(API + "/wlans").json() == {"items": []}
         assert e.client.get(API + "/absent-clients").json()["items"] == []
@@ -491,11 +495,38 @@ def test_overview_degrades_without_the_classic_account_and_marks_an_offline_gate
         e.close()
 
 
+def test_overview_takes_the_internet_as_up_from_live_wan_traffic_without_classic(tmp_path):
+    """The reported page: "Internet: Unknown" beside 15.5 / 1.19 Mbit/s of WAN traffic. The
+    Integration statistics give the rates but no up flag; an online gateway moving traffic both
+    ways is connected."""
+    e = api_env(tmp_path, network_console())
+    try:
+        polled(e, classic=False)
+        got = e.client.get(API + "/overview").json()
+        assert got["status"] == "online"
+        assert got["internet_up"] is True and got["internet_source"] == "wan_traffic"
+        assert got["site_name"] == "Default"
+    finally:
+        e.close()
+
+
+@pytest.mark.parametrize("reported, status, rx, tx, want", [
+    (False, "online", 100.0, 100.0, (False, "console")),  # a reported state always wins
+    (None, "online", 100.0, 0.0, (None, None)),  # one way only is not proof
+    (None, "online", None, None, (None, None)),
+    (None, "unknown", 100.0, 100.0, (None, None)),
+])
+def test_internet_state_rules(reported, status, rx, tx, want):
+    from observe_unifi.api import internet_state
+    assert internet_state(reported, status, rx, tx) == want
+
+
 def test_overview_before_any_poll_is_all_unknown(tmp_path):
     e = api_env(tmp_path, Full([]))
     try:
         got = e.client.get(API + "/overview").json()
         assert got["site_id"] is None and got["status"] == "unknown" and got["gateway"] is None
+        assert got["site_name"] == "" and got["internet_up"] is None
         assert got["total_clients"] == 0 and got["clients_per_ssid"] == []
         assert got["devices_updated"] is None and got["devices_stale"] is False
     finally:

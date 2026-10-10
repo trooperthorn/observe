@@ -111,6 +111,7 @@ class UniFiPlugin(PluginBase):
         # Wall time of the last devices poll that succeeded, for the devices page.
         self.devices_ok_at: float | None = None
         self._site_id: str | None = None
+        self._site_name = ""
 
     def config_model(self) -> type[BaseModel]:
         return UniFiSettings
@@ -267,6 +268,9 @@ class UniFiPlugin(PluginBase):
                 sites = await api.list_all(c, "/sites")
                 site_id = self._pick_site(sites)
                 self._site_id = site_id
+                self._site_name = next(
+                    (x["name"] for x in sites if isinstance(x, dict) and x.get("id") == site_id
+                     and isinstance(x.get("name"), str)), "")
                 rows = await api.list_all(c, f"/sites/{site_id}/{suffix}")
                 if then is not None:
                     extra = await then(api, c, site_id, rows)
@@ -335,7 +339,7 @@ class UniFiPlugin(PluginBase):
         now = self.wall()
         # The device rows, the site status and the map feed are one cycle in one transaction.
         await feed_integration(store, devices, now, save_devices=True,
-                               site_status=(site_id, gid, wan))
+                               site_status=(site_id, gid, {**wan, "site_name": self._site_name}))
         self.devices_ok_at = now
         return len(devices)
 

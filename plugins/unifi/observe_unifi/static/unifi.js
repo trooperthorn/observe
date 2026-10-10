@@ -8,8 +8,8 @@ import { formatValue } from "/static/js/format.js";
 import { neutralChip, statusChip, monoTag } from "/static/js/chips.js";
 import { sortableTable } from "/static/js/table.js";
 import { attachment, bandText, carryingText, clientState, defaultSsid, filterClients,
-  markCamerasStale, markClientsStale, permittedApsText, ssidOptions, uptimeSeconds,
-  vlanOptions, windowFor } from "/plugins/unifi/static/vlist-core.js";
+  internetTile, lastSeenCell, markCamerasStale, markClientsStale, permittedApsText, siteText,
+  ssidBarRows, ssidOptions, uptimeSeconds, vlanOptions, windowFor } from "/plugins/unifi/static/vlist-core.js";
 
 const page = document.getElementById("page");
 const footer = document.getElementById("footer");
@@ -20,7 +20,10 @@ const DEVICE_STATES = { ONLINE: ["up", "Online"], OFFLINE: ["down", "Offline"],
 const DASH = "—";
 const DEVICE_PAGES = [25, 50, 100];
 const deviceSeen = (r) => (String(r.state || "").toUpperCase() === "ONLINE" ? r.last_seen : r.online_at || null);
-const CLASSIC_NOTE = "Offline clients, switch ports, VLANs, uptime, bandwidth, Wi-Fi names and the SSID configuration need the optional classic controller account.";
+const CLASSIC_NOTE = "Offline clients, switch ports, VLANs, uptime, bandwidth, Wi-Fi names, clients per SSID and the Wi-Fi join diagnostics need the optional classic controller account.";
+// Where the classic account is set up: a unifi_classic credential named in
+// plugin_settings.unifi.classic_credential, described in the README.
+const CLASSIC_HELP = "https://github.com/trooperthorn/observe#setting-up-unifi-and-home-assistant-sources";
 
 // The SSID filter chosen on the overview bars; it is applied to the clients table. While the
 // Clients tab is open, `applySsid` is that table's setter; otherwise the tab is opened with it.
@@ -43,6 +46,22 @@ function section(title, ...kids) {
 }
 
 function note(text) { return el("p", "note", text); }
+
+// The one "needs the classic controller account" state, with where it is configured. It stands
+// in for every widget that only the classic views fill, which are left out instead of showing
+// placeholders.
+function classicNeeded(title) {
+  const card = el("section", "card classic-needed");
+  card.append(el("h3", null, title), el("p", null, CLASSIC_NOTE));
+  const how = el("p", "muted");
+  const link = el("a", null, "Setting up UniFi and Home Assistant sources");
+  link.href = CLASSIC_HELP;
+  link.rel = "noopener";
+  how.append(document.createTextNode("Add a view-only local UniFi account as a unifi_classic credential and name it in plugin_settings.unifi.classic_credential: see "),
+    link, document.createTextNode(" in the README."));
+  card.append(how);
+  return card;
+}
 
 function dash() { return el("span", "dash", DASH); }
 
@@ -97,15 +116,19 @@ function uptimeText(c, now) {
 
 // ---- Overview: the five tiles and the clients per SSID ----
 
-function overviewView(o) {
+function overviewView(o, tab) {
   const frag = document.createDocumentFragment();
-  const tiles = el("div", "kpi-row five");
+  const inetTile = internetTile(o);
+  // The Internet tile is left out while its state is unknown, so the row has four tiles then.
+  const tiles = el("div", inetTile ? "kpi-row five" : "kpi-row four");
   const status = o.status === "online" ? statusChip("up", "Online")
     : o.status === "offline" ? statusChip("down", "Offline") : statusChip("unavailable", "Unknown");
-  tiles.append(kpi(status, "Network status", o.site_id ? `site ${o.site_id}` : "no site polled yet"));
-  const inet = o.internet_up === true ? statusChip("up", "Connected")
-    : o.internet_up === false ? statusChip("down", "Down") : statusChip("unavailable", "Unknown");
-  tiles.append(kpi(inet, "Internet", o.wan.ip ? `WAN ${o.wan.ip}` : (o.wan.port || DASH)));
+  tiles.append(kpi(status, "Network status", siteText(o)));
+  if (inetTile) {
+    const inet = inetTile.up ? statusChip("up", "Connected") : statusChip("down", "Down");
+    const where = o.wan.ip ? `WAN ${o.wan.ip}` : (o.wan.port || DASH);
+    tiles.append(kpi(inet, "Internet", inetTile.inferred ? `${where}, from WAN traffic` : where));
+  }
   const wan = kpi(pair(rateText(o.wan.rx_rate_bps), rateText(o.wan.tx_rate_bps)), "WAN bandwidth",
     o.wan.port ? `port ${o.wan.port}` : DASH);
   wan.querySelector(".kpi-value").classList.add("small");
@@ -118,7 +141,10 @@ function overviewView(o) {
   if (o.classic_configured && o.classic_stale) notes.push(el("p", "note stale", `Stale: the classic views have not been read successfully since ${when(o.classic_updated)}.`));
   if (o.classic_configured && o.classic_note) notes.push(note(o.classic_note));
   frag.append(...notes);
-  if (o.clients_per_ssid.length) frag.append(ssidBars(o.clients_per_ssid));
+  // The Wi-Fi tab shows the same state as its own body, so it is not repeated above it.
+  if (!o.classic_configured && tab !== "wifi") frag.append(classicNeeded("Classic controller account not set up"));
+  const bars = ssidBarRows(o);
+  if (bars.length) frag.append(ssidBars(bars));
   return frag;
 }
 
@@ -227,13 +253,21 @@ function clientRow(c, index, now) {
   const cells = [twoLine(c.name || "unnamed", sub), c.ip ? monoTag(c.ip) : dash(), mac(c.mac),
     el("span", null, vlanText(c.vlan)), ssid, el("span", null, uptimeText(c, now)),
     hasRate ? pair(rateText(c.rx_rate_bps), rateText(c.tx_rate_bps)) : dash(),
-    el("span", null, state === "connected" ? when(c.connected_at || c.last_seen) : when(c.last_seen))];
+    lastSeen(c)];
   cells.forEach((x, i) => {
     const td = el("td", i === 3 ? "num" : i === 1 || i === 2 ? "mono" : null);
     td.append(x);
     tr.append(td);
   });
   return tr;
+}
+
+// A connected client is seen now (its Uptime column says since when); otherwise the last time
+// the console saw it, or a dash.
+function lastSeen(c) {
+  const cell = lastSeenCell(c);
+  if (cell.now) return el("span", null, "Connected now");
+  return cell.at ? el("span", null, when(cell.at)) : dash();
 }
 
 function spacer(height) {
@@ -332,7 +366,6 @@ function clientsView(d) {
 
   const notes = [note("A column shown as a dash is not reported by the console for that row. Bandwidth is the live rate the console reports, shown in bits per second.")];
   if (d.classic_configured && d.classic_note) notes.push(note(d.classic_note));
-  if (!d.classic_configured) notes.push(note(CLASSIC_NOTE));
   frag.append(section("Clients", filters, scroll, empty, ...notes));
   refilter();
   return frag;
@@ -380,11 +413,15 @@ function ssidCard(w) {
 
 function wifiView(d) {
   const frag = document.createDocumentFragment();
+  // Every part of this view comes from the classic views: without the account, one clear state
+  // instead of an intro and placeholders.
+  if (!d.classic_configured) {
+    frag.append(classicNeeded("Wi-Fi Join Diagnostics"));
+    return frag;
+  }
   const card = el("section", "card");
   card.append(el("h3", null, "Wi-Fi Join Diagnostics"), el("p", "intro", WIFI_INTRO));
-  if (!d.classic_configured) {
-    card.append(note(CLASSIC_NOTE));
-  } else if (!d.wlans.length) {
+  if (!d.wlans.length) {
     card.append(note("The classic views have not given any SSID yet. They appear after the first classic poll, when the console answers rest/wlanconf."));
   } else {
     const [wrap, sel] = select("SSID", [["", "All SSIDs"], ...d.wlans.map((w) => [w.name, w.name])], defaultSsid(d.wlans));
@@ -400,9 +437,7 @@ function wifiView(d) {
     card.append(filters, list);
   }
   card.append(el("h4", null, "Known but not connected"));
-  if (!d.classic_configured) {
-    card.append(el("p", "muted", "This list needs the classic controller account. A client that has never associated appears in no collection at all, so its absence here is not evidence that it is fine."));
-  } else if (!d.absent.length) {
+  if (!d.absent.length) {
     card.append(el("p", "muted", "Every wireless client the controller knows is connected right now."));
   } else {
     const columns = [
@@ -507,7 +542,7 @@ async function show(tab) {
   page.replaceChildren(frag);
   try {
     const [overview, body] = await Promise.all([get(`${API}/overview`), LOADERS[tab]()]);
-    top.append(overviewView(overview));
+    top.append(overviewView(overview, tab));
     panel.append(body);
   } catch (err) {
     panel.append(el("p", "empty muted", err.status === 401 ? "Signing in." : "The UniFi data could not be loaded."));

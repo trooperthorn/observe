@@ -1007,13 +1007,16 @@ connected and, only when the console gives a boolean `isRecording`, recording. N
 read because no route for it is verified.
 
 The **UniFi** page under Network (`/plugins/unifi`, signed in users only) follows the HA SOC
-network view. It opens with five tiles (network status with the site id, Internet with the WAN
-address, WAN bandwidth down and up with the port, wireless clients with the wired count, total
+network view. It opens with five tiles (network status with the site name from the `/sites`
+list, Internet with the WAN address, WAN bandwidth down and up with the port, wireless clients with the wired count, total
 clients with the device count) and the clients per SSID as bars; a click on a bar filters the
-clients table to that SSID. Below are the Clients, Devices, Wi-Fi join and Protect tabs. The
+clients table to that SSID. The Internet state is the one the console reports; without one, an
+online gateway moving traffic both ways on its uplink counts as connected ("from WAN traffic"),
+and otherwise the Internet tile is left out rather than shown as unknown. Below are the Clients, Devices, Wi-Fi join and Protect tabs. The
 Clients tab filters by text, VLAN, SSID and state and shows client (with a wireless or wired
 line), IPv4, MAC, VLAN, SSID, uptime, bandwidth (the live rates, shown in bits per second) and
-last seen, and draws only the rows in view, so a few thousand clients stay fast. The Devices tab
+last seen ("Connected now" for a connected client, whose uptime says since when; the last time
+the console saw it otherwise), and draws only the rows in view, so a few thousand clients stay fast. The Devices tab
 has a search and shows device (with its state), IPv4, MAC, VLAN (a dash: the management VLAN is
 not read from either API), model, firmware (Up to date, Update available or Not reported),
 bandwidth (the byte totals) and last seen, 25, 50 or 100 per page. The Wi-Fi join tab shows,
@@ -1022,7 +1025,9 @@ band, WPA3 only, open, a schedule, a restricted access point group), which acces
 it now, and the clients the console knows but is not carrying, newest first; no UniFi source
 records a failed join, so nothing there says a client failed. A value only the classic account
 gives (VLAN, uptime, bandwidth, SSID names, Internet state and the WAN address) is a dash without
-it, and a note says so. The page shows what the last poll stored, not live data, with a stale
+it. Without the account the page shows one "needs the classic controller account" card with a
+link to its setup, the clients per SSID bars are left out (no client has an SSID) and the Wi-Fi
+join tab is that card alone. The page shows what the last poll stored, not live data, with a stale
 marker when the devices or classic collector has not succeeded within twice its interval.
 The collector sends only GET requests, never follows a redirect, refuses a response over 4 MB
 and a list over 50 pages. After a 401 or 403 it stops sending requests, waits one interval, and

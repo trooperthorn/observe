@@ -139,6 +139,11 @@ MIGRATIONS = (
         "ALTER TABLE unifi_devices ADD COLUMN online_at REAL",
         "UPDATE unifi_devices SET online_at = last_seen WHERE state = 'ONLINE'",
     )),
+    # Version 6: the site's name from the Integration /sites list, so the overview names the
+    # site instead of showing its id. Empty until the next devices poll.
+    Migration(6, (
+        "ALTER TABLE unifi_site_status ADD COLUMN site_name TEXT NOT NULL DEFAULT ''",
+    )),
 )
 
 
@@ -372,12 +377,15 @@ def _flag(v: bool | None) -> int | None:
 def write_site_status_integration(db: Conn, site_id: str, gateway_device_id: str,
                                   wan: dict[str, Any], now: float) -> None:
     """The devices poll's share of `unifi_site_status`: the gateway and the uplink rates, port
-    and (when the statistics node says) Internet state. The classic columns are left as they
-    are. With no gateway the row still records the poll time, so the overview can say it ran."""
+    and (when the statistics node says) Internet state, and the site's name when `wan` carries
+    `site_name` (from the /sites list). The classic columns are left as they are. With no
+    gateway the row still records the poll time, so the overview can say it ran."""
     db.execute(
         """INSERT INTO unifi_site_status (site_id, gateway_device_id, wan_port, wan_rx_rate_bps,
-           wan_tx_rate_bps, internet_up, updated) VALUES (?,?,?,?,?,?,?)
+           wan_tx_rate_bps, internet_up, updated, site_name) VALUES (?,?,?,?,?,?,?,?)
            ON CONFLICT (site_id) DO UPDATE SET gateway_device_id=excluded.gateway_device_id,
+           site_name=CASE WHEN excluded.site_name != '' THEN excluded.site_name
+                          ELSE unifi_site_status.site_name END,
            wan_port=CASE WHEN excluded.wan_port != '' THEN excluded.wan_port
                          ELSE unifi_site_status.wan_port END,
            wan_rx_rate_bps=excluded.wan_rx_rate_bps, wan_tx_rate_bps=excluded.wan_tx_rate_bps,
@@ -385,7 +393,7 @@ def write_site_status_integration(db: Conn, site_id: str, gateway_device_id: str
                             ELSE excluded.internet_up END,
            updated=excluded.updated""",
         (site_id, gateway_device_id, wan.get("port") or "", wan.get("rx_rate_bps"),
-         wan.get("tx_rate_bps"), _flag(wan.get("up")), now))
+         wan.get("tx_rate_bps"), _flag(wan.get("up")), now, _text(wan.get("site_name"))))
 
 
 def write_site_status_classic(db: Conn, site_id: str, wan: dict[str, Any],

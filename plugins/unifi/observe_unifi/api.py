@@ -27,7 +27,6 @@ if TYPE_CHECKING:  # pragma: no cover
 
 DOMAINS = ("unifi",)
 ONLINE_DEVICE_STATES = frozenset({"ONLINE", "CONNECTED"})
-UNKNOWN_SSID = "(unknown SSID)"
 # A client or camera row is stale when its last_seen is older than this many poll intervals.
 STALE_FACTOR = 2.5
 # The devices list is stale when the devices collector has not succeeded within this many
@@ -240,15 +239,24 @@ class Gateway(BaseModel):
 class Overview(BaseModel):
     now: Ts
     site_id: str | None = None
+    site_name: str = Field("", description="The site's name from the Integration /sites list; "
+                                           "empty until a devices poll has named it")
     status: str = Field(description="online, offline or unknown, from the gateway's state")
     gateway: Gateway | None = None
     internet_up: bool | None = None
+    internet_source: str | None = Field(
+        None, description="console (classic WAN health or the gateway's uplink state), "
+                          "wan_traffic (an online gateway moving traffic both ways on its "
+                          "uplink) or null when the Internet state is not known")
     wan: Wan
     wireless_clients: int
     wired_clients: int
     total_clients: int
     device_count: int
-    clients_per_ssid: list[SsidCount]
+    clients_per_ssid: list[SsidCount] = Field(
+        description="Connected wireless clients per named SSID; clients whose SSID is not known "
+                    "(no classic account) are counted in clients_unknown_ssid instead")
+    clients_unknown_ssid: int = 0
     devices_updated: Ts | None = None
     devices_stale: bool
     clients_updated: Ts | None = Field(None, description="The newest connected client row")
@@ -282,6 +290,21 @@ def network_status(state: str | None) -> str:
     return "unknown"
 
 
+def internet_state(reported: bool | None, gateway_status: str, rx_rate_bps: float | None,
+                   tx_rate_bps: float | None) -> tuple[bool | None, str | None]:
+    """The Internet state and where it came from. A state the console reports (classic WAN
+    health, the gateway's `internet` flag or the statistics `uplink` node) wins. Without one,
+    an online gateway whose uplink moves traffic both ways is taken as connected: the
+    Integration statistics give the WAN rates but no up flag, so the page showed "Unknown"
+    beside live WAN bandwidth. Anything else is unknown (None), and the page hides the tile."""
+    if reported is not None:
+        return reported, "console"
+    if gateway_status == "online" and all(
+            isinstance(v, (int, float)) and v > 0 for v in (rx_rate_bps, tx_rate_bps)):
+        return True, "wan_traffic"
+    return None, None
+
+
 def build_overview(plugin: UniFiPlugin) -> Any:
     def overview(db: Any, filters: SiteFilter) -> dict[str, Any]:
         """The five tiles and the clients per SSID in one read. Counts are of connected clients;
@@ -293,7 +316,8 @@ def build_overview(plugin: UniFiPlugin) -> Any:
         site = _site_of(db, filters.site)
         status = db.execute(
             "SELECT gateway_device_id, internet_up, wan_ip, wan_port, wan_rx_rate_bps, "
-            "wan_tx_rate_bps, wan_latency_ms, updated, classic_updated FROM unifi_site_status "
+            "wan_tx_rate_bps, wan_latency_ms, updated, classic_updated, site_name "
+            "FROM unifi_site_status "
             "WHERE site_id = ?", (site,)).fetchone() if site else None
         gw_row = None
         if status and status[0]:
@@ -313,19 +337,24 @@ def build_overview(plugin: UniFiPlugin) -> Any:
                                    "AND connected = 1", (site or "",)).fetchone()[0]
         updated, stale = devices_freshness(devices[1], plugin.devices_ok_at, now, s.interval)
         classic_at = status[8] if status else None
+        state = network_status(gw_row[2]) if gw_row else "unknown"
+        inet, source = internet_state(
+            None if not status or status[1] is None else bool(status[1]), state,
+            status[4] if status else None, status[5] if status else None)
         return {
-            "now": now, "site_id": site,
-            "status": network_status(gw_row[2]) if gw_row else "unknown",
+            "now": now, "site_id": site, "site_name": status[9] if status else "",
+            "status": state,
             "gateway": {"device_id": gw_row[0], "name": gw_row[1], "state": gw_row[2]}
             if gw_row else None,
-            "internet_up": None if not status or status[1] is None else bool(status[1]),
+            "internet_up": inet, "internet_source": source,
             "wan": {"ip": status[2] if status else "", "port": status[3] if status else "",
                     "rx_rate_bps": status[4] if status else None,
                     "tx_rate_bps": status[5] if status else None,
                     "latency_ms": status[6] if status else None},
             "wireless_clients": wireless, "wired_clients": total - wireless,
             "total_clients": total, "device_count": int(devices[0] or 0),
-            "clients_per_ssid": [{"ssid": r[0] or UNKNOWN_SSID, "count": r[1]} for r in per_ssid],
+            "clients_per_ssid": [{"ssid": r[0], "count": r[1]} for r in per_ssid if r[0]],
+            "clients_unknown_ssid": sum(r[1] for r in per_ssid if not r[0]),
             "devices_updated": updated, "devices_stale": stale,
             "clients_updated": newest_client, "classic_updated": classic_at,
             "classic_stale": classic_at is not None
