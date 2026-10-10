@@ -132,6 +132,9 @@ h2 .pill { margin-left: .4rem; vertical-align: 1px; }
 .pill.good { background: var(--o-up); } .pill.warning { background: var(--o-dot-warn); color: var(--o-ink); }
 .pill.critical { background: var(--o-down); }
 .pill.stale, .pill.unavailable, .pill.absent, .pill.not_reported { background: var(--o-pending); }
+/* The map summary counts devices by state; "unknown" had no colour, so its light text sat on the
+   page background and left a blank band under the Map heading. */
+.pill.unknown { background: var(--o-pending); } .pill.degraded { background: var(--o-dot-warn); color: var(--o-ink); }
 a.home { color: inherit; text-decoration: none; }
 .note { color: var(--o-text-muted); font-size: .85rem; }
 ul.findings { list-style: none; padding: 0; margin: 0; }

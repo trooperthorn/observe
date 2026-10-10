@@ -1,7 +1,7 @@
 // Run with: node --test tests/js (the tests workflow runs this too).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { eventText, formatValue, formatReading, monitorReading, plural } from "../../observe/static/js/format.js";
+import { ageText, eventText, formatValue, formatReading, monitorReading, plural } from "../../observe/static/js/format.js";
 
 test("a ratio of unit 1 is shown as a percentage", () => {
   assert.equal(formatValue(0.35, "1"), "35 %");
@@ -87,6 +87,15 @@ test("count units in curly braces are shown as words", () => {
 test("a monitor card value always says what it is", () => {
   assert.equal(monitorReading({ type: "pushed_host", value: 67, unit: "s", result: "ok" }),
     "data 1m 7s old");
+  // The reported card: "data 15.95 s old". An age over 10 s has no decimals.
+  assert.equal(monitorReading({ type: "pushed_host", value: 15.95, unit: "s", result: "ok" }),
+    "data 16 s old");
+  assert.equal(monitorReading({ type: "pushed_host", value: 66.6, unit: " s", result: "ok" }),
+    "data 1m 7s old");
+  assert.equal(ageText(4.26), "4.3 s");
+  assert.equal(ageText(9.96), "10 s");
+  assert.equal(ageText(59.6), "1m");
+  assert.equal(ageText(0), "0 s");
   assert.equal(monitorReading({ type: "home_assistant", value: 586, unit: "{entity unavailable}" }),
     "586 entities unavailable");
   assert.equal(monitorReading({ type: "technitium", value: 2.1, unit: "%" }), "2.1%");

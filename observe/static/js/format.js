@@ -173,16 +173,26 @@ export function formatReading(value, unit) {
   return formatValue(value, unit);
 }
 
+// An age in seconds as a card headline: one decimal below 10 s ("9.5 s"), whole seconds up to a
+// minute ("16 s", never "15.95 s"), then minutes and seconds ("1m 7s").
+export function ageText(seconds) {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return formatValue(seconds, "s");
+  const a = Math.abs(seconds);
+  if (Math.round(a * 10) / 10 < 10) return `${Math.round(seconds * 10) / 10} s`;
+  if (Math.round(a) < 60) return `${Math.round(seconds)} s`;
+  return duration(Math.round(seconds));
+}
+
 // The value a monitor card shows. A pushed host's value is the age of its newest batch, so it is
-// said as such; a monitor with no value shows its latency, and a failed probe shows nothing.
+// said as such, rounded (ageText); a monitor with no value shows its latency, and a failed probe
+// shows nothing.
 export function monitorReading(m) {
   if (m.result === "fail" && m.value == null) return "";  // a failed probe has no latency
   if (m.value === null || m.value === undefined) {
     return m.latency_ms != null ? `${Math.round(m.latency_ms)} ms` : "";
   }
-  const text = formatReading(m.value, m.unit);
-  if (m.type === "pushed_host" && (m.unit || "").trim() === "s") return `data ${text} old`;
-  return text;
+  if (m.type === "pushed_host" && (m.unit || "").trim() === "s") return `data ${ageText(m.value)} old`;
+  return formatReading(m.value, m.unit);
 }
 
 // The text of one event row of the dashboard, with the monitor's display name (from `names`,

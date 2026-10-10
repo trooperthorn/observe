@@ -92,6 +92,15 @@ def test_map_views_and_unifi_footer_in_a_browser(served):
         assert page.locator("#shell-header #site").count() == 0
         assert page.locator("main#page #footer").count() == 1
         page.wait_for_timeout(600)
+        # No blank band under the heading (R10.9): an empty message line takes no room and the
+        # state summary pill is visible, not light text on the page background.
+        gap = page.evaluate("""() => document.querySelector("main#page > p.note")
+            .getBoundingClientRect().top
+            - document.querySelector("main#page h1").getBoundingClientRect().bottom""")
+        assert gap < 90, gap
+        pill = page.evaluate("""() => getComputedStyle(
+            document.querySelector("#map-summary .pill")).backgroundColor""")
+        assert pill not in ("rgba(0, 0, 0, 0)", "transparent"), pill
         page.screenshot(path=str(out / "map-graph.png"), full_page=True)
         # Select a device from the keyboard, then clear it with the button.
         page.focus("#graphcanvas")
