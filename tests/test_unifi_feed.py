@@ -298,7 +298,7 @@ class Both:
                 "set-cookie": f"TOKEN={COOKIE}; path=/; secure; httponly", "x-csrf-token": CSRF})
         if p.startswith(PREFIX):
             data = {"stat/device": classic_data(), "stat/sta": [], "rest/user": [],
-                    "stat/health": []}.get(p[len(PREFIX):])
+                    "stat/health": [], "rest/wlanconf": []}.get(p[len(PREFIX):])
             return httpx.Response(200, json={"data": data})
         off = int(request.url.params.get("offset", "0"))
         lim = int(request.url.params.get("limit", "25"))

@@ -25,6 +25,7 @@ views never stops the Integration rows; the pages say the enrichment is unavaila
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -37,20 +38,23 @@ from observe.plugins import (Collector, Migration, NavEntry, PluginBase, PluginE
                              PluginPage)
 from observe.store import Store
 
-from .classic import (ClassicClient, ClassicForbidden, parse_devices, parse_offline_clients,
-                      parse_wan_health)
+from .classic import (ClassicBackedOff, ClassicClient, ClassicForbidden, parse_devices, parse_offline_clients,
+                      parse_wan_health, parse_wlans, select_gateway_row, wan_status)
 from .clients import (device_index, enrich, offline_clients, parse_active_clients,
                       parse_camera, parse_client, save_cameras, save_clients)
 from .feed import feed_classic, feed_integration
 from .api import register as register_resources
 from .client import AuthRejected, IntegrationClient, UniFiError
 from .pages import PAGE_PATH, page_files
-from .records import MIGRATIONS, parse_device, prune_unseen
+from .records import (MIGRATIONS, parse_device, parse_uplink_stats, prune_unseen, read_networks,
+                      select_gateway, write_site_status_classic, write_wlans)
 
 __version__ = "0.1.0"
 
 
 MAX_BACKOFF_S = 3600.0
+# A device id from the console goes into a request path only when it is a plain token.
+ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 log = logging.getLogger(__name__)
 
 
@@ -104,6 +108,7 @@ class UniFiPlugin(PluginBase):
         self._forbidden_reported = False
         # Wall time of the last devices poll that succeeded, for the devices page.
         self.devices_ok_at: float | None = None
+        self._site_id: str | None = None
 
     def config_model(self) -> type[BaseModel]:
         return UniFiSettings
@@ -120,6 +125,7 @@ class UniFiPlugin(PluginBase):
         self.classic_note = None
         self._forbidden_reported = False
         self.devices_ok_at = None
+        self._site_id = None
 
     def bind_credentials(self, credentials: Mapping[str, Any]) -> None:
         s = self.settings
@@ -164,8 +170,10 @@ class UniFiPlugin(PluginBase):
         return rows
 
     async def classic_snapshot(self) -> dict[str, Any]:
-        """Read the four classic views and parse them. Raises UniFiError, AuthRejected or
-        ClassicBackedOff; returns an empty dict when no classic credential is set."""
+        """Read the five classic views and parse them. Raises UniFiError, AuthRejected or
+        ClassicBackedOff; returns an empty dict when no classic credential is set. A console
+        that refuses rest/wlanconf, or answers it without a data list, gives an empty SSID list
+        instead of failing the poll; a backoff is still raised."""
         c = self._classic_client()
         if c is None:
             return {}
@@ -173,8 +181,16 @@ class UniFiPlugin(PluginBase):
         active = await self._classic_get(c, "stat/sta")
         known = await self._classic_get(c, "rest/user")
         health = await self._classic_get(c, "stat/health")
+        try:
+            wlans = await self._classic_get(c, "rest/wlanconf")
+        except ClassicBackedOff:
+            raise
+        except UniFiError as err:  # the view is optional: a 404 or an odd body leaves no SSIDs
+            log.debug("unifi rest/wlanconf not read: %s", type(err).__name__)
+            wlans = []
         return {"devices": parse_devices(devices), "wan": parse_wan_health(health),
-                "offline_clients": parse_offline_clients(known, active)}
+                "offline_clients": parse_offline_clients(known, active),
+                "wlans": parse_wlans(wlans)}
 
     async def close(self) -> None:
         """Log out of the classic session. The host has no shutdown hook yet, so a caller
@@ -236,46 +252,90 @@ class UniFiPlugin(PluginBase):
         return IntegrationClient(base, self.api_key, s.verify_tls, s.ca_bundle, s.timeout,
                                  self.transport)
 
-    async def _site_and_rows(self, suffix: str) -> tuple[str, list[Any]]:
-        """The chosen site id and every row of `/sites/{id}/<suffix>`, with the shared backoff."""
+    async def _site_and_rows(self, suffix: str, then: Callable[..., Any] | None = None
+                             ) -> tuple[str, list[Any], Any]:
+        """The chosen site id and every row of `/sites/{id}/<suffix>`, with the shared backoff.
+        `then(api, c, site_id, rows)` runs one more read on the same session; its result is the
+        third value (None without it)."""
         self._gate()
         api = self._api(self.settings.base_path)
+        extra = None
         try:
             async with api.session() as c:
                 sites = await api.list_all(c, "/sites")
                 site_id = self._pick_site(sites)
+                self._site_id = site_id
                 rows = await api.list_all(c, f"/sites/{site_id}/{suffix}")
+                if then is not None:
+                    extra = await then(api, c, site_id, rows)
         except AuthRejected:
             self._backoff()
             raise
         self._failures = 0
         self._retry_at = 0.0
-        return site_id, rows
+        return site_id, rows, extra
+
+    @staticmethod
+    async def _gateway_stats(api: IntegrationClient, c: Any, site_id: str,
+                             rows: list[Any]) -> tuple[str, dict[str, Any]]:
+        """The gateway's id and its `statistics/latest` uplink (records.parse_uplink_stats).
+        One extra GET per devices poll, only for the gateway; a refused or malformed answer
+        leaves the WAN unknown and never fails the devices poll. An id is only used in a path
+        when it is a plain token."""
+        gw = select_gateway(rows)
+        gid = gw.get("id") if gw else None
+        if not isinstance(gid, str) or not ID_RE.match(gid):
+            return "", parse_uplink_stats(None)
+        try:
+            stats = await api.get(c, f"/sites/{site_id}/devices/{gid}/statistics/latest")
+        except (UniFiError, httpx.HTTPError) as err:
+            log.debug("unifi gateway statistics not read: %s", type(err).__name__)
+            return gid, parse_uplink_stats(None)
+        return gid, parse_uplink_stats(stats)
 
     async def collect_devices(self, store: Store) -> int:
         """One poll. Raises BackedOff while pausing, AuthRejected on a 401 or 403, UniFiError
         for an answer it refuses. Returns the number of devices stored."""
-        site_id, rows = await self._site_and_rows("devices")
+        site_id, rows, (gid, wan) = await self._site_and_rows("devices", self._gateway_stats)
         devices = [d for d in (parse_device(site_id, r) for r in rows) if d is not None]
         now = self.wall()
-        # The device rows and the map feed are one cycle in one transaction.
-        await feed_integration(store, devices, now, save_devices=True)
+        # The device rows, the site status and the map feed are one cycle in one transaction.
+        await feed_integration(store, devices, now, save_devices=True,
+                               site_status=(site_id, gid, wan))
         self.devices_ok_at = now
         return len(devices)
 
     async def collect_classic(self, store: Store) -> int:
-        """One classic poll: ports, port properties and links into the infrastructure map.
-        Raises what classic_snapshot raises. Returns the number of devices fed."""
+        """One classic poll: ports, port properties and links into the infrastructure map, the
+        site's WAN and network table, and the SSIDs. Raises what classic_snapshot raises.
+        Returns the number of devices fed."""
         snap = await self.classic_snapshot()
         devices = snap.get("devices", [])
-        await feed_classic(store, devices, self.wall())
+        now = self.wall()
+        await feed_classic(store, devices, now)
+        site_id = self.classic_site_id
+        if site_id:
+            gateway = select_gateway_row(devices)
+            networks = gateway["networks"] if gateway else []
+            wan = wan_status(snap.get("wan"), gateway)
+            wlans = resolve_wlans(snap.get("wlans", []), networks)
+            await store.storage.write(lambda db: (
+                write_site_status_classic(db, site_id, wan, networks, now),
+                write_wlans(db, site_id, wlans, now)), touches=("unifi",))
         return len(devices)
+
+    @property
+    def classic_site_id(self) -> str | None:
+        """The Integration site id the classic rows belong to: the one the last devices or
+        clients poll chose. Until a poll has run, classic site rows cannot be keyed and are
+        skipped."""
+        return self._site_id
 
     async def collect_clients(self, store: Store) -> int:
         """One clients poll. Raises what collect_devices raises. Classic detail is optional: a
         classic failure is noted for the pages and the Integration rows are still stored.
         Returns the number of client rows written."""
-        site_id, rows = await self._site_and_rows("clients")
+        site_id, rows, _ = await self._site_and_rows("clients")
         now = self.wall()
         live = [c for c in (parse_client(site_id, r) for r in rows) if c is not None]
         known: list[dict[str, Any]] = []
@@ -291,7 +351,8 @@ class UniFiPlugin(PluginBase):
                 # An HTTPError is a 5xx, a timeout or a refused connection.
                 classic_ok = False
                 self.classic_note = f"classic detail unavailable: {type(err).__name__}"
-        live = enrich(live, active, await device_index(store, site_id))
+        networks = await store.storage.read(lambda db: read_networks(db, site_id))
+        live = enrich(live, active, await device_index(store, site_id), networks)
         off = offline_clients(site_id, known, {c.mac for c in live if c.mac}, now,
                               self.settings.retention_days)
         return await save_clients(store, site_id, live, off, now, classic_ok)
@@ -304,7 +365,7 @@ class UniFiPlugin(PluginBase):
             return {"active": {}, "offline": []}
         active = await self._classic_get(c, "stat/sta")
         known = await self._classic_get(c, "rest/user")
-        return {"active": parse_active_clients(active),
+        return {"active": parse_active_clients(active, self.wall()),
                 "offline": parse_offline_clients(known, active)}
 
     async def collect_protect(self, store: Store) -> int:
@@ -344,6 +405,19 @@ class UniFiPlugin(PluginBase):
             raise UniFiError(f"{len(named)} sites; set site to one of "
                              f"{[x.get('name') for x in named]}")
         return named[0]["id"]
+
+
+def resolve_wlans(wlans: list[dict[str, Any]], networks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Give each parsed SSID the name and VLAN of its network from the gateway's table. AP
+    group ids are not resolved (rest/apgroups is not read), so `ap_names` stays empty and the
+    page says the restriction cannot be named."""
+    by_id = {n.get("id"): n for n in networks if n.get("id")}
+    out = []
+    for w in wlans:
+        net = by_id.get(w["network_id"])
+        out.append({**w, "network_name": net.get("name", "") if net else "",
+                    "vlan": net.get("vlan") if net else None, "ap_names": []})
+    return out
 
 
 plugin = UniFiPlugin()

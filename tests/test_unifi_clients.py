@@ -52,6 +52,10 @@ class Full(Console):
         self.clients = clients
         self.active: list[Any] = []
         self.known: list[Any] = []
+        self.classic_devices: list[Any] = []
+        self.health: list[Any] = []
+        self.wlans: list[Any] = []
+        self.stats: dict[str, Any] = {}  # device id -> statistics/latest body
         self.cameras: Any = []
         self.protect_status = 200
         self.classic_status = 200
@@ -69,8 +73,14 @@ class Full(Console):
             self.requests.append(request)
             if self.classic_status != 200:
                 return httpx.Response(self.classic_status, json={})
-            rows = {"stat/sta": self.active, "rest/user": self.known}.get(p[len(CLASSIC):])
+            rows = {"stat/sta": self.active, "rest/user": self.known,
+                    "stat/device": self.classic_devices, "stat/health": self.health,
+                    "rest/wlanconf": self.wlans}.get(p[len(CLASSIC):])
             return httpx.Response(404 if rows is None else 200, json={"data": rows})
+        if p.startswith(f"{BASE}/sites/{SITE['id']}/devices/") and p.endswith("/statistics/latest"):
+            self.requests.append(request)
+            body = self.stats.get(p.split("/")[-3])
+            return httpx.Response(404 if body is None else 200, json=body if body is not None else {})
         if p == f"{PROTECT}/cameras":
             self.requests.append(request)
             assert "offset" not in request.url.params and "limit" not in request.url.params
@@ -405,14 +415,20 @@ def test_schema_upgrades_from_version_1_keeping_rows():
     db.commit()
     assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == 1
     migrate_plugins(db, {"unifi": MIGRATIONS})
-    assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == 3
+    assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == len(MIGRATIONS)
     cols = {r[1] for r in db.execute("PRAGMA table_info(unifi_clients)")}
-    assert {"connected", "connected_at", "ssid", "uplink_mac", "sw_port", "enriched"} <= cols
+    assert {"connected", "connected_at", "ssid", "uplink_mac", "sw_port", "enriched", "vlan",
+            "network", "uptime_s", "rx_rate_bps", "tx_rate_bps", "rx_bytes", "tx_bytes"} <= cols
+    dev_cols = {r[1] for r in db.execute("PRAGMA table_info(unifi_devices)")}
+    assert {"device_type", "role", "features", "rx_bytes", "tx_bytes", "rx_rate_bps",
+            "tx_rate_bps"} <= dev_cols
+    assert db.execute("SELECT COUNT(*) FROM unifi_site_status").fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM unifi_wlans").fetchone()[0] == 0
     row = db.execute("SELECT name, connected, ssid, enriched FROM unifi_clients").fetchone()
     assert row == ("Old", None, "", 0)  # the old row survives; connected is unknown, not false
     assert db.execute("SELECT COUNT(*) FROM unifi_cameras").fetchone()[0] == 0
     migrate_plugins(db, {"unifi": MIGRATIONS})  # a second run changes nothing
-    assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == 3
+    assert db.execute("SELECT version FROM plugin_schema WHERE plugin='unifi'").fetchone()[0] == len(MIGRATIONS)
 
 
 def test_classic_note_carries_only_the_error_class(tmp_path):

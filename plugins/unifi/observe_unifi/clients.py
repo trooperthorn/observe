@@ -30,6 +30,8 @@ from typing import Any
 from observe.storage import Conn
 from observe.store import Store
 
+from .classic import resolve_client_vlan, uptime_to_seconds
+
 _HEX = frozenset("0123456789abcdef")
 
 
@@ -84,6 +86,14 @@ class Client:
     sw_port: int | None = None
     enriched: bool = False
     last_seen: float | None = None  # set only for an offline client, from the console
+    # Classic detail of a connected client (version 4). None is unknown, never zero.
+    vlan: int | None = None
+    network: str = ""
+    uptime_s: int | None = None
+    rx_rate_bps: float | None = None  # bytes per second as the console counts them
+    tx_rate_bps: float | None = None
+    rx_bytes: int | None = None
+    tx_bytes: int | None = None
 
 
 def parse_client(site_id: str, raw: Any) -> Client | None:
@@ -100,10 +110,55 @@ def parse_client(site_id: str, raw: Any) -> Client | None:
                   _text(raw.get("uplinkDeviceId")), True, _epoch(raw.get("connectedAt")))
 
 
-def parse_active_clients(rows: list[Any]) -> dict[str, dict[str, Any]]:
+def _rate(v: Any) -> float | None:
+    """A classic counter that may be a number or a numeric string; None otherwise."""
+    n = _num(v)
+    if n is None and isinstance(v, str):
+        try:
+            n = float(v)
+        except ValueError:
+            n = None
+    return n
+
+
+def _pair(r: dict[str, Any], rx: str, tx: str) -> tuple[float | None, float | None]:
+    """A rate pair under its hyphenated key or the underscore spelling ha_Int_soc reads."""
+    rxv = _rate(r.get(rx)) if r.get(rx) is not None else _rate(r.get(rx.replace("-", "_")))
+    txv = _rate(r.get(tx)) if r.get(tx) is not None else _rate(r.get(tx.replace("-", "_")))
+    return rxv, txv
+
+
+def client_rates(r: dict[str, Any], wired: bool | None) -> tuple[float | None, float | None]:
+    """The live rate pair of a stat/sta row: a wired client's `wired-rx_bytes-r` pair first,
+    a wireless client's `rx_bytes-r` pair first, and the other pair as the fallback (the core
+    wired bug leaves a wired flag on a wireless client). Ported from unifi_core.client_bandwidth
+    with both key spellings. Bytes per second, UNVERIFIED."""
+    wired_pair = ("wired-rx_bytes-r", "wired-tx_bytes-r")
+    air_pair = ("rx_bytes-r", "tx_bytes-r")
+    for rx, tx in (wired_pair, air_pair) if wired else (air_pair, wired_pair):
+        got = _pair(r, rx, tx)
+        if got != (None, None):
+            return got
+    return None, None
+
+
+def client_totals(r: dict[str, Any], wired: bool | None) -> tuple[int | None, int | None]:
+    """Cumulative bytes of a stat/sta row, with the same wired-first rule (UNVERIFIED keys
+    rx_bytes, tx_bytes, wired-rx_bytes, wired-tx_bytes)."""
+    pairs = (("wired-rx_bytes", "wired-tx_bytes"), ("rx_bytes", "tx_bytes"))
+    for rx, tx in pairs if wired else reversed(pairs):
+        rxv, txv = _pair(r, rx, tx)
+        if (rxv, txv) != (None, None):
+            return (None if rxv is None else int(rxv)), (None if txv is None else int(txv))
+    return None, None
+
+
+def parse_active_clients(rows: list[Any], now: float | None = None) -> dict[str, dict[str, Any]]:
     """`stat/sta` rows by MAC. UNVERIFIED against a live console: `ap_mac` (a wireless client's
     access point), `sw_mac` and `sw_port` (a wired client's switch and port number), `essid`,
-    `is_wired`, `hostname` and `name`. ha_Int_soc names `ap_mac` for the core client only."""
+    `is_wired`, `hostname`, `name`, `vlan`, `network`, `network_id`, `uptime` and the byte
+    counters (client_rates, client_totals). ha_Int_soc names `ap_mac` for the core client only.
+    `uptime` is turned into seconds with the epoch rule when `now` is given."""
     out: dict[str, dict[str, Any]] = {}
     for r in rows:
         if not isinstance(r, dict):
@@ -113,16 +168,25 @@ def parse_active_clients(rows: list[Any]) -> dict[str, dict[str, Any]]:
             continue
         wired = r.get("is_wired") if isinstance(r.get("is_wired"), bool) else None
         first, second = ("sw_mac", "ap_mac") if wired else ("ap_mac", "sw_mac")
+        rx_r, tx_r = client_rates(r, wired)
+        rx_b, tx_b = client_totals(r, wired)
         out[mac] = {"uplink_mac": norm_mac(r.get(first)) or norm_mac(r.get(second)),
                     "sw_port": _int(r.get("sw_port")) if wired is not False else None,
                     "ssid": _text(r.get("essid")), "wired": wired,
-                    "name": _text(r.get("name")) or _text(r.get("hostname"))}
+                    "name": _text(r.get("name")) or _text(r.get("hostname")),
+                    "vlan": _int(r.get("vlan")), "network": _text(r.get("network")),
+                    "network_id": _text(r.get("network_id")),
+                    "uptime_s": uptime_to_seconds(r.get("uptime"), now) if now is not None
+                    else _int(r.get("uptime")),
+                    "rx_rate_bps": rx_r, "tx_rate_bps": tx_r, "rx_bytes": rx_b, "tx_bytes": tx_b}
     return out
 
 
 def enrich(clients: list[Client], active: dict[str, dict[str, Any]],
-           devices_by_mac: dict[str, str]) -> list[Client]:
-    """Add classic detail to connected clients and resolve an uplink MAC to a device id."""
+           devices_by_mac: dict[str, str],
+           networks: list[dict[str, Any]] | None = None) -> list[Client]:
+    """Add classic detail to connected clients and resolve an uplink MAC to a device id. The
+    VLAN is resolved through the gateway's network table (`networks`) when the row has none."""
     out = []
     for c in clients:
         e = active.get(c.mac)
@@ -130,10 +194,14 @@ def enrich(clients: list[Client], active: dict[str, dict[str, Any]],
             out.append(c)
             continue
         kind = c.kind or {True: "wired", False: "wireless"}.get(e["wired"], "")
+        vlan, network = resolve_client_vlan(e, networks or [])
         out.append(replace(
             c, kind=kind, name=c.name or e["name"], ssid=e["ssid"], uplink_mac=e["uplink_mac"],
             sw_port=e["sw_port"], enriched=True,
-            uplink_device_id=c.uplink_device_id or devices_by_mac.get(e["uplink_mac"], "")))
+            uplink_device_id=c.uplink_device_id or devices_by_mac.get(e["uplink_mac"], ""),
+            vlan=vlan, network=network, uptime_s=e.get("uptime_s"),
+            rx_rate_bps=e.get("rx_rate_bps"), tx_rate_bps=e.get("tx_rate_bps"),
+            rx_bytes=e.get("rx_bytes"), tx_bytes=e.get("tx_bytes")))
     return out
 
 
@@ -165,14 +233,16 @@ def _up_sql(keep_classic: bool) -> str:
         if not keep_classic:
             return f"{name}=excluded.{name}"
         return f"{name}=CASE WHEN excluded.enriched=1 THEN excluded.{name} ELSE unifi_clients.{name} END"
+    classic = ("ssid", "uplink_mac", "sw_port", "vlan", "network", "uptime_s", "rx_rate_bps",
+               "tx_rate_bps", "rx_bytes", "tx_bytes", "enriched", "classic_seen")
     return f"""INSERT INTO unifi_clients (site_id, client_id, mac, name, ip, kind, uplink_device_id,
-  connected, connected_at, ssid, uplink_mac, sw_port, enriched, classic_seen, first_seen, last_seen)
-  VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)
+  connected, connected_at, ssid, uplink_mac, sw_port, vlan, network, uptime_s, rx_rate_bps,
+  tx_rate_bps, rx_bytes, tx_bytes, enriched, classic_seen, first_seen, last_seen)
+  VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT (site_id, client_id) DO UPDATE SET mac=excluded.mac, name=excluded.name,
   ip=excluded.ip, kind=excluded.kind, connected=1, connected_at=excluded.connected_at,
   uplink_device_id=excluded.uplink_device_id,
-  {col('ssid')}, {col('uplink_mac')}, {col('sw_port')},
-  {col('enriched')}, {col('classic_seen')}, last_seen=excluded.last_seen"""
+  {", ".join(col(c) for c in classic)}, last_seen=excluded.last_seen"""
 
 
 # An offline row keeps what is already known and moves only the name and the last seen time. When
@@ -194,7 +264,8 @@ def _write_clients(db: Conn, site_id: str, live: list[Client], off: list[Client]
                    now: float, classic_ok: bool = True) -> int:
     db.executemany(_up_sql(not classic_ok), [
         (c.site_id, c.client_id, c.mac, c.name, c.ip, c.kind, c.uplink_device_id,
-         c.connected_at, c.ssid, c.uplink_mac, c.sw_port, int(c.enriched),
+         c.connected_at, c.ssid, c.uplink_mac, c.sw_port, c.vlan, c.network, c.uptime_s,
+         c.rx_rate_bps, c.tx_rate_bps, c.rx_bytes, c.tx_bytes, int(c.enriched),
          now if c.enriched else None, now, now)
         for c in live])
     # Anything still marked connected that this poll did not write has left.
