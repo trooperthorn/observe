@@ -137,9 +137,19 @@ export function downHostCount(hosts) {
 }
 
 // The sub-label of the dashboard's Down tile. `hosts` is the Hosts list, or null when this
-// viewer may not read it; the count then falls back to Down pushed_host monitors.
+// viewer may not read it; the count then falls back to Down pushed_host monitors. Only a host
+// listed as a pushed_host monitor can alert, so only those count as down; a Down host that is
+// not monitored is named apart ("2 hosts down, plus 1 not monitored").
 export function downTileLabel(hosts, monitors) {
-  const n = hosts ? downHostCount(hosts)
-    : (monitors || []).filter((m) => m.effective_state === "down" && m.type === "pushed_host").length;
-  return n ? `${plural(n, "host")} down` : "";
+  if (!hosts) {
+    const n = (monitors || [])
+      .filter((m) => m.effective_state === "down" && m.type === "pushed_host").length;
+    return n ? `${plural(n, "host")} down` : "";
+  }
+  const down = hosts.filter((h) => h.status === "critical");
+  const n = down.filter((h) => h.monitored).length;
+  const other = down.length - n;
+  if (!other) return n ? `${plural(n, "host")} down` : "";
+  if (!n) return `${plural(other, "unmonitored host")} down`;
+  return `${plural(n, "host")} down, plus ${other} not monitored`;
 }

@@ -89,6 +89,14 @@ test("the dashboard Down tile counts what the Hosts list calls Down", () => {
   assert.equal(plural(2, "host"), "2 hosts");
 });
 
+test("the Down tile counts only hosts that can alert and names the others apart", () => {
+  const ha = { ...silent, host: "homeassistant", heard: true, monitored: false, monitor: null };
+  assert.equal(downTileLabel([silent, { ...silent, host: "b" }, ha], []),
+    "2 hosts down, plus 1 not monitored");
+  assert.equal(downTileLabel([ha], []), "1 unmonitored host down");
+  assert.equal(downTileLabel([ha, { ...ha, host: "x" }, nas], []), "2 unmonitored hosts down");
+});
+
 test("a failed install step shows on the row until cleared", () => {
   const h = { ...nas, install_problem: { step: "agent", status: "failed", note: "", at: 1 } };
   assert.deepEqual(hostRow(h).notes, ["install step agent failed"]);
