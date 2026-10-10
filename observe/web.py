@@ -1281,13 +1281,14 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
             return await settings_refused(sess, request, "host_allowlist_failed", host, 400,
                                           "the change was not confirmed")
         try:
-            fans, services, reboot = enrol.parse_allowlist(
+            fans, services, reboot, update = enrol.parse_allowlist(
                 {k: v for k, v in body.items() if k != "confirmed"})
         except enrol.EnrolError as err:
             return await settings_refused(sess, request, "host_allowlist_failed", host,
                                           err.status, err.reason)
         old = enrol.spec_from_row(host, platform, agent, control, stored)
-        new = enrol.Spec(host, platform, bool(agent), True, tuple(fans), tuple(services), reboot)
+        new = enrol.Spec(host, platform, bool(agent), True, tuple(fans), tuple(services), reboot,
+                         update)
         if new.allowlist() == old.allowlist():
             return await settings_refused(sess, request, "host_allowlist_failed", host, 409,
                                           "the allowlist is unchanged")
@@ -1306,7 +1307,7 @@ def create_app(config: Config, store: Store, scheduler: Scheduler, alerter: Aler
                                    "fans_removed": len(old_fans - new_fans),
                                    "services_added": len(set(new.services) - set(old.services)),
                                    "services_removed": len(set(old.services) - set(new.services)),
-                                   "reboot": reboot})
+                                   "reboot": reboot, "update": update})
         out: dict[str, Any] = {"saved": True, "rev": rev, "command": None,
                                "allowlist": new.allowlist()}
         if fetched_at is not None:

@@ -110,7 +110,7 @@ def test_save_after_the_install_makes_a_headed_update_command(env):
     assert "30 minutes" in head
     assert line.startswith("curl -fsSL 'https://192.0.2.50:8443/t/wpt_") and line.endswith("| sudo sh")
     assert out["allowlist"] == {"fans": [{"header": "fan1", "min_duty_limit": 20}, {"header": "fan9"}],
-                                "services": ["smbd"], "reboot": False}
+                                "services": ["smbd"], "reboot": False, "update": False}
     assert out["allowlist_status"]["state"] == "pending"
     stored = json.loads(env.rows("SELECT allowlist FROM enrolments")[0][0])
     assert stored == out["allowlist"]
@@ -141,7 +141,8 @@ def test_save_before_the_install_is_run_makes_no_command_and_lands_in_the_instal
     {"fans": [{"header": "f", "min_duty_limit": 101}]}, {"fans": [{"header": "f", "extra": 1}]},
     {"services": ["smbd`id`"]}, {"services": ["a|b"]}, {"services": ["a\nb"]},
     {"services": ["smbd\n"]}, {"services": ["a..b"]}, {"services": "smbd"},
-    {"fans": [f"f{i}" for i in range(33)]}, {"reboot": "true"}, {"other": []}])
+    {"fans": [f"f{i}" for i in range(33)]}, {"reboot": "true"}, {"other": []},
+    {"update": "true"}, {"update": None}])
 def test_invalid_allowlists_are_refused_and_change_nothing(env, over):
     hdr = admin(env)
     enrol_host(env, hdr)

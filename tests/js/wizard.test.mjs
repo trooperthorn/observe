@@ -67,7 +67,9 @@ test("buildBody sends the ticked entries and per-header limits", () => {
   const { body } = buildBody(s);
   assert.deepEqual(body.allowlist, {
     fans: ["fan1", { header: "fan2", min_duty_limit: 20 }], services: ["smbd"], reboot: true,
+    update: true,
   });
+  assert.equal(buildBody({ ...s, update: false }).body.allowlist.update, false);
 });
 
 test("buildBody refuses control on a platform without it, and bad input", () => {

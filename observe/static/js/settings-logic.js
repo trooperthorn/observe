@@ -13,8 +13,9 @@ export function settingsHref(name) {
   return `/hosts/${encodeURIComponent(name)}/settings`;
 }
 
-// The server's allowlist ({ fans: [{ header, min_duty_limit? }], services, reboot }) as an
-// editable draft. Every saved entry starts ticked; unticking one removes it on save.
+// The server's allowlist ({ fans: [{ header, min_duty_limit? }], services, reboot, update }) as
+// an editable draft. Every saved entry starts ticked; unticking one removes it on save. A host
+// saved before agent updates existed has no `update`, which reads as off until it is ticked.
 export function draftFromAllowlist(allow) {
   const a = allow || {};
   return {
@@ -23,6 +24,7 @@ export function draftFromAllowlist(allow) {
     })),
     services: (a.services || []).map((name) => ({ name, on: true })),
     reboot: !!a.reboot,
+    update: !!a.update,
   };
 }
 
@@ -40,7 +42,7 @@ export function allowlistFromDraft(draft) {
     if (!validService(s.name)) return { error: `The service ${s.name} has characters that are not allowed.` };
     services.push(s.name);
   }
-  return { allowlist: { fans, services, reboot: !!draft.reboot } };
+  return { allowlist: { fans, services, reboot: !!draft.reboot, update: !!draft.update } };
 }
 
 function limitText(f) {
@@ -66,6 +68,9 @@ export function diffAllowlist(before, after) {
   for (const s of newS) if (!oldS.has(s)) lines.push(`Add service ${s}`);
   for (const s of oldS) if (!newS.has(s)) lines.push(`Remove service ${s}`);
   if (!!b.reboot !== !!a.reboot) lines.push(a.reboot ? "Allow reboot" : "Do not allow reboot");
+  if (!!b.update !== !!a.update) {
+    lines.push(a.update ? "Allow agent updates from Observe" : "Do not allow agent updates from Observe");
+  }
   return lines;
 }
 

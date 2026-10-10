@@ -83,11 +83,14 @@ class Spec:
     fans: tuple[tuple[str, int | None], ...]  # (header, min_duty_limit or None)
     services: tuple[str, ...]
     reboot: bool
+    # Whether agent.update may replace the agent container (the [update] table of control.toml,
+    # docs/CONTROL.md). The control daemon's own self-update is never turned on from here.
+    update: bool = False
 
     def allowlist(self) -> dict[str, Any]:
         return {"fans": [{"header": h, **({"min_duty_limit": m} if m is not None else {})}
                          for h, m in self.fans],
-                "services": list(self.services), "reboot": self.reboot}
+                "services": list(self.services), "reboot": self.reboot, "update": self.update}
 
 
 def _services(raw: Any) -> list[str]:
@@ -132,20 +135,24 @@ def _fans(raw: Any) -> list[tuple[str, int | None]]:
     return out
 
 
-def parse_allowlist(allow: Any) -> tuple[list[tuple[str, int | None]], list[str], bool]:
-    """Validate an allowlist object (fans, services, reboot). Raises EnrolError with a message
-    safe to show. None is an empty allowlist."""
+def parse_allowlist(allow: Any) -> tuple[list[tuple[str, int | None]], list[str], bool, bool]:
+    """Validate an allowlist object (fans, services, reboot, update). Raises EnrolError with a
+    message safe to show. None is an empty allowlist. `update` is whether Observe may ask the
+    host to update its agent container; it is false when absent."""
     if allow is not None and not isinstance(allow, dict):
         raise EnrolError("allowlist must be an object")
     allow = allow or {}
-    if set(allow) - {"fans", "services", "reboot"}:
-        raise EnrolError("allowlist has only fans, services and reboot")
+    if set(allow) - {"fans", "services", "reboot", "update"}:
+        raise EnrolError("allowlist has only fans, services, reboot and update")
     fans = _fans(allow.get("fans"))
     services = _services(allow.get("services"))
     reboot = allow.get("reboot", False)
     if type(reboot) is not bool:
         raise EnrolError("reboot must be true or false")
-    return fans, services, reboot
+    update = allow.get("update", False)
+    if type(update) is not bool:
+        raise EnrolError("update must be true or false")
+    return fans, services, reboot, update
 
 
 def parse_spec(body: Any) -> Spec:
@@ -164,13 +171,13 @@ def parse_spec(body: Any) -> Spec:
         raise EnrolError("agent and control must be true or false")
     if not agent and not control:
         raise EnrolError("choose the agent, control or both")
-    fans, services, reboot = parse_allowlist(body.get("allowlist"))
+    fans, services, reboot, update = parse_allowlist(body.get("allowlist"))
     if control and platform == "windows":
         raise EnrolError("control is not available for Windows yet: it needs a Windows path "
                          "in thermal-control first. Enrol the agent only.")
-    if not control and (fans or services or reboot):
+    if not control and (fans or services or reboot or update):
         raise EnrolError("an allowlist needs control to be chosen")
-    return Spec(name, platform, agent, control, tuple(fans), tuple(services), reboot)
+    return Spec(name, platform, agent, control, tuple(fans), tuple(services), reboot, update)
 
 
 def parse_pool(raw: Any, platform: str) -> str:
@@ -273,7 +280,8 @@ def spec_from_row(host: str, platform: str, agent: Any, control: Any, allowlist:
     allow = json.loads(allowlist)
     fans = tuple((f["header"], f.get("min_duty_limit")) for f in allow.get("fans", []))
     return Spec(host, platform, bool(agent), bool(control), fans,
-                tuple(allow.get("services", [])), bool(allow.get("reboot", False)))
+                tuple(allow.get("services", [])), bool(allow.get("reboot", False)),
+                bool(allow.get("update", False)))
 
 
 @dataclass(frozen=True)

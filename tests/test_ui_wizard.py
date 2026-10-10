@@ -82,7 +82,8 @@ def test_progress_is_an_aria_live_list_and_every_step_panel_is_labelled():
 
 def test_fieldsets_have_legends_and_inputs_have_labels():
     html = _read("hosts-new.html")
-    assert html.count("<fieldset") == html.count("<legend>") == 4
+    assert html.count("<fieldset") == html.count("<legend>") == 5
+    assert 'id="update-agent" checked' in html and "Allow agent updates from Observe" in html
     for m in re.finditer(r"<input\b", html):
         before = html[:m.start()]
         assert before.rfind("<label") > before.rfind("</label>"), html[m.start():m.start() + 60]

@@ -496,7 +496,8 @@ alerts), and, for admins, a Settings link. Enrolled hosts that have not reported
 the same table as "Waiting" with a link to their enrolment page. Each row opens the host's
 page at `/host?name=HOST`, and that page's "Hosts" breadcrumb leads back to the list.
 Admins add a host in the console at `/hosts/new` (Hosts, Add host in the navigation), a
-five-step wizard: host name and platform, agent and control, the control allowlist, the
+five-step wizard: host name and platform, agent and control, the control allowlist (fan
+headers, services, reboot, and "Allow agent updates from Observe", on by default), the
 one-time install command with a Copy button, and live progress. The wizard uses this API.
 A fan header is 1 to 32 letters, digits, dashes or underscores and does not start with a dash,
 the same rule hostwatch-control applies. Copy needs a secure context (HTTPS or localhost); on
@@ -543,7 +544,10 @@ Admins open a host's settings from the Settings button on its host page, at
 command and a danger zone.
 
 - **Allowlist.** Edit the fan headers (with the lowest remote duty per header), the restartable
-  services and the reboot choice. Save shows a confirm dialog that lists the changes, then
+  services, the reboot choice and "Allow agent updates from Observe" (the `[update]` table of
+  `control.toml`, which lets the Updates page replace the agent container; a host added before
+  that choice existed shows it off until you tick it and run the update command). Save shows a
+  confirm dialog that lists the changes, then
   `PUT /api/hosts/{name}/allowlist` stores the new list. When the install command was already run
   the response also holds a short update command, headed with the host name, that rewrites
   `control.toml` and the sudoers rules on that host and restarts the control service. It has the
